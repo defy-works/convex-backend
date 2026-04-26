@@ -17,14 +17,19 @@ runners:
   # backend / dashboard images, precompile binaries) where the bottleneck
   # is parallel cargo codegen of first-party crates. Matches AWS
   # m7a/m7i/m7g .2xlarge sizing (8 vCPU / 32 GB).
-  xlarge2-x64:
+  #
+  # Keys quoted so YAML treats the digit-leading name as a string. Without
+  # the quotes the bare key '2xlarge-x64' was being read as a non-string
+  # scalar by runs-on.com's parser and the runner spec lookup failed with
+  # 'runner spec 2xlarge-x64 not found' (commit 351e8b05e).
+  "2xlarge-x64":
     cpu: 8
     ram: 32
     family: ["m7a", "m7i"]
     image: ubuntu24-full-x64
     volume: 80gb:gp3
     spot: true
-  xlarge2-arm64:
+  "2xlarge-arm64":
     cpu: 8
     ram: 32
     family: ["m7g"]
