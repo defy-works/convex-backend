@@ -30,7 +30,7 @@ jobs:
       matrix:
         arch: [x64, arm64]
     runs-on:
-      "runs-on=${{ github.run_id }}-${{ matrix.arch }}/runner=2xlarge-${{
+      "runs-on=${{ github.run_id }}-${{ matrix.arch }}/runner=8cpu-linux-${{
       matrix.arch }}"
     steps:
       - name: Checkout

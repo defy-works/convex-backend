@@ -9,7 +9,7 @@ on:
 jobs:
   release_dashboard:
     name: Build Convex Dashboard
-    runs-on: "runs-on=${{ github.run_id }}/runner=2xlarge-x64"
+    runs-on: "runs-on=${{ github.run_id }}/runner=8cpu-linux-x64"
     steps:
       - name: Check out code
         uses: actions/checkout@v4
@@ -82,11 +82,12 @@ jobs:
       matrix:
         include:
           - target: x86_64-unknown-linux-gnu
-            os: "runs-on=${{ github.run_id }}-linux-x64/runner=2xlarge-x64"
+            os: "runs-on=${{ github.run_id }}-linux-x64/runner=8cpu-linux-x64"
           - target: x86_64-pc-windows-msvc
             os: "windows-latest"
           - target: aarch64-unknown-linux-gnu
-            os: "runs-on=${{ github.run_id }}-linux-arm64/runner=2xlarge-arm64"
+            os:
+              "runs-on=${{ github.run_id }}-linux-arm64/runner=8cpu-linux-arm64"
     name: Build Convex Backend
     runs-on: ${{ matrix.os }}
     steps:
