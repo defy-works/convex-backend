@@ -17,14 +17,14 @@ runners:
   # backend / dashboard images, precompile binaries) where the bottleneck
   # is parallel cargo codegen of first-party crates. Matches AWS
   # m7a/m7i/m7g .2xlarge sizing (8 vCPU / 32 GB).
-  2xlarge-x64:
+  xlarge2-x64:
     cpu: 8
     ram: 32
     family: ["m7a", "m7i"]
     image: ubuntu24-full-x64
     volume: 80gb:gp3
     spot: true
-  2xlarge-arm64:
+  xlarge2-arm64:
     cpu: 8
     ram: 32
     family: ["m7g"]
