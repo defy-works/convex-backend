@@ -279,7 +279,7 @@ export function DeploymentLabel({
         id="select-deployment"
         data-testid="select-deployment"
         className={cn(
-          "flex h-[2.3125rem] items-center gap-2 truncate rounded-full border text-sm font-medium transition-opacity hover:opacity-80",
+          "flex h-9.25 items-center gap-2 truncate rounded-full border text-sm font-medium transition-opacity hover:opacity-80",
           menuTarget && "opacity-80",
           "focus-visible:ring-1 focus-visible:ring-border-selected focus-visible:outline-hidden",
           deploymentTypeColorClasses(deployment.deploymentType),
@@ -294,7 +294,7 @@ export function DeploymentLabel({
           if (e.key === "Enter" || e.key === " ") openMenu(e as any);
         }}
       >
-        <div className="flex h-full w-full animate-fadeInFromLoading cursor-pointer items-center gap-1 px-4">
+        <div className="flex size-full animate-fadeInFromLoading cursor-pointer items-center gap-1 px-4">
           {showType && (
             <>
               {deployment.deploymentType === "dev" ? (
@@ -396,7 +396,7 @@ export function DeploymentLabelProjectSettings({
       <Button
         variant="unstyled"
         className={cn(
-          "flex h-[2.3125rem] items-center gap-2 rounded-full px-3",
+          "flex h-9.25 items-center gap-2 rounded-full px-3",
           "border bg-background-secondary text-content-primary",
           "truncate text-sm font-medium transition-opacity hover:bg-background-tertiary",
           menuTarget && "border-border-selected bg-background-tertiary",
@@ -448,10 +448,11 @@ export function DeploymentLabelProvisionDeployment({
       <Button
         variant="unstyled"
         className={cn(
-          "flex h-[2.3125rem] items-center gap-2 rounded-full px-3",
+          "flex h-9.25 items-center gap-2 rounded-full px-3",
           "border border-dashed",
           "truncate text-sm font-medium transition-opacity hover:opacity-80",
           menuTarget && "opacity-80",
+          // eslint-disable-next-line better-tailwindcss/no-unknown-classes -- eslint-plugin-better-tailwindcss v4 incorrectly identifies "prod"/"dev" as class names
           deploymentTypeColorClasses(isProvisionProd ? "prod" : "dev"),
           "[--bg-opacity:50%]",
         )}

@@ -183,7 +183,7 @@ export function MultiSelectCombobox({
                   {displayValue}
                   <ChevronDownIcon
                     className={cn(
-                      "relative z-30 -ml-6 h-5 w-5 text-content-primary transition-all",
+                      "relative z-30 -ml-6 size-5 text-content-primary transition-all",
                       open && "rotate-180",
                     )}
                   />
@@ -219,7 +219,7 @@ export function MultiSelectCombobox({
                           />
                         ) : (
                           <div className="sticky top-0 left-0 z-20 flex w-full items-center gap-1 border-b bg-background-secondary px-2 pt-1">
-                            <MagnifyingGlassIcon className="h-4 w-4 text-content-secondary" />
+                            <MagnifyingGlassIcon className="size-4 text-content-secondary" />
                             <HeadlessComboboxInput
                               onChange={(event) => setQuery(event.target.value)}
                               value={query}
@@ -305,11 +305,11 @@ function ComboboxOption({
         <>
           {selected ? (
             <CheckIcon
-              className="h-4 min-w-[1rem] text-neutral-7 dark:text-neutral-4"
+              className="h-4 min-w-4 text-neutral-7 dark:text-neutral-4"
               aria-hidden="true"
             />
           ) : (
-            <span className="min-w-[1rem]" />
+            <span className="min-w-4" />
           )}
           <span
             className={classNames(

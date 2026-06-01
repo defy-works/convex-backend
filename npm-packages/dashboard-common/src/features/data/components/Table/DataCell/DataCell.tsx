@@ -200,7 +200,7 @@ function DataCellImpl({
           }
           hotkeyRefs(r);
         }}
-        className="relative flex h-full w-full items-center hover:bg-background-tertiary/75"
+        className="relative flex size-full items-center hover:bg-background-tertiary/75"
         style={{ width }}
         onMouseEnter={() => setIsHoveringCell(true)}
         onMouseLeave={() => setIsHoveringCell(false)}
@@ -344,7 +344,7 @@ function DataCellImpl({
               ...editorStyles.popper,
               width,
             }}
-            className="z-50 ml-[-1px] min-w-[24rem] animate-fadeInFromLoading"
+            className="z-50 -ml-px min-w-[24rem] animate-fadeInFromLoading"
             data-testid="cell-editor-popper"
             tabIndex={-1}
             onBlur={(e) => {

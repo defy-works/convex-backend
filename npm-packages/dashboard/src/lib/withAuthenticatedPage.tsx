@@ -14,7 +14,6 @@ import { useWorkOS } from "hooks/useWorkOS";
 import { User } from "@workos-inc/node";
 
 interface UserProps {
-  // eslint-disable-next-line react/no-unused-prop-types
   user: User;
 }
 
@@ -56,7 +55,7 @@ const withPageAuthRequired = (
 
 // Default loading component
 const defaultOnRedirecting = () => (
-  <div className="flex h-full w-full items-center justify-center">
+  <div className="flex size-full items-center justify-center">
     <LoadingLogo />
   </div>
 );
@@ -183,7 +182,7 @@ function OptinRedirect({ children }: { children: JSX.Element }) {
   }
 
   return isLoading || (!hasOptedIn && router.pathname !== "/accept") ? (
-    <div className="flex h-full w-full items-center justify-center">
+    <div className="flex size-full items-center justify-center">
       <LoadingLogo />
     </div>
   ) : (

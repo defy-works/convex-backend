@@ -263,7 +263,7 @@ export function TeamUsageByFunctionChart({
 
         {numShown < nonZeroRows.length && (
           <div className="h-4">
-            <div className="bottom-four pointer-events-none absolute h-24 w-full bg-gradient-to-b from-transparent to-background-secondary" />
+            <div className="bottom-four pointer-events-none absolute h-24 w-full bg-linear-to-b from-transparent to-background-secondary" />
             <div className="absolute bottom-0 left-[50%]">
               <Button
                 className="-translate-x-1/2"
@@ -328,7 +328,7 @@ function ChartRow({
   const linkContents = (
     <div className="group relative flex h-10 py-1">
       <div role="cell" className="relative flex grow">
-        <div className="absolute top-0 left-0 flex h-full w-full items-center">
+        <div className="absolute top-0 left-0 flex size-full items-center">
           {nonZeroValues.map(([value, index], i) => (
             <div
               className={classNames(
@@ -345,7 +345,7 @@ function ChartRow({
           ))}
         </div>
 
-        <div className="absolute top-0 left-0 flex h-full w-full items-center text-sm">
+        <div className="absolute top-0 left-0 flex size-full items-center text-sm">
           <div className="truncate px-4">
             {systemKind !== null ? (
               renderSystemRowLabel(systemKind)

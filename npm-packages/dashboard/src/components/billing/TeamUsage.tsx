@@ -301,7 +301,7 @@ function TeamUsageContents({ team }: { team: TeamResponse }) {
     !isBusinessPlanType;
 
   return (
-    <div className="flex min-w-[40rem] flex-col gap-2 [--team-usage-toolbar-height:--spacing(32)] md:[--team-usage-toolbar-height:--spacing(28)] lg:[--team-usage-toolbar-height:--spacing(20)]">
+    <div className="flex min-w-160 flex-col gap-2 [--team-usage-toolbar-height:--spacing(32)] md:[--team-usage-toolbar-height:--spacing(28)] lg:[--team-usage-toolbar-height:--spacing(20)]">
       <div className="flex justify-between">
         <h2 className="flex items-center gap-2">
           {section ? (
@@ -359,7 +359,6 @@ function TeamUsageContents({ team }: { team: TeamResponse }) {
                 </Link>
               </div>
             </span>
-            {/* eslint-disable-next-line jsx-a11y/label-has-associated-control -- custom toggle switch */}
             <label className="flex shrink-0 cursor-pointer items-center gap-2 text-sm">
               <span>Preview new usage metrics</span>
               {/* eslint-disable-next-line react/forbid-elements -- custom toggle switch, not a standard button */}
@@ -386,7 +385,7 @@ function TeamUsageContents({ team }: { team: TeamResponse }) {
               >
                 <span
                   className={cn(
-                    "inline-block h-3.5 w-3.5 rounded-full bg-white shadow-sm transition-transform",
+                    "inline-block size-3.5 rounded-full bg-white shadow-sm transition-transform",
                     previewNewBilling
                       ? "translate-x-[18px]"
                       : "translate-x-[3px]",

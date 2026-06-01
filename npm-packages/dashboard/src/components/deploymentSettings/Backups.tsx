@@ -131,7 +131,7 @@ export function Backups({
               className="flex items-center gap-3"
             >
               <label className="flex cursor-not-allowed items-start gap-2 text-start text-sm">
-                <div className="flex min-h-[1lh] items-center">
+                <div className="flex min-h-lh items-center">
                   <Checkbox disabled checked={false} onChange={() => {}} />
                 </div>
                 <span>Backup automatically</span>
@@ -482,7 +482,7 @@ export function BackupScheduleSelector({
           </span>
           <span className="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-2">
             <ChevronDownIcon
-              className="h-5 w-5 text-content-tertiary"
+              className="size-5 text-content-tertiary"
               aria-hidden="true"
             />
           </span>
