@@ -2,7 +2,6 @@ import { Meta, StoryObj } from "@storybook/nextjs";
 import { mocked } from "storybook/test";
 import {
   useUsageTeamSummary,
-  useTokenUsage,
   useUsageTeamMetricsByFunction,
   useUsageTeamDailyCallsByTagByProject,
   useUsageTeamDatabaseBandwidthPerDayByProject,
@@ -65,29 +64,6 @@ const meta = {
       ],
       error: undefined,
     });
-    mocked(useTokenUsage).mockReturnValue({
-      data: {
-        centitokensUsed: 5_000_000,
-        centitokensQuota: 2_500_000_000,
-        tokensUsed: 50_000,
-        tokensQuota: 25_000_000,
-        isPaidPlan: true,
-        isTeamDisabled: false,
-        planType: "professional",
-      },
-      error: undefined,
-      isLoading: false,
-      mutate: async () => ({
-        centitokensUsed: 5_000_000,
-        centitokensQuota: 2_500_000_000,
-        tokensUsed: 50_000,
-        tokensQuota: 25_000_000,
-        isPaidPlan: true,
-        isTeamDisabled: false,
-        planType: "professional",
-      }),
-      isValidating: false,
-    });
     mocked(useUsageTeamMetricsByFunction).mockReturnValue({
       data: undefined,
       error: undefined,
@@ -145,7 +121,23 @@ const meta = {
       error: undefined,
     });
     mocked(useUsageTeamSummaryV2).mockReturnValue({
-      data: undefined,
+      data: [
+        {
+          deploymentClass: "s16",
+          region: "aws-us-east-1",
+          databaseStorage: 5_368_709_120,
+          databaseIO: 5_368_709_120,
+          functionCalls: 5_000_000,
+          queryMutationCompute: 10,
+          actionComputeConvex: 30,
+          actionComputeNode: 20,
+          fileStorage: 10_737_418_240,
+          searchStorage: 107_374_182,
+          dataEgress: 5_368_709_120,
+          searchQueries: 500,
+          actionComputeUser: 30,
+        },
+      ],
       error: undefined,
     });
     mocked(useUsageTeamMetricsByFunctionV2).mockReturnValue({
