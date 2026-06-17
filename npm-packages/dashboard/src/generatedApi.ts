@@ -1895,12 +1895,12 @@ export interface components {
         } | {
             serviceAccount: {
                 member_id: components["schemas"]["MemberId"];
-                token_id?: null | components["schemas"]["AccessTokenId"];
+                token_id: components["schemas"]["AccessTokenId"];
             };
         } | {
             team: {
                 team_id: components["schemas"]["TeamId"];
-                token_id?: null | components["schemas"]["AccessTokenId"];
+                token_id: components["schemas"]["AccessTokenId"];
             };
         } | {
             app: {
@@ -1910,6 +1910,8 @@ export interface components {
         AuditLogEventResponse: {
             action: components["schemas"]["AuditLogAction"];
             actor: components["schemas"]["AuditLogActor"];
+            clientIp?: string | null;
+            clientUserAgent?: string | null;
             /** Format: int64 */
             createTime: number;
             metadata: components["schemas"]["Value"];
@@ -2396,11 +2398,22 @@ export interface components {
         };
         OauthAppResponse: {
             appName: components["schemas"]["AppName"];
+            /**
+             * Format: int64
+             * @description The number of distinct teams that have authorized this app.
+             */
+            authorizedTeamCount: number;
             clientId: string;
             clientSecret?: string | null;
             /** Format: int64 */
             createTime: number;
             redirectUris: string[];
+            /**
+             * Format: int64
+             * @description The maximum number of teams that may authorize this app while it is
+             *     unverified.
+             */
+            unverifiedTeamLimit: number;
             verified: boolean;
         };
         OptIn: {

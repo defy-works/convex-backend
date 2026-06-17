@@ -34,7 +34,10 @@ async function getFunctionMetadata(): Promise<{
     "1.0/getFunctionMetadata",
     {},
   );
-  return { name, componentPath };
+  return {
+    name,
+    componentPath,
+  };
 }
 
 async function getDeploymentMetadata(): Promise<DeploymentMetadata> {
@@ -51,11 +54,9 @@ async function getDeploymentMetadata(): Promise<DeploymentMetadata> {
 }
 
 async function getRequestMetadata(): Promise<RequestMetadata> {
-  const { ip, userAgent, requestId } = await performAsyncSyscall(
-    "1.0/getRequestMetadata",
-    {},
-  );
-  return { ip, userAgent, requestId };
+  const { ip, userAgent, requestId, scheduledFunctionId } =
+    await performAsyncSyscall("1.0/getRequestMetadata", {});
+  return { ip, userAgent, requestId, scheduledFunctionId };
 }
 
 export function setupQueryMeta(

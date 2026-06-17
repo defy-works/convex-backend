@@ -55,6 +55,40 @@ export const list = queryPrivateSystem("ViewData")({
   },
 });
 
+export const argsValidator = queryPrivateSystem("ViewData")({
+  args: {
+    componentId: v.optional(v.union(v.string(), v.null())),
+    // The function display name e.g. myFunctions/messages:send
+    function: v.string(),
+  },
+  handler: async (
+    { db },
+    { function: functionName },
+  ): Promise<string | null> => {
+    const [path, name] = functionName.split(":");
+    const module = await db
+      .query("_modules")
+      .withIndex("by_path", (q) => q.eq("path", path + ".js"))
+      .unique();
+    if (!module) {
+      return null;
+    }
+    const analyzeResult = module.analyzeResult;
+    if (!analyzeResult) {
+      return null;
+    }
+
+    const analyzedFunction = analyzeResult.functions.find(
+      (f) => f.name === (name ?? "default"),
+    );
+    if (!analyzedFunction) {
+      return null;
+    }
+
+    return analyzedFunction.args ?? DEFAULT_ARGS_VALIDATOR;
+  },
+});
+
 async function listHandler(db: DatabaseReader): Promise<[string, Module][]> {
   const result: [string, Module][] = [];
   for await (const module of db.query("_modules")) {
@@ -108,7 +142,6 @@ function processHttpRoute(f: {
     lineno: lineno ? Number(lineno) : undefined,
     udfType: "HttpAction",
     visibility: { kind: "public" },
-    argsValidator: f.args || DEFAULT_ARGS_VALIDATOR,
   } as const;
 }
 
@@ -126,6 +159,5 @@ function processFunction(f: {
     lineno: lineno ? Number(lineno) : undefined,
     udfType: f.udfType,
     visibility: f.visibility ?? { kind: "public" },
-    argsValidator: f.args || DEFAULT_ARGS_VALIDATOR,
   };
 }

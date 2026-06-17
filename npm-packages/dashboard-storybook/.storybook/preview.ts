@@ -18,6 +18,7 @@ sb.mock(import("dashboard/src/hooks/useDeploymentPermissions.ts"), {
 sb.mock(import("dashboard/src/api/invitations.ts"), { spy: true });
 sb.mock(import("dashboard/src/api/billing.ts"), { spy: true });
 sb.mock(import("dashboard/src/api/accessTokens.ts"), { spy: true });
+sb.mock(import("dashboard/src/api/teamAccessTokens.ts"), { spy: true });
 sb.mock(import("dashboard/src/api/personalAccessTokens.ts"), {
   spy: true,
 });
@@ -40,7 +41,6 @@ sb.mock(import("dashboard/src/api/oauth.ts"), { spy: true });
 sb.mock(import("dashboard/src/api/referrals.ts"), { spy: true });
 sb.mock(import("dashboard/src/lib/deploymentAuth.ts"), { spy: true });
 sb.mock(import("dashboard/src/hooks/usageMetrics.ts"), { spy: true });
-sb.mock(import("dashboard/src/hooks/usageMetricsV2.ts"), { spy: true });
 sb.mock(import("dashboard-common/src/elements/LocalDevCallout.tsx"), {
   spy: true,
 });

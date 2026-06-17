@@ -3531,21 +3531,15 @@
               "serviceAccount": {
                 "type": "object",
                 "required": [
-                  "member_id"
+                  "member_id",
+                  "token_id"
                 ],
                 "properties": {
                   "member_id": {
                     "$ref": "#/components/schemas/MemberId"
                   },
                   "token_id": {
-                    "oneOf": [
-                      {
-                        "type": "null"
-                      },
-                      {
-                        "$ref": "#/components/schemas/AccessTokenId"
-                      }
-                    ]
+                    "$ref": "#/components/schemas/AccessTokenId"
                   }
                 }
               }
@@ -3560,21 +3554,15 @@
               "team": {
                 "type": "object",
                 "required": [
-                  "team_id"
+                  "team_id",
+                  "token_id"
                 ],
                 "properties": {
                   "team_id": {
                     "$ref": "#/components/schemas/TeamId"
                   },
                   "token_id": {
-                    "oneOf": [
-                      {
-                        "type": "null"
-                      },
-                      {
-                        "$ref": "#/components/schemas/AccessTokenId"
-                      }
-                    ]
+                    "$ref": "#/components/schemas/AccessTokenId"
                   }
                 }
               }
@@ -3617,6 +3605,18 @@
           },
           "actor": {
             "$ref": "#/components/schemas/AuditLogActor"
+          },
+          "clientIp": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "clientUserAgent": {
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "createTime": {
             "type": "integer",
@@ -5436,11 +5436,18 @@
           "appName",
           "redirectUris",
           "verified",
-          "createTime"
+          "createTime",
+          "authorizedTeamCount",
+          "unverifiedTeamLimit"
         ],
         "properties": {
           "appName": {
             "$ref": "#/components/schemas/AppName"
+          },
+          "authorizedTeamCount": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The number of distinct teams that have authorized this app."
           },
           "clientId": {
             "type": "string"
@@ -5460,6 +5467,11 @@
             "items": {
               "type": "string"
             }
+          },
+          "unverifiedTeamLimit": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The maximum number of teams that may authorize this app while it is\nunverified."
           },
           "verified": {
             "type": "boolean"

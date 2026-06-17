@@ -909,10 +909,18 @@ impl<RT: Runtime, P: AsyncSyscallProvider<RT>> DatabaseSyscallsV1<RT, P> {
         );
         let context = provider.context();
         let metadata = &context.request_metadata;
+        // The top-level scheduled function and all of its descendants (e.g. a
+        // mutation called by a scheduled action) report the scheduled function's
+        // id, since `parent_scheduled_job` is propagated down the call tree. It
+        // is `None` when the function was not scheduled.
+        let scheduled_function_id = context
+            .parent_scheduled_job
+            .map(|(_, job_id)| job_id.encode());
         Ok(json!({
             "ip": metadata.ip.as_ref().map(|ip| ip.as_str()),
             "userAgent": metadata.user_agent.as_ref().map(|ua| ua.as_str()),
             "requestId": context.request_id.as_str(),
+            "scheduledFunctionId": scheduled_function_id,
         }))
     }
 
@@ -1136,7 +1144,6 @@ impl<RT: Runtime, P: AsyncSyscallProvider<RT>> DatabaseSyscallsV1<RT, P> {
             id: String,
         }
         let component = provider.component()?;
-        let tx = provider.tx()?;
 
         let virtual_id_v6 = with_argument_error("db.cancel_job", || {
             let args: CancelJobArgs = serde_json::from_value(args)?;
@@ -1144,6 +1151,13 @@ impl<RT: Runtime, P: AsyncSyscallProvider<RT>> DatabaseSyscallsV1<RT, P> {
             Ok(id)
         })?;
 
+        if let Some((_, self_job_id)) = provider.context().parent_scheduled_job
+            && self_job_id == virtual_id_v6
+        {
+            return Ok(JsonValue::Null);
+        }
+
+        let tx = provider.tx()?;
         VirtualSchedulerModel::new(tx, component.into())
             .cancel(virtual_id_v6)
             .await?;

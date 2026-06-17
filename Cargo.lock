@@ -365,7 +365,7 @@ dependencies = [
  "keybroker",
  "libc",
  "log_streaming",
- "lru 0.17.0",
+ "lru 0.18.0",
  "maplit",
  "metrics",
  "model",
@@ -379,6 +379,7 @@ dependencies = [
  "proptest-derive",
  "rand 0.9.4",
  "regex",
+ "roles",
  "runtime",
  "search",
  "semver",
@@ -562,7 +563,7 @@ dependencies = [
  "errors",
  "fastrace",
  "futures",
- "lru 0.17.0",
+ "lru 0.18.0",
  "metrics",
  "parking_lot",
  "rand 0.9.4",
@@ -2884,6 +2885,7 @@ dependencies = [
  "proptest-derive",
  "rand 0.9.4",
  "rand_chacha 0.9.0",
+ "roles",
  "runtime",
  "search",
  "segment",
@@ -5244,6 +5246,7 @@ dependencies = [
  "rand_chacha 0.9.0",
  "regex",
  "reqwest",
+ "roles",
  "runtime",
  "scopeguard",
  "search",
@@ -5709,6 +5712,7 @@ dependencies = [
  "parking_lot",
  "proptest",
  "reqwest",
+ "roles",
  "runtime",
  "search",
  "sentry",
@@ -5873,9 +5877,9 @@ dependencies = [
 
 [[package]]
 name = "lru"
-version = "0.17.0"
+version = "0.18.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0e0b564323a0fb6d54b864f625ae139de9612e27edb944dda37c109f05aac531"
+checksum = "8a860605968fce16869fd239cf4237a82f3ac470723415db603b0e8b6c8d4fb9"
 dependencies = [
  "hashbrown 0.17.0",
 ]
@@ -7340,7 +7344,7 @@ dependencies = [
  "futures-async-stream",
  "hex",
  "itertools 0.14.0",
- "lru 0.17.0",
+ "lru 0.18.0",
  "metrics",
  "parking_lot",
  "postgres-protocol",
@@ -8219,6 +8223,7 @@ dependencies = [
  "anyhow",
  "big_brain_private_api_types",
  "common",
+ "errors",
  "keybroker",
  "serde",
  "serde_json",
@@ -9135,7 +9140,7 @@ dependencies = [
 [[package]]
 name = "shuttle"
 version = "0.9.1"
-source = "git+https://github.com/awslabs/shuttle#09098b59fb43bdd08099d33f9e390ba2172325de"
+source = "git+https://github.com/awslabs/shuttle#c8a46d3965048df3207ec920dae066bc9c4d9d89"
 dependencies = [
  "bitvec",
  "cfg-if",
@@ -9156,7 +9161,7 @@ dependencies = [
 [[package]]
 name = "shuttle-core"
 version = "0.1.0"
-source = "git+https://github.com/awslabs/shuttle#09098b59fb43bdd08099d33f9e390ba2172325de"
+source = "git+https://github.com/awslabs/shuttle#c8a46d3965048df3207ec920dae066bc9c4d9d89"
 dependencies = [
  "assoc",
  "bitvec",
@@ -9195,7 +9200,7 @@ dependencies = [
 [[package]]
 name = "shuttle-parking_lot"
 version = "0.12.5"
-source = "git+https://github.com/awslabs/shuttle#09098b59fb43bdd08099d33f9e390ba2172325de"
+source = "git+https://github.com/awslabs/shuttle#c8a46d3965048df3207ec920dae066bc9c4d9d89"
 dependencies = [
  "cfg-if",
  "parking_lot",
@@ -9205,7 +9210,7 @@ dependencies = [
 [[package]]
 name = "shuttle-parking_lot-impl"
 version = "0.1.0"
-source = "git+https://github.com/awslabs/shuttle#09098b59fb43bdd08099d33f9e390ba2172325de"
+source = "git+https://github.com/awslabs/shuttle#c8a46d3965048df3207ec920dae066bc9c4d9d89"
 dependencies = [
  "shuttle",
  "tracing",
@@ -9214,7 +9219,7 @@ dependencies = [
 [[package]]
 name = "shuttle-schedulers"
 version = "0.1.0"
-source = "git+https://github.com/awslabs/shuttle#09098b59fb43bdd08099d33f9e390ba2172325de"
+source = "git+https://github.com/awslabs/shuttle#c8a46d3965048df3207ec920dae066bc9c4d9d89"
 dependencies = [
  "rand 0.8.6",
  "rand_pcg",
@@ -9226,7 +9231,7 @@ dependencies = [
 [[package]]
 name = "shuttle-std"
 version = "0.1.0"
-source = "git+https://github.com/awslabs/shuttle#09098b59fb43bdd08099d33f9e390ba2172325de"
+source = "git+https://github.com/awslabs/shuttle#c8a46d3965048df3207ec920dae066bc9c4d9d89"
 dependencies = [
  "assoc",
  "owo-colors",
@@ -10801,6 +10806,7 @@ dependencies = [
  "proptest-derive",
  "proptest-http",
  "rand 0.9.4",
+ "roles",
  "runtime",
  "semver",
  "serde_json",

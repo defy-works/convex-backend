@@ -346,6 +346,11 @@ export class SyscallsImpl {
             ip: this.executionContext.ip,
             userAgent: this.executionContext.userAgent,
             requestId: this.executionContext.requestId,
+            // The top-level scheduled function and all of its descendants report
+            // the scheduled function's id (`parentScheduledJob` is propagated
+            // down the call tree). It is null when the function was not
+            // scheduled.
+            scheduledFunctionId: this.executionContext.parentScheduledJob,
           });
         case "1.0/auditLog":
           return JSON.stringify(await this.syscallAuditLog(jsonArgs));

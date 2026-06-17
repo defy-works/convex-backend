@@ -55,7 +55,6 @@ use database::Transaction;
 use deno_core::v8::{
     self,
     scope,
-    scope_with_context,
 };
 use futures::{
     future::BoxFuture,
@@ -150,6 +149,7 @@ use crate::{
         EnvironmentData,
         SharedIsolateHeapStats,
     },
+    context_cache::ContextCache,
     environment::{
         helpers::{
             module_loader::module_specifier_from_path,
@@ -329,7 +329,7 @@ impl<RT: Runtime> ActionEnvironment<RT> {
         mut self,
         client_id: String,
         isolate: &mut Isolate<RT>,
-        v8_context: v8::Global<v8::Context>,
+        context_cache: &mut ContextCache,
         isolate_clean: &mut bool,
         http_module_path: ValidatedHttpPath,
         routed_path: RoutedHttpPath,
@@ -350,10 +350,11 @@ impl<RT: Runtime> ActionEnvironment<RT> {
         if let Some(tx) = function_started {
             _ = tx.send(());
         }
-        scope_with_context!(let context_scope, isolate.isolate(), v8_context);
+        scope!(let handle_scope, isolate.isolate());
+        let v8_context = context_cache.get_or_create_fresh_context(handle_scope);
+        let context_scope = &mut v8::ContextScope::new(handle_scope, v8_context);
 
-        let mut isolate_context =
-            RequestScope::new(context_scope, handle.clone(), state, true).await?;
+        let mut isolate_context = RequestScope::new(context_scope, handle.clone(), state, true)?;
 
         let request_head = request.head.clone();
 
@@ -667,7 +668,7 @@ impl<RT: Runtime> ActionEnvironment<RT> {
         mut self,
         client_id: String,
         isolate: &mut Isolate<RT>,
-        v8_context: v8::Global<v8::Context>,
+        context_cache: &mut ContextCache,
         isolate_clean: &mut bool,
         request_params: ActionRequestParams,
         cancellation: BoxFuture<'_, ()>,
@@ -680,10 +681,11 @@ impl<RT: Runtime> ActionEnvironment<RT> {
         if let Some(tx) = function_started {
             _ = tx.send(());
         }
-        scope_with_context!(let context_scope, isolate.isolate(), v8_context);
+        scope!(let handle_scope, isolate.isolate());
+        let v8_context = context_cache.get_or_create_fresh_context(handle_scope);
+        let context_scope = &mut v8::ContextScope::new(handle_scope, v8_context);
 
-        let mut isolate_context =
-            RequestScope::new(context_scope, handle.clone(), state, true).await?;
+        let mut isolate_context = RequestScope::new(context_scope, handle.clone(), state, true)?;
         let mut result = Self::run_action_inner(
             &mut isolate_context,
             &mut timeout,

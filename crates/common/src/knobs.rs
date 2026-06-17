@@ -230,8 +230,16 @@ pub static FUNCTION_MAX_ARGS_SIZE: LazyLock<usize> = LazyLock::new(|| {
 });
 
 /// Maximum size in bytes of the result of a function.
+/// Has to be smaller than MAX_BACKEND_RPC_RESPONSE_SIZE
 pub static FUNCTION_MAX_RESULT_SIZE: LazyLock<usize> = LazyLock::new(|| {
     env_config("FUNCTION_MAX_RESULT_SIZE", 1 << 24) // 16 MiB
+});
+
+/// Maximum size in bytes of the result of a system function.
+/// Larger than FUNCTION_MAX_RESULT_SIZE but smaller than
+/// MAX_BACKEND_RPC_RESPONSE_SIZE
+pub static SYSTEM_FUNCTION_MAX_RESULT_SIZE: LazyLock<usize> = LazyLock::new(|| {
+    env_config("SYSTEM_FUNCTION_MAX_RESULT_SIZE", 24 * (1 << 20)) // 24 MiB
 });
 
 /// When a function exceeds FUNCTION_LIMIT_WARNING_RATIO * a corresponding
@@ -382,6 +390,13 @@ pub static TRANSACTION_MAX_READ_SIZE_ROWS: LazyLock<usize> =
 /// Number of bytes that can be read in a transaction.
 pub static TRANSACTION_MAX_READ_SIZE_BYTES: LazyLock<usize> = LazyLock::new(|| {
     env_config("TRANSACTION_MAX_READ_SIZE_BYTES", 1 << 24) // 16 MiB
+});
+
+/// Maximum size in bytes of the in-memory index cache carried across
+/// transactions. When a write pushes the cache past this size the entire cache
+/// is dropped, forcing subsequent reads to go to the database.
+pub static MAX_TRANSACTION_CACHE_SIZE_BYTES: LazyLock<usize> = LazyLock::new(|| {
+    env_config("MAX_TRANSACTION_CACHE_SIZE_BYTES", 1 << 24) // 16 MiB
 });
 
 /// Maximum number of intervals that can be read in a transaction.
@@ -755,12 +770,23 @@ pub static ISOLATE_MAX_LIFETIME: LazyLock<Duration> =
 pub static V8_ACTION_SYSTEM_TIMEOUT: LazyLock<Duration> =
     LazyLock::new(|| Duration::from_secs(env_config("V8_ACTION_SYSTEM_TIMEOUT_SECONDS", 5 * 60)));
 
-/// The maximum amount of time
+/// The maximum amount of time a query or mutation waits for a concurrency
+/// permit before being rejected.
 pub static APPLICATION_FUNCTION_RUNNER_SEMAPHORE_TIMEOUT: LazyLock<Duration> =
     LazyLock::new(|| {
         Duration::from_millis(env_config(
             "APPLICATION_FUNCTION_RUNNER_SEMAPHORE_TIMEOUT",
             5000,
+        ))
+    });
+
+/// The maximum amount of time an action waits for a concurrency permit before
+/// being rejected.
+pub static APPLICATION_FUNCTION_RUNNER_ACTION_SEMAPHORE_TIMEOUT: LazyLock<Duration> =
+    LazyLock::new(|| {
+        Duration::from_millis(env_config(
+            "APPLICATION_FUNCTION_RUNNER_ACTION_SEMAPHORE_TIMEOUT",
+            10000,
         ))
     });
 
@@ -1133,7 +1159,7 @@ pub static FUNRUN_ISOLATE_ACTIVE_THREADS: LazyLock<usize> =
 /// The maximum length of time to wait to start running a function (when the
 /// FUNRUN_ISOLATE_ACTIVE_THREADS limit is reached).
 pub static FUNRUN_INITIAL_PERMIT_TIMEOUT: LazyLock<Duration> =
-    LazyLock::new(|| Duration::from_millis(env_config("FUNRUN_INITIAL_PERMIT_TIMEOUT_MS", 100)));
+    LazyLock::new(|| Duration::from_millis(env_config("FUNRUN_INITIAL_PERMIT_TIMEOUT_MS", 200)));
 
 /// Isolate worker usage at which the funrun load reporter's
 /// `effective_load` saturates to 1.0.
@@ -1328,15 +1354,15 @@ pub static MAX_BACKEND_RPC_REQUEST_SIZE: LazyLock<usize> =
     LazyLock::new(|| env_config("MAX_BACKEND_RPC_REQUEST_SIZE", 1 << 25)); // 32 MiB
 
 /// The maximum size for Backend HTTP and GRPC action callbacks.
-/// This needs to contain 8MiB for function result + 4MiB for log lines + 4MiB
-/// for smaller fields.
+/// This needs to contain 16MiB for FUNCTION_MAX_RESULT_SIZE + 4MiB for log
+/// lines + 4MiB for smaller fields.
 pub static MAX_BACKEND_RPC_RESPONSE_SIZE: LazyLock<usize> =
     LazyLock::new(|| env_config("MAX_BACKEND_RPC_RESPONSE_SIZE", 1 << 25)); // 32 MiB
 
 /// The maximum size of byte chunks used when transmitting HTTP request/response
 /// bodies as part of HTTP Actions.
 pub static MAX_BACKEND_RPC_HTTP_CHUNK_SIZE: LazyLock<usize> =
-    LazyLock::new(|| env_config("MAX_BACKEND_RPC_RESPONSE_SIZE", 1 << 23)); // 8 MiB
+    LazyLock::new(|| env_config("MAX_BACKEND_RPC_HTTP_CHUNK_SIZE", 1 << 23)); // 8 MiB
 
 /// The maximum size for requests to the backend public API. Must be at least 16
 /// MiB for function arguments.
@@ -1658,7 +1684,7 @@ pub static HTTP_CACHE_SIZE: LazyLock<u64> =
     LazyLock::new(|| env_config("HTTP_CACHE_SIZE", 16 * 1024 * 1024));
 
 /// Maximum number of environment variables that can be stored.
-pub static ENV_VAR_LIMIT: LazyLock<usize> = LazyLock::new(|| env_config("ENV_VAR_LIMIT", 256));
+pub static ENV_VAR_LIMIT: LazyLock<usize> = LazyLock::new(|| env_config("ENV_VAR_LIMIT", 512));
 
 /// Maximum total size in bytes of all environment variables (names + values).
 pub static ENV_VAR_TOTAL_SIZE_LIMIT: LazyLock<usize> =
@@ -1714,7 +1740,15 @@ pub static ADMIN_IDENTITY_REVALIDATION_DELAY: LazyLock<Duration> = LazyLock::new
 });
 
 /// If set, 404 on a bad path request instead of 200 + js error message
-/// temporary knob - we want to default to true, but just have the knob while
-/// we're rolling out.
+///
+/// Knob defaults to false -> in an emergency we can use it to differentiate
+/// 404 traffic (eg if a customer is getting hammered).
+///
+/// Long term, we want to make this the default, but it is tricky, because we
+/// need to reconcile the behavior on batch HTTP endpoints and on websocket.
 pub static UDF_404_ON_BAD_PATH: LazyLock<bool> =
-    LazyLock::new(|| env_config("UDF_404_ON_BAD_PATH", true));
+    LazyLock::new(|| env_config("UDF_404_ON_BAD_PATH", false));
+
+/// If set, allows `experimental_reuseContext` to be set.
+pub static ALLOW_FUNCTION_CONTEXT_REUSE: LazyLock<bool> =
+    LazyLock::new(|| env_config("ALLOW_FUNCTION_CONTEXT_REUSE", false));

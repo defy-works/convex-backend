@@ -125,7 +125,7 @@ libc = "0.2"
 libsodium-sys-stable = { version = "1.22.2", features = [ "minimal" ] }
 log_interleaver = { path = "crates/log_interleaver" }
 log_streaming = { path = "crates/log_streaming" }
-lru = "0.17.0"
+lru = "0.18.0"
 lz4_flex = "0.13"
 maplit = "1"
 memchr = "2.7"
@@ -181,6 +181,7 @@ ref-cast = "1.0.20"
 regex = "1"
 reqwest = { version = "0.12.7", features = [ "json", "stream", "gzip", "native-tls-alpn", "native-tls-vendored" ] }
 reqwest-middleware = "0.4.1"
+roles = { path = "crates/roles" }
 rsa = "0.9.6"
 runtime = { path = "crates/runtime" }
 rusqlite = { version = "0.32", features = [ "bundled" ] }

@@ -371,10 +371,19 @@ impl<RT: Runtime> TaskExecutor<RT> {
 
     fn async_syscall_getRequestMetadata(&self) -> anyhow::Result<JsonValue> {
         let metadata = &self.context.request_metadata;
+        // The top-level scheduled function and all of its descendants (e.g. a
+        // mutation called by a scheduled action) report the scheduled function's
+        // id, since `parent_scheduled_job` is propagated down the call tree. It
+        // is `None` when the function was not scheduled.
+        let scheduled_function_id = self
+            .context
+            .parent_scheduled_job
+            .map(|(_, job_id)| job_id.encode());
         Ok(json!({
             "ip": metadata.ip.as_ref().map(|ip| ip.as_str()),
             "userAgent": metadata.user_agent.as_ref().map(|ua| ua.as_str()),
             "requestId": self.context.request_id.as_str(),
+            "scheduledFunctionId": scheduled_function_id,
         }))
     }
 
