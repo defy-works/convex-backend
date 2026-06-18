@@ -95,6 +95,7 @@ proptest-derive = { workspace = true }
 proptest-http = { workspace = true }
 runtime = { workspace = true, features = ["testing"] }
 search = { workspace = true, features = ["testing"] }
+search_index_workers = { workspace = true, features = ["testing"] }
 storage = { workspace = true, features = ["testing"] }
 sync_types = { workspace = true, features = [
     "testing",

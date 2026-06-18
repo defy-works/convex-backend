@@ -108,7 +108,12 @@ impl From<IndexDiff> for AuditLogIndexDiff {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, strum::EnumDiscriminants)]
+#[strum_discriminants(
+    name(DeploymentAuditLogEventKind),
+    derive(strum::EnumIter, strum::IntoStaticStr),
+    strum(serialize_all = "snake_case")
+)]
 pub enum DeploymentAuditLogEvent {
     CreateEnvironmentVariable {
         name: EnvVarName,
@@ -297,6 +302,17 @@ impl From<IndexDiff> for DeploymentAuditLogEvent {
             added_indexes,
             removed_indexes,
         }
+    }
+}
+
+impl DeploymentAuditLogEventKind {
+    pub fn action(self) -> &'static str {
+        self.into()
+    }
+
+    pub fn actions() -> impl Iterator<Item = &'static str> {
+        use strum::IntoEnumIterator;
+        Self::iter().map(Self::action)
     }
 }
 
