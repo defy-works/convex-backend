@@ -138,10 +138,10 @@
 
   --ifm-code-font-size: 95%;
   --ifm-font-weight-semibold: 400;
-  --ifm-font-family-base: "Inter", system-ui, -apple-system, Segoe UI, Roboto,
-    Ubuntu, Cantarell, Noto Sans, sans-serif, BlinkMacSystemFont, "Segoe UI",
-    Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji",
-    "Segoe UI Symbol";
+  --ifm-font-family-base:
+    "Inter", system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell,
+    Noto Sans, sans-serif, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial,
+    sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
 
   /* Footer */
   --ifm-footer-background-color: var(--ifm-background-color);
@@ -434,6 +434,21 @@ article code {
   margin: 1.5rem 0 2.5rem;
 }
 
+/* The card lists use <ul>/<li> for semantics; reset the list styling and let
+   the card links act as the grid items so the layout is unchanged. */
+.cards,
+.qs-cards,
+.large-cards {
+  padding: 0;
+  list-style: none;
+}
+
+.cards > li,
+.qs-cards > li,
+.large-cards > li {
+  display: contents;
+}
+
 .component-cards {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
@@ -550,7 +565,7 @@ a.card:hover {
   text-decoration: none;
 }
 
-a.card h2 {
+a.card .card__title {
   font-size: 0.9375rem;
 }
 
@@ -558,7 +573,7 @@ a.card p {
   font-size: 0.75rem;
 }
 
-a.card h2,
+a.card .card__title,
 a.card p {
   margin-bottom: 0;
   overflow: hidden;
@@ -579,7 +594,7 @@ a.card.convex-hero-card p {
 }
 
 @media (min-width: 997px) {
-  a.card.convex-hero-card h2 {
+  a.card.convex-hero-card .card__title {
     font-size: 1.25rem;
   }
 
@@ -651,9 +666,9 @@ a.pagination-nav__link .pagination-nav__label:hover {
 .markdown h1:first-child {
   --ifm-h1-font-size: 2rem;
   margin-top: 1.25rem;
-  --ifm-heading-font-family: "GT America", system-ui, "Segoe UI", Roboto,
-    Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji",
-    "Segoe UI Symbol";
+  --ifm-heading-font-family:
+    "GT America", system-ui, "Segoe UI", Roboto, Helvetica, Arial, sans-serif,
+    "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
   font-weight: 700;
   letter-spacing: -0.01em;
 }
@@ -669,9 +684,9 @@ h1,
 h2,
 h3,
 h4 {
-  --ifm-heading-font-family: "GT America", system-ui, "Segoe UI", Roboto,
-    Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji",
-    "Segoe UI Symbol";
+  --ifm-heading-font-family:
+    "GT America", system-ui, "Segoe UI", Roboto, Helvetica, Arial, sans-serif,
+    "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
   font-weight: 700;
   letter-spacing: -0.01em;
 }
@@ -1342,10 +1357,15 @@ h2.zen-header {
   margin: 0 auto;
 }
 
-/* Fix pages should not be too wide, except for all the quick starts and management API docs */
-html:not([class*="docs-doc-id-quickstart/"]):not(
-    [class*="docs-doc-id-management-api/"]
-  ):not([class*="docs-doc-id-deployment-api/"])
+/* Fix pages should not be too wide, except for all the quick starts (other than
+   the quickstarts overview landing page) and management API docs */
+html:not(
+    [class*="docs-doc-id-quickstart/"]:not(
+      [class*="docs-doc-id-quickstart/overview"]
+    )
+  ):not([class*="docs-doc-id-management-api/"]):not(
+    [class*="docs-doc-id-deployment-api/"]
+  )
   main
   > .container
   > .row
@@ -1355,9 +1375,13 @@ html:not([class*="docs-doc-id-quickstart/"]):not(
 }
 
 @media (min-width: 997px) {
-  html:not([class*="docs-doc-id-quickstart/"]):not(
-      [class*="docs-doc-id-management-api/"]
-    ):not([class*="docs-doc-id-deployment-api/"])
+  html:not(
+      [class*="docs-doc-id-quickstart/"]:not(
+        [class*="docs-doc-id-quickstart/overview"]
+      )
+    ):not([class*="docs-doc-id-management-api/"]):not(
+      [class*="docs-doc-id-deployment-api/"]
+    )
     main
     > .container
     > .row
@@ -1508,8 +1532,9 @@ html[data-theme="dark"] a.card.convex-invert-icon svg {
 }
 
 .StackPosts-title {
-  font-family: "GT America", system-ui, "Segoe UI", Roboto, Helvetica, Arial,
-    sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
+  font-family:
+    "GT America", system-ui, "Segoe UI", Roboto, Helvetica, Arial, sans-serif,
+    "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
   display: flex;
   flex-direction: row;
   align-items: center;

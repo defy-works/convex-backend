@@ -27,7 +27,6 @@ use errors::ErrorMetadata;
 use fastrace::{
     local::LocalSpan,
     Event,
-    Span,
 };
 use humansize::{
     FormatSize,
@@ -37,12 +36,12 @@ use humansize::{
 use crate::{
     array_buffer_allocator::ArrayBufferMemoryLimit,
     concurrency_limiter::ConcurrencyLimiter,
+    context_cache::ContextCache,
     environment::IsolateEnvironment,
     helpers::pump_message_loop,
     metrics::{
         create_isolate_timer,
         destroy_isolate_timer,
-        log_gc_freed_memory,
         log_heap_statistics,
     },
     request_scope::RequestState,
@@ -260,7 +259,10 @@ impl<RT: Runtime> Isolate<RT> {
         IsolateHeapStats::new(stats, 0, self.array_buffer_memory_limit.used())
     }
 
-    pub fn check_isolate_clean(&mut self) -> Result<(), IsolateNotClean> {
+    pub fn check_isolate_clean(
+        &mut self,
+        context_cache: &mut ContextCache,
+    ) -> Result<(), IsolateNotClean> {
         // The microtask queue should be empty.
         // v8 doesn't expose whether it's empty, so we empty it ourselves.
         // TODO(CX-2874) use a different microtask queue for each context.
@@ -274,18 +276,8 @@ impl<RT: Runtime> Isolate<RT> {
         // The heap should have enough memory available.
         let stats = self.v8_isolate.get_heap_statistics();
         log_heap_statistics(&stats);
-        let available_before_gc = stats.total_available_size();
-        if available_before_gc < *ISOLATE_MAX_USER_HEAP_SIZE {
-            // Trigger a GC.
-            {
-                let _span = Span::enter_with_local_parent("low_memory_notification");
-                self.v8_isolate.low_memory_notification();
-            }
-            let stats = self.v8_isolate.get_heap_statistics();
-            let available_after_gc = stats.total_available_size();
-            log_gc_freed_memory(available_after_gc.saturating_sub(available_before_gc));
-            if available_after_gc < *ISOLATE_MAX_USER_HEAP_SIZE {
-                // If there still isn't enough memory, destroy the isolate.
+        if stats.total_available_size() < *ISOLATE_MAX_USER_HEAP_SIZE {
+            if !context_cache.report_memory_pressure(true) {
                 self.handle
                     .terminate(IsolateTerminationReason::OutOfMemory.into());
                 return Err(IsolateNotClean::TooMuchMemoryCarryOver(
@@ -293,6 +285,8 @@ impl<RT: Runtime> Isolate<RT> {
                     stats.heap_size_limit().format_size(BINARY),
                 ));
             }
+        } else {
+            context_cache.report_memory_pressure(false);
         }
         if stats.number_of_detached_contexts() > 0 {
             return Err(IsolateNotClean::DetachedContext(
@@ -305,6 +299,7 @@ impl<RT: Runtime> Isolate<RT> {
 
     pub async fn start_request<E: IsolateEnvironment<RT>>(
         &mut self,
+        context_cache: &mut ContextCache,
         client_id: Arc<String>,
         environment: E,
     ) -> anyhow::Result<(IsolateHandle, RequestState<RT, E>, Timeout<RT>)> {
@@ -312,11 +307,12 @@ impl<RT: Runtime> Isolate<RT> {
         // It's unexpected to encounter this error, since we are supposed to
         // have already checked after the last request finished, but in practice
         // it does happen - so make this error retryable.
-        self.check_isolate_clean()
-            .context(ErrorMetadata::rejected_before_execution(
+        self.check_isolate_clean(context_cache).context(
+            ErrorMetadata::rejected_before_execution(
                 "IsolateNotClean",
                 "Selected isolate was not clean",
-            ))?;
+            ),
+        )?;
         // Acquire a concurrency permit without counting it against the timeout.
         let permit = tokio::select! {
             biased;
