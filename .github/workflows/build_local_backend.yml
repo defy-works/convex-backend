@@ -28,22 +28,23 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           r2-access-key: ${{ secrets.R2_ACCESS_KEY_ID }}
           r2-secret-key: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          runs-on-s3-bucket: ${{ vars.RUNS_ON_S3_BUCKET_CACHE }}
+          runs-on-aws-region: ${{ vars.AWS_REGION }}
 
       - name: Check Cargo.lock up-to-date
         run: cargo update -w --locked
 
-      - name: Cache pnpm artifacts
-        uses: runs-on/cache@bd330c5a5f6cbb837823ee25864f3c71a211c2e3 # v5.0.5
+      # Restore-only: OSS can't write this cache (cache-write role is get-convex/convex-only).
+      - name: Restore pnpm artifacts
+        uses: runs-on/cache/restore@bd330c5a5f6cbb837823ee25864f3c71a211c2e3 # v5.0.5
         env:
           AWS_REGION: ${{ vars.AWS_REGION }}
           RUNS_ON_S3_BUCKET_CACHE: ${{ vars.RUNS_ON_S3_BUCKET_CACHE }}
         with:
           path: |
-            npm-packages/common/temp/build-cache
-            npm-packages/common/temp/pnpm-store
-          key:
-            pnpm-cache-${{
-            hashFiles('npm-packages/common/config/rush/pnpm-lock.yaml') }}-2
+            ~/.local/share/pnpm/store
+            npm-packages/.turbo/cache
+          key: pnpm-cache-${{ hashFiles('npm-packages/pnpm-lock.yaml') }}-3
           restore-keys: pnpm-cache-
 
       - name: Install mise tools
@@ -57,8 +58,8 @@ jobs:
 
       - name: Build JS required by Isolate
         run: |
-          just rush install
-          just rush build -t component-tests -t convex -t system-udfs -t udf-runtime -t udf-tests
+          just install-js
+          just turbo run build --filter=component-tests... --filter=convex... --filter=system-udfs... --filter=udf-runtime... --filter=udf-tests...
 
       - name: Install cargo-nextest
         uses: taiki-e/install-action@481c34c1cf3a84c68b5e46f4eccfc82af798415a # v2

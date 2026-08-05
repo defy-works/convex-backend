@@ -157,7 +157,7 @@ pub struct InvokeResponse {
 }
 
 #[derive(Clone)]
-pub struct Actions<RT: Runtime> {
+pub struct NodeActions<RT: Runtime> {
     executor: Arc<dyn NodeExecutor>,
     convex_origin: ConvexOrigin,
     user_timeout: Duration,
@@ -208,7 +208,7 @@ fn construct_js_error(
     Ok(error)
 }
 
-impl<RT: Runtime> Actions<RT> {
+impl<RT: Runtime> NodeActions<RT> {
     pub fn new(
         executor: Arc<dyn NodeExecutor>,
         convex_origin: ConvexOrigin,
@@ -261,7 +261,7 @@ impl<RT: Runtime> Actions<RT> {
             format!("Failed to deserialize execute (aws_request_id: {aws_request_id:?}) Response: {response}")
         })?;
 
-        tracing::info!(
+        tracing::debug!(
             "Total:{:?}, executor:{:?}, download:{:?}, import:{:?}, udf:{:?}, \
              env_invocations:{:?}, memory_allocated_mb:{:?}, egress_bytes:{:?}, aws_request_id:{:?}",
             timer.elapsed(),

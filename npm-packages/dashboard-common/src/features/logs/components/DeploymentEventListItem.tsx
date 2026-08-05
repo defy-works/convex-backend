@@ -74,10 +74,17 @@ export function DeploymentEventListItem({
         <div className="flex h-6 items-center gap-2 truncate">
           <GearIcon className="shrink-0" />
           <span className="truncate">
-            <TeamMemberLink
-              memberId={Number(event.member_id)}
-              name={event.memberName}
-            />{" "}
+            {![
+              "usage_limit_exceeded",
+              "change_usage_limit_stop_state",
+            ].includes(event.action) && (
+              <>
+                <TeamMemberLink
+                  memberId={Number(event.member_id)}
+                  name={event.memberName}
+                />{" "}
+              </>
+            )}
             <ActionText event={event} />
           </span>
         </div>

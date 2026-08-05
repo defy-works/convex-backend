@@ -28,6 +28,7 @@ use common::{
         AllowedVisibility,
         SystemStopState,
         UdfType,
+        UsageLimitStopState,
         UserStopState,
     },
     version::{
@@ -70,14 +71,16 @@ use value::{
     heap_size::HeapSize,
     serialized_args_ext::SerializedArgsExt,
     ConvexArray,
-    ConvexValue,
     JsonPackedValue,
     NamespacedTableMapping,
+    PendingValue,
 };
 
 use crate::{
     helpers::{
+        parse_pending_udf_args,
         parse_udf_args,
+        validate_pending_udf_args_size,
         validate_udf_args_size,
     },
     ActionOutcome,
@@ -85,12 +88,32 @@ use crate::{
     UdfOutcome,
 };
 
+/// Whether a function call's arguments may contain the unresolved
+/// `{"$commitTs": null}` token.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PendingArgsPolicy {
+    /// The token is rejected. Applies to every call that doesn't run inside a
+    /// mutation's transaction (clients, actions, the scheduler, queries
+    /// calling queries), where the token has no transaction to resolve
+    /// against.
+    Reject,
+    /// Arguments may contain unresolved commit timestamps, validated via
+    /// their `Int64(i64::MAX)` projection. Only for queries and mutations
+    /// called from a mutation, where the token refers to that transaction's
+    /// eventual commit timestamp.
+    Allow,
+}
+
 pub const DISABLED_ERROR_MESSAGE_FREE_PLAN: &str =
     "You have exceeded the free plan limits, so your deployments have been disabled. Please \
      upgrade to a Pro plan or reach out to us at support@convex.dev for help.";
 pub const DISABLED_ERROR_MESSAGE_PAID_PLAN: &str =
     "You have exceeded your spending limits, so your deployments have been disabled. Please \
      increase your spending limit on the Convex dashboard or wait until limits reset.";
+pub const USAGE_LIMIT_DISABLED_ERROR_MESSAGE: &str =
+    "This deployment has been disabled because it exceeded a configured usage limit. Update or \
+     disable the usage limit in the Convex dashboard in deployment settings to resume function \
+     execution.";
 pub const PAUSED_ERROR_MESSAGE: &str = "Cannot run functions while this deployment is paused. \
                                         Resume the deployment in the dashboard settings to allow \
                                         functions to run.";
@@ -120,8 +143,12 @@ pub async fn fail_while_not_running<RT: Runtime>(
         .get_backend_state()
         .await?
         .into_value();
-    match (backend_state.system, backend_state.user) {
-        (SystemStopState::Disabled, _) => {
+    match (
+        backend_state.system,
+        backend_state.usage_limit,
+        backend_state.user,
+    ) {
+        (SystemStopState::Disabled, ..) => {
             if is_paid {
                 return Ok(Err(JsError::from_message(
                     DISABLED_ERROR_MESSAGE_PAID_PLAN.to_string(),
@@ -132,15 +159,20 @@ pub async fn fail_while_not_running<RT: Runtime>(
                 )));
             }
         },
-        (SystemStopState::Suspended, _) => {
+        (SystemStopState::None, UsageLimitStopState::Disabled, _) => {
+            return Ok(Err(JsError::from_message(
+                USAGE_LIMIT_DISABLED_ERROR_MESSAGE.to_string(),
+            )));
+        },
+        (SystemStopState::Suspended, ..) => {
             return Ok(Err(JsError::from_message(
                 SUSPENDED_ERROR_MESSAGE.to_string(),
             )));
         },
-        (_, UserStopState::Paused) => {
+        (_, _, UserStopState::Paused) => {
             return Ok(Err(JsError::from_message(PAUSED_ERROR_MESSAGE.to_string())));
         },
-        (SystemStopState::None, UserStopState::None) => {},
+        (SystemStopState::None, UsageLimitStopState::None, UserStopState::None) => {},
     }
 
     Ok(Ok(()))
@@ -380,6 +412,33 @@ async fn udf_version<RT: Runtime>(
     Ok(Ok(udf_version))
 }
 
+#[derive(Clone, Eq, PartialEq, Debug)]
+pub struct VisibilityInfo {
+    visibility: Option<Visibility>,
+    component: ComponentId,
+    is_system_module: bool,
+}
+
+impl VisibilityInfo {
+    pub fn check_access(
+        &self,
+        allowed_visibility: AllowedVisibility,
+        identity: &Identity,
+        expected_udf_type: UdfType,
+        path: PublicFunctionPath,
+    ) -> anyhow::Result<Result<(), JsError>> {
+        check_visibility_access(
+            allowed_visibility,
+            &self.visibility,
+            identity,
+            self.component,
+            expected_udf_type,
+            path,
+            self.is_system_module,
+        )
+    }
+}
+
 /// The path and args to a UDF that have already undergone validation.
 ///
 /// This validation includes:
@@ -413,14 +472,20 @@ impl ValidatedPathAndArgs {
         args: SerializedArgs,
         expected_udf_type: UdfType,
     ) -> anyhow::Result<Result<ValidatedPathAndArgs, JsError>> {
-        Self::new_with_returns_validator(allowed_visibility, tx, path, args, expected_udf_type)
-            .await
-            .map(|r| r.map(|(path_and_args, _)| path_and_args))
+        Self::new_with_returns_validator(
+            allowed_visibility,
+            tx,
+            path,
+            args,
+            expected_udf_type,
+            PendingArgsPolicy::Reject,
+        )
+        .await
+        .map(|r| r.map(|(path_and_args, ..)| path_and_args))
     }
 
     /// Do argument validation and get returns validator without retrieving
     /// the analyze result twice.
-
     #[fastrace::trace]
     pub async fn new_with_returns_validator<RT: Runtime>(
         allowed_visibility: AllowedVisibility,
@@ -428,7 +493,9 @@ impl ValidatedPathAndArgs {
         public_path: PublicFunctionPath,
         args: SerializedArgs,
         expected_udf_type: UdfType,
-    ) -> anyhow::Result<Result<(ValidatedPathAndArgs, ReturnsValidator), JsError>> {
+        pending_args_policy: PendingArgsPolicy,
+    ) -> anyhow::Result<Result<(ValidatedPathAndArgs, ReturnsValidator, VisibilityInfo), JsError>>
+    {
         if public_path.is_system() {
             let path = match public_path {
                 PublicFunctionPath::RootExport(path) => ResolvedComponentFunctionPath {
@@ -453,14 +520,16 @@ impl ValidatedPathAndArgs {
             };
             // We don't analyze system modules, so we don't validate anything
             // except the identity for them.
-            if let Err(js_error) = check_visibility_access(
+            let visibility_info = VisibilityInfo {
+                visibility: None,
+                component: path.component,
+                is_system_module: true,
+            };
+            if let Err(js_error) = visibility_info.check_access(
                 allowed_visibility,
-                &None,
                 tx.identity(),
-                path.component,
                 expected_udf_type,
                 PublicFunctionPath::ResolvedComponent(path.clone()),
-                true,
             )? {
                 return Ok(Err(js_error));
             }
@@ -472,6 +541,7 @@ impl ValidatedPathAndArgs {
                     reuse_context: false,
                 },
                 ReturnsValidator::Unvalidated,
+                visibility_info,
             )));
         }
 
@@ -553,13 +623,16 @@ impl ValidatedPathAndArgs {
             path,
             args,
             expected_udf_type,
+            pending_args_policy,
             analyzed_function,
             udf_version,
             analyzed_module.reuse_context,
         )? {
-            Ok(validated_udf_path_and_args) => {
-                Ok(Ok((validated_udf_path_and_args, returns_validator)))
-            },
+            Ok((validated_udf_path_and_args, visibility_info)) => Ok(Ok((
+                validated_udf_path_and_args,
+                returns_validator,
+                visibility_info,
+            ))),
             Err(js_err) => Ok(Err(js_err)),
         }
     }
@@ -570,18 +643,21 @@ impl ValidatedPathAndArgs {
         path: ResolvedComponentFunctionPath,
         args: SerializedArgs,
         expected_udf_type: UdfType,
+        pending_args_policy: PendingArgsPolicy,
         analyzed_function: AnalyzedFunction,
         version: Version,
         reuse_context: bool,
-    ) -> anyhow::Result<Result<ValidatedPathAndArgs, JsError>> {
-        if let Err(js_error) = check_visibility_access(
+    ) -> anyhow::Result<Result<(ValidatedPathAndArgs, VisibilityInfo), JsError>> {
+        let visibility_info = VisibilityInfo {
+            visibility: analyzed_function.visibility.clone(),
+            component: path.component,
+            is_system_module: false,
+        };
+        if let Err(js_error) = visibility_info.check_access(
             allowed_visibility,
-            &analyzed_function.visibility,
             tx.identity(),
-            path.component,
             expected_udf_type,
             PublicFunctionPath::ResolvedComponent(path.clone()),
-            false,
         )? {
             return Ok(Err(js_error));
         }
@@ -600,23 +676,41 @@ impl ValidatedPathAndArgs {
             };
         }
 
-        let udf_args = match parse_udf_args(&path.udf_path, args.clone().into_args()?) {
-            Ok(udf_args) => udf_args,
-            Err(err) => return Ok(Err(err)),
-        };
-        match validate_udf_args_size(&path.udf_path, &udf_args) {
-            Ok(()) => (),
-            Err(err) => return Ok(Err(err)),
-        }
-
         let table_mapping = &tx.table_mapping().namespace(path.component.into());
 
-        // If the UDF has an args validator, check that these args match.
-        let args_validation_error = analyzed_function.args()?.check_args(
-            &udf_args,
-            table_mapping,
-            virtual_system_mapping(),
-        )?;
+        // Parse the args, check their size, and if the UDF has an args
+        // validator, check that they match.
+        let args_validation_error = match pending_args_policy {
+            PendingArgsPolicy::Reject => {
+                let udf_args = match parse_udf_args(&path.udf_path, args.clone().into_args()?) {
+                    Ok(udf_args) => udf_args,
+                    Err(err) => return Ok(Err(err)),
+                };
+                if let Err(err) = validate_udf_args_size(&path.udf_path, &udf_args) {
+                    return Ok(Err(err));
+                }
+                analyzed_function.args()?.check_args(
+                    &udf_args,
+                    table_mapping,
+                    virtual_system_mapping(),
+                )?
+            },
+            PendingArgsPolicy::Allow => {
+                let udf_args =
+                    match parse_pending_udf_args(&path.udf_path, args.clone().into_args()?) {
+                        Ok(udf_args) => udf_args,
+                        Err(err) => return Ok(Err(err)),
+                    };
+                if let Err(err) = validate_pending_udf_args_size(&path.udf_path, &udf_args) {
+                    return Ok(Err(err));
+                }
+                analyzed_function.args()?.check_pending_args(
+                    udf_args,
+                    table_mapping,
+                    virtual_system_mapping(),
+                )?
+            },
+        };
 
         if let Some(error) = args_validation_error {
             return Ok(Err(JsError::from_message(format!(
@@ -624,12 +718,15 @@ impl ValidatedPathAndArgs {
             ))));
         }
 
-        Ok(Ok(ValidatedPathAndArgs {
-            path,
-            args,
-            npm_version: Some(version),
-            reuse_context,
-        }))
+        Ok(Ok((
+            ValidatedPathAndArgs {
+                path,
+                args,
+                npm_version: Some(version),
+                reuse_context,
+            },
+            visibility_info,
+        )))
     }
 
     pub fn args_size(&self) -> usize {
@@ -837,7 +934,9 @@ pub struct ValidatedUdfOutcome {
 
     // QueryUdfOutcomes are stored in the Udf level cache, which is why we would like
     // them to have more compact representation.
-    pub result: Result<JsonPackedValue, JsError>,
+    // Mutations and subqueries called by mutations can have unresolved commit_ts, but top-level
+    // queries should be concrete.
+    pub result: Result<JsonPackedValue<PendingValue>, JsError>,
 
     pub syscall_trace: SyscallTrace,
 
@@ -916,28 +1015,31 @@ impl ValidatedUdfOutcome {
 
         // TODO(CX-6318) Don't pack json value until it's been validated.
         if returns_validator.needs_validation() {
-            let returns: ConvexValue = match &validated.result {
-                Ok(json_packed_value) => match json_packed_value.unpack() {
-                    Ok(v) => v,
-                    Err(e) => {
-                        let mut e = e.wrap_error_message(|msg| {
-                            format!(
-                                "Function {} return value invalid: {msg}",
-                                validated.path.debug_str(),
-                            )
-                        });
-                        report_error_sync(&mut e);
-                        return validated;
-                    },
-                },
+            // Mutation return values may contain unresolved commit
+            // timestamps (resolved after commit).
+            let checked = match &validated.result {
+                Ok(json_packed_value) => json_packed_value.unpack().and_then(|returns| {
+                    returns_validator.check_pending_output(
+                        &returns,
+                        table_mapping,
+                        virtual_system_mapping(),
+                    )
+                }),
                 Err(_) => return validated,
             };
-
-            if let Some(js_err) =
-                returns_validator.check_output(&returns, table_mapping, virtual_system_mapping())
-            {
-                validated.result = Err(js_err);
-            };
+            match checked {
+                Ok(Some(js_err)) => validated.result = Err(js_err),
+                Ok(None) => (),
+                Err(e) => {
+                    let mut e = e.wrap_error_message(|msg| {
+                        format!(
+                            "Function {} return value invalid: {msg}",
+                            validated.path.debug_str(),
+                        )
+                    });
+                    report_error_sync(&mut e);
+                },
+            }
         }
         validated
     }

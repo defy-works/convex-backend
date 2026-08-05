@@ -217,6 +217,9 @@ pub const ALL_DEPLOYMENT_OPS: &[DeploymentOp] = &[
     DeploymentOp::RunInternalActions,
     DeploymentOp::RunTestQuery,
     DeploymentOp::ViewAuditLog,
+    DeploymentOp::ViewUsageLimits,
+    DeploymentOp::WriteUsageLimits,
+    DeploymentOp::ViewUsage,
 ];
 
 /// Authoritative mapping from a keybroker [`DeploymentOp`] to the
@@ -247,6 +250,9 @@ pub fn deployment_op_action(op: DeploymentOp) -> Option<RoleStatementAction> {
         O::RunInternalActions => A::RunInternalActions,
         O::RunTestQuery => A::RunTestQuery,
         O::ViewAuditLog => A::ViewAuditLog,
+        O::ViewUsageLimits => A::ViewUsageLimits,
+        O::WriteUsageLimits => A::WriteUsageLimits,
+        O::ViewUsage => A::ViewDeploymentUsage,
         O::Unknown => return None,
     })
 }
@@ -273,7 +279,7 @@ impl RequireDeploymentOp for Identity {
             let action = deployment_op_action(operation)
                 .map_or_else(|| format!("{operation:?}"), |action| action.to_string());
             anyhow::bail!(ErrorMetadata::forbidden(
-                "Unauthorized",
+                "OperationNotPermitted",
                 format!("You do not have permission to perform this operation ({action})."),
             ));
         }

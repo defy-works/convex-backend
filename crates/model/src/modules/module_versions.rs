@@ -40,30 +40,17 @@ use crate::cron_jobs::types::{
     SerializedCronSpec,
 };
 
-/// System-assigned version number for modules.
-pub type ModuleVersion = i64;
-
 /// User-specified JavaScript source code for a module.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ModuleSource {
     source: Arc<str>,
-    is_ascii: bool,
 }
 
 impl ModuleSource {
     pub fn new(source: &str) -> Self {
         Self {
-            is_ascii: source.is_ascii(),
             source: source.into(),
         }
-    }
-
-    pub fn is_ascii(&self) -> bool {
-        self.is_ascii
-    }
-
-    pub fn source_arc(&self) -> &Arc<str> {
-        &self.source
     }
 }
 

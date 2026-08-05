@@ -35,6 +35,9 @@ pub enum DeploymentOp {
     RunInternalActions,
     RunTestQuery,
     ViewAuditLog,
+    ViewUsageLimits,
+    WriteUsageLimits,
+    ViewUsage,
     #[serde(other)]
     Unknown,
 }
@@ -68,6 +71,9 @@ impl From<DeploymentOp> for ProtoDeploymentOperation {
             DeploymentOp::RunInternalActions => ProtoDeploymentOperation::RunInternalActions,
             DeploymentOp::RunTestQuery => ProtoDeploymentOperation::RunTestQuery,
             DeploymentOp::ViewAuditLog => ProtoDeploymentOperation::ViewAuditLog,
+            DeploymentOp::ViewUsageLimits => ProtoDeploymentOperation::ViewUsageLimits,
+            DeploymentOp::WriteUsageLimits => ProtoDeploymentOperation::WriteUsageLimits,
+            DeploymentOp::ViewUsage => ProtoDeploymentOperation::ViewUsage,
             DeploymentOp::Unknown => ProtoDeploymentOperation::Unspecified,
         }
     }
@@ -99,6 +105,9 @@ impl From<ProtoDeploymentOperation> for DeploymentOp {
             ProtoDeploymentOperation::RunInternalActions => Self::RunInternalActions,
             ProtoDeploymentOperation::RunTestQuery => Self::RunTestQuery,
             ProtoDeploymentOperation::ViewAuditLog => Self::ViewAuditLog,
+            ProtoDeploymentOperation::ViewUsageLimits => Self::ViewUsageLimits,
+            ProtoDeploymentOperation::WriteUsageLimits => Self::WriteUsageLimits,
+            ProtoDeploymentOperation::ViewUsage => Self::ViewUsage,
         }
     }
 }
@@ -128,6 +137,8 @@ pub fn read_only_operations() -> Vec<DeploymentOp> {
         DeploymentOp::RunInternalQueries,
         DeploymentOp::RunTestQuery,
         DeploymentOp::ViewAuditLog,
+        DeploymentOp::ViewUsageLimits,
+        DeploymentOp::ViewUsage,
     ]
 }
 

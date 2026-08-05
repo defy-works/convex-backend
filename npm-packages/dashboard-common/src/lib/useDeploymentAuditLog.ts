@@ -44,6 +44,11 @@ function processDeploymentAuditLogEvent(
     case "update_environment_variable":
     case "delete_environment_variable":
     case "replace_environment_variable":
+    case "create_usage_limit":
+    case "update_usage_limit":
+    case "delete_usage_limit":
+    case "usage_limit_exceeded":
+    case "change_usage_limit_stop_state":
     case "update_canonical_url":
     case "delete_canonical_url":
     case "push_config":
@@ -79,6 +84,7 @@ function processDeploymentAuditLogEvent(
     case "periodic_backup_configured":
     case "periodic_backup_disabled":
     case "periodic_backup_triggered":
+    case "create_data_sync":
       break;
     default:
       return null;

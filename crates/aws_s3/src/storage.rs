@@ -1,7 +1,10 @@
 use std::{
     env,
     pin::Pin,
-    time::Duration,
+    time::{
+        Duration,
+        SystemTime,
+    },
 };
 
 use anyhow::Context;
@@ -9,6 +12,7 @@ use async_trait::async_trait;
 use aws_config::retry::RetryConfig;
 use aws_sdk_s3::{
     config::IdentityCache,
+    error::ProvideErrorMetadata,
     operation::{
         create_multipart_upload::builders::CreateMultipartUploadFluentBuilder,
         head_object::{
@@ -29,6 +33,7 @@ use aws_sdk_s3::{
 };
 use aws_utils::{
     are_checksums_disabled,
+    is_range_prefetch_disabled,
     is_sse_disabled,
     must_s3_config_from_env,
     s3::S3Client,
@@ -68,15 +73,15 @@ use storage::{
     BufferedUpload,
     ClientDrivenUploadPartToken,
     ClientDrivenUploadToken,
+    InvalidGetRangeError,
     ObjectAttributes,
+    ObjectListing,
     Storage,
     StorageCacheKey,
     StorageGetStream,
     StorageUseCase,
     Upload,
     UploadId,
-    VersionedS3Object,
-    VersionedS3Storage,
     MAXIMUM_PARALLEL_UPLOADS,
 };
 
@@ -180,14 +185,6 @@ impl<RT: Runtime> S3Storage<RT> {
         }
 
         upload_builder
-    }
-
-    fn versioned_location(&self, key: &ObjectKey, version_id: String) -> VersionedS3Object {
-        VersionedS3Object {
-            bucket: self.bucket.clone(),
-            key: format!("{}{}", self.key_prefix, &**key),
-            version_id,
-        }
     }
 
     async fn start_upload_with_key(&self, key: ObjectKey) -> anyhow::Result<S3Upload<RT>> {
@@ -442,37 +439,56 @@ impl<RT: Runtime> Storage for S3Storage<RT> {
         key: &FullyQualifiedObjectKey,
         bytes_range: std::ops::Range<u64>,
     ) -> BoxFuture<'static, anyhow::Result<StorageGetStream>> {
-        let get_object = self.client.get_object();
-        let key = key.clone();
-        async move {
-            let (bucket, s3_key) = key
-                .as_str()
-                .split_once('/')
-                .with_context(|| format!("Invalid fully qualified S3 key {key:?}"))?;
-            if bytes_range.start >= bytes_range.end {
-                return Ok(StorageGetStream {
+        if bytes_range.start >= bytes_range.end {
+            return async {
+                Ok(StorageGetStream {
                     content_length: 0,
-                    stream: Box::pin(stream::iter(vec![])),
-                });
+                    stream: Box::pin(stream::empty()),
+                })
             }
-            let output = get_object
-                .bucket(bucket)
-                .key(s3_key)
-                .range(format!(
-                    "bytes={}-{}",
-                    bytes_range.start,
-                    bytes_range.end - 1
-                ))
-                .send()
-                .await?;
-            Ok(StorageGetStream {
-                content_length: output
-                    .content_length()
-                    .context("Missing content length for object")?,
-                stream: output.body.into_stream().boxed(),
-            })
+            .boxed();
         }
-        .boxed()
+        self.get_small_range_internal(key, bytes_range)
+            .map(|r| Ok(r?.context("No such key")?.0))
+            .boxed()
+    }
+
+    fn get_small_range_and_total_size(
+        &self,
+        key: &FullyQualifiedObjectKey,
+        bytes_range: std::ops::Range<u64>,
+    ) -> Option<BoxFuture<'static, anyhow::Result<Option<(StorageGetStream, u64)>>>> {
+        if is_range_prefetch_disabled() {
+            return None;
+        }
+        Some(
+            self.get_small_range_internal(key, bytes_range)
+                .map(|r| {
+                    let Some((stream, content_range)) = r? else {
+                        return Ok(None);
+                    };
+                    // header looks like:
+                    //   Content-Range: bytes 0-39/12345678
+                    let total_size: u64 = try {
+                        content_range
+                            .as_deref()?
+                            .strip_prefix("bytes ")?
+                            .split_once('/')?
+                            .1
+                            .parse()
+                            .ok()?
+                    }
+                    .with_context(|| {
+                        format!(
+                            "invalid Content-Range header: {content_range:?}. If your \
+                             S3-compatible storage provider doesn't return this header, set \
+                             AWS_S3_DISABLE_RANGE_PREFETCH=true"
+                        )
+                    })?;
+                    Ok(Some((stream, total_size)))
+                })
+                .boxed(),
+        )
     }
 
     async fn get_fq_object_attributes(
@@ -528,48 +544,95 @@ impl<RT: Runtime> Storage for S3Storage<RT> {
             .context(format!("Failed to delete object {key:?}"))?;
         Ok(())
     }
-}
 
-#[async_trait]
-impl<RT: Runtime> VersionedS3Storage for S3Storage<RT> {
-    async fn put_versioned_object(
-        &self,
-        key: ObjectKey,
-        bytes: Bytes,
-    ) -> anyhow::Result<VersionedS3Object> {
-        let mut upload = self.start_upload_with_key(key.clone()).await?;
+    async fn put_object(&self, key: ObjectKey, bytes: Bytes) -> anyhow::Result<()> {
+        let mut upload = self.start_upload_with_key(key).await?;
         upload.write(bytes).await?;
-        let version_id = Box::new(upload)
-            .complete_inner()
-            .await?
-            .context("S3 upload is missing version")?;
-        Ok(self.versioned_location(&key, version_id.to_owned()))
+        let _ = Box::new(upload).complete().await?;
+        Ok(())
     }
 
-    async fn latest_versioned_object(
-        &self,
-        key: &ObjectKey,
-    ) -> anyhow::Result<Option<VersionedS3Object>> {
-        let s3_key = S3Key(self.key_prefix.clone() + key);
-        let result: Result<HeadObjectOutput, aws_sdk_s3::error::SdkError<HeadObjectError>> = self
+    async fn list_objects(&self, key_prefix: &str) -> anyhow::Result<Vec<ObjectListing>> {
+        let s3_prefix = format!("{}{}", self.key_prefix, key_prefix);
+        let mut paginator = self
             .client
-            .head_object()
+            .list_objects_v2()
             .bucket(self.bucket.clone())
-            .key(&s3_key.0)
-            .send()
-            .await;
-        match result {
-            Ok(output) => {
-                let version_id = output
-                    .version_id()
-                    .context("S3 object is missing version")?;
-                Ok(Some(self.versioned_location(key, version_id.to_owned())))
-            },
-            Err(aws_sdk_s3::error::SdkError::ServiceError(err)) => match err.err() {
-                HeadObjectError::NotFound(_) => Ok(None),
-                _ => Err(err.into_err().into()),
-            },
-            Err(err) => Err(err.into()),
+            .prefix(&s3_prefix)
+            .into_paginator()
+            .send();
+
+        let mut objects = Vec::new();
+        while let Some(page) = paginator.next().await {
+            let page =
+                page.context(format!("Failed to list objects with prefix {key_prefix:?}"))?;
+            for object in page.contents.unwrap_or_default() {
+                let Some(s3_key) = object.key.as_ref() else {
+                    continue;
+                };
+                let relative_key = s3_key
+                    .strip_prefix(&self.key_prefix)
+                    .with_context(|| format!("S3 key {s3_key:?} missing storage prefix"))?;
+                let key = ObjectKey::try_from(relative_key)?;
+                let last_modified = *object
+                    .last_modified()
+                    .context("S3 object missing last_modified")?;
+                let last_modified = SystemTime::try_from(last_modified)
+                    .context("S3 last_modified isn't valid SystemTime")?;
+                objects.push(ObjectListing { key, last_modified });
+            }
+        }
+        Ok(objects)
+    }
+}
+
+impl<RT: Runtime> S3Storage<RT> {
+    /// Also returns the raw `Content-Range` response header, which carries
+    /// the object's total size.
+    fn get_small_range_internal(
+        &self,
+        key: &FullyQualifiedObjectKey,
+        bytes_range: std::ops::Range<u64>,
+    ) -> impl Future<Output = anyhow::Result<Option<(StorageGetStream, Option<String>)>>> + use<RT>
+    {
+        let get_object = self.client.get_object();
+        let key = key.clone();
+        async move {
+            let (bucket, s3_key) = key
+                .as_str()
+                .split_once('/')
+                .with_context(|| format!("Invalid fully qualified S3 key {key:?}"))?;
+            anyhow::ensure!(bytes_range.start < bytes_range.end);
+            let output = match get_object
+                .bucket(bucket)
+                .key(s3_key)
+                .range(format!(
+                    "bytes={}-{}",
+                    bytes_range.start,
+                    bytes_range.end - 1
+                ))
+                .send()
+                .await
+            {
+                Ok(r) => r,
+                Err(e) if e.as_service_error().is_some_and(|e| e.is_no_such_key()) => {
+                    return Ok(None)
+                },
+                Err(e) if e.as_service_error().and_then(|e| e.code()) == Some("InvalidRange") => {
+                    anyhow::bail!(InvalidGetRangeError);
+                },
+                Err(e) => return Err(e.into()),
+            };
+            let content_range = output.content_range().map(String::from);
+            Ok(Some((
+                StorageGetStream {
+                    content_length: output
+                        .content_length()
+                        .context("Missing content length for object")?,
+                    stream: output.body.into_stream().boxed(),
+                },
+                content_range,
+            )))
         }
     }
 }
@@ -665,39 +728,6 @@ impl<RT: Runtime> S3Upload<RT> {
             builder,
         })
     }
-
-    #[fastrace::trace]
-    async fn complete_inner(mut self: Box<Self>) -> anyhow::Result<Option<String>> {
-        let mut completed_parts = Vec::new();
-        for part in &self.uploaded_parts {
-            let mut builder = CompletedPart::builder()
-                .part_number(Into::<u16>::into(part.part_number()) as i32)
-                .e_tag(part.etag());
-
-            if !are_checksums_disabled() {
-                builder = builder.checksum_crc32(part.checksum());
-            }
-
-            let part = builder.build();
-            completed_parts.push(part);
-        }
-        // parallel_writes will write out of order.
-        completed_parts.sort_by_key(|part| part.part_number());
-        let completed_multipart_upload = CompletedMultipartUpload::builder()
-            .set_parts(Some(completed_parts))
-            .build();
-        let output = self
-            .client
-            .complete_multipart_upload()
-            .bucket(self.bucket.clone())
-            .key(&self.s3_key.0)
-            .upload_id(self.upload_id.to_string())
-            .multipart_upload(completed_multipart_upload)
-            .send()
-            .await?;
-        self.needs_abort_on_drop = false;
-        Ok(output.version_id().map(str::to_owned))
-    }
 }
 
 struct UploadPart {
@@ -753,9 +783,35 @@ impl<RT: Runtime> Upload for S3Upload<RT> {
     }
 
     #[fastrace::trace]
-    async fn complete(self: Box<Self>) -> anyhow::Result<ObjectKey> {
+    async fn complete(mut self: Box<Self>) -> anyhow::Result<ObjectKey> {
         let key = self.key.clone();
-        self.complete_inner().await?;
+        let mut completed_parts = Vec::new();
+        for part in &self.uploaded_parts {
+            let mut builder = CompletedPart::builder()
+                .part_number(Into::<u16>::into(part.part_number()) as i32)
+                .e_tag(part.etag());
+
+            if !are_checksums_disabled() {
+                builder = builder.checksum_crc32(part.checksum());
+            }
+
+            let part = builder.build();
+            completed_parts.push(part);
+        }
+        // parallel_writes will write out of order.
+        completed_parts.sort_by_key(|part| part.part_number());
+        let completed_multipart_upload = CompletedMultipartUpload::builder()
+            .set_parts(Some(completed_parts))
+            .build();
+        self.client
+            .complete_multipart_upload()
+            .bucket(self.bucket.clone())
+            .key(&self.s3_key.0)
+            .upload_id(self.upload_id.to_string())
+            .multipart_upload(completed_multipart_upload)
+            .send()
+            .await?;
+        self.needs_abort_on_drop = false;
         Ok(key)
     }
 }

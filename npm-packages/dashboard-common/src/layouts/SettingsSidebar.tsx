@@ -1,6 +1,10 @@
 import classNames from "classnames";
 import React, { useContext } from "react";
-import { ExternalLinkIcon } from "@radix-ui/react-icons";
+import {
+  PieChartIcon,
+  ExternalLinkIcon,
+  GearIcon,
+} from "@radix-ui/react-icons";
 import { DeploymentPageTitle } from "@common/elements/DeploymentPageTitle";
 import { DeploymentInfoContext } from "@common/lib/deploymentContext";
 import { SidebarLink } from "@common/elements/Sidebar";
@@ -8,6 +12,7 @@ import { useNents } from "@common/lib/useNents";
 import { useIsCloudDeploymentInSelfHostedDashboard } from "@common/lib/useIsCloudDeploymentInSelfHostedDashboard";
 import {
   DEPLOYMENT_SETTINGS_PAGES_AND_NAMES,
+  DEPLOYMENT_SETTINGS_PAGE_ICONS,
   getAllowedDeploymentSettingsPages,
 } from "./settingsSidebarPages";
 import type { SettingsPageKind } from "./settingsSidebarPages";
@@ -77,6 +82,7 @@ export function SettingsSidebar({
                   ? `https://dashboard.convex.dev/d/${deploymentName}/settings/${page}`
                   : `${deploymentsURI}/settings/${page === "general" ? "" : page}`
               }
+              Icon={DEPLOYMENT_SETTINGS_PAGE_ICONS[page]}
               isActive={page === selectedPage}
               key={page}
               disabled={isUnavailableForSelfHosted || isUnavailableForLocal}
@@ -103,6 +109,7 @@ export function SettingsSidebar({
                 ? `https://dashboard.convex.dev/dp/${deploymentName}/settings`
                 : `${projectsURI}/settings`
             }
+            Icon={GearIcon}
             isActive={false}
             disabled={isSelfHostedDeployment}
             tip={
@@ -125,6 +132,7 @@ export function SettingsSidebar({
                 ? `https://dashboard.convex.dev/dp/${deploymentName}/usage`
                 : `${teamsURI}/settings/usage`
             }
+            Icon={PieChartIcon}
             query={
               isCloudDeploymentInSelfHostedDashboard
                 ? {}
@@ -156,6 +164,11 @@ export function SettingsSidebar({
 
 function useAllowedPages({ showAdminKeys }: { showAdminKeys: boolean }) {
   const { nents } = useNents();
+  const { usageLimitsEnabled } = useContext(DeploymentInfoContext);
 
-  return getAllowedDeploymentSettingsPages({ nents, showAdminKeys });
+  return getAllowedDeploymentSettingsPages({
+    nents,
+    showAdminKeys,
+    usageLimitsEnabled,
+  });
 }

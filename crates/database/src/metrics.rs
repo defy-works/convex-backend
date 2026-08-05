@@ -52,6 +52,14 @@ pub fn user_documents_size_subgauge() -> Subgauge {
     Subgauge::new(USER_DOCUMENTS_SIZE_BYTES.clone())
 }
 
+register_convex_int_gauge!(
+    COMMITTER_CONCURRENT_PERSISTENCE_WRITES,
+    "Number of commits between starting their persistence write and publishing"
+);
+pub fn concurrent_persistence_writes_subgauge() -> Subgauge {
+    Subgauge::new(COMMITTER_CONCURRENT_PERSISTENCE_WRITES.clone())
+}
+
 register_convex_histogram!(DOCUMENTS_KEYS_TOTAL, "Total number of document keys");
 pub fn log_num_keys(num_keys: u64) {
     log_distribution(&DOCUMENTS_KEYS_TOTAL, num_keys as f64);
@@ -208,6 +216,15 @@ register_convex_histogram!(
 );
 pub fn bootstrap_table_summaries_timer() -> Timer<VMHistogram> {
     Timer::new(&DATABASE_BOOTSTRAP_SHAPES_SECONDS)
+}
+
+register_convex_histogram!(
+    TABLE_SUMMARY_UPDATE_SECONDS,
+    "Time taken to update the table summary (shape inference + counts) for a single document \
+     update on the commit path"
+);
+pub fn table_summary_update_timer() -> Timer<VMHistogram> {
+    Timer::new(&TABLE_SUMMARY_UPDATE_SECONDS)
 }
 
 register_convex_histogram!(DATABASE_LOAD_SECONDS, "Time to load the database");

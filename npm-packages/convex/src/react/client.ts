@@ -12,6 +12,7 @@ import {
   AuthTokenFetcher,
   BaseConvexClientOptions,
   ConnectionState,
+  BaseConvexClientInterface,
 } from "../browser/sync/client.js";
 import type { UserIdentityAttributes } from "../browser/sync/protocol.js";
 import { RequestForQueries, useQueries } from "./use_queries.js";
@@ -287,7 +288,22 @@ export interface MutationOptions<Args extends Record<string, Value>> {
  *
  * @public
  */
-export interface ConvexReactClientOptions extends BaseConvexClientOptions {}
+export interface ConvexReactClientOptions extends BaseConvexClientOptions {
+  /**
+   * An already-constructed {@link BaseConvexClient} to use instead of
+   * constructing one internally. When provided, this client (and its
+   * derived {@link PaginatedQueryClient}) is used for all operations.
+   *
+   * @internal
+   */
+  baseClient?: BaseConvexClientInterface;
+
+  // FIXME: Ideally we define `ConvexReactClientOptions` as
+  // `type ConvexReactClientOptions = BaseConvexClientOptions | { baseClient: BaseConvexClient }`
+  // so that callers won’t try to set `BaseConvexClientOptions` attributes that are ineffective.
+  // But since `baseClient` is internal at the moment, I don’t think we can do that.
+  // We can fix this if we ever make `baseClient` public.
+}
 
 /**
  * A Convex client for use within React.
@@ -298,7 +314,7 @@ export interface ConvexReactClientOptions extends BaseConvexClientOptions {}
  */
 export class ConvexReactClient {
   private address: string;
-  private cachedSync?: BaseConvexClient | undefined;
+  private cachedSync?: BaseConvexClientInterface | undefined;
   private cachedPaginatedQueryClient?: PaginatedQueryClient | undefined;
   private listeners: Map<QueryToken | PaginatedQueryToken, Set<() => void>>;
   private options: ConvexReactClientOptions;
@@ -367,11 +383,13 @@ export class ConvexReactClient {
       return this.cachedSync;
     }
     // BaseConvexClient and paginated query client are always created together.
-    this.cachedSync = new BaseConvexClient(
-      this.address,
-      () => {}, // Use the PaginatedQueryClient's transition instead.
-      this.options,
-    );
+    this.cachedSync =
+      this.options.baseClient ??
+      new BaseConvexClient(
+        this.address,
+        () => {}, // Use the PaginatedQueryClient's transition instead.
+        this.options,
+      );
     if (this.adminAuth) {
       this.cachedSync.setAdminAuth(this.adminAuth, this.fakeUserIdentity);
     }

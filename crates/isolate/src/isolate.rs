@@ -1,6 +1,8 @@
 use std::{
+    cell::Cell,
     ffi,
     mem::ManuallyDrop,
+    os::raw::c_void,
     ptr,
     sync::Arc,
     time::Duration,
@@ -9,7 +11,6 @@ use std::{
 use anyhow::Context as _;
 use common::{
     knobs::{
-        FUNRUN_INITIAL_PERMIT_TIMEOUT,
         ISOLATE_MAX_ARRAY_BUFFER_TOTAL_SIZE,
         ISOLATE_MAX_USER_HEAP_SIZE,
     },
@@ -23,19 +24,19 @@ use derive_more::{
     Add,
     AddAssign,
 };
-use errors::ErrorMetadata;
 use fastrace::{
     local::LocalSpan,
     Event,
+    Span,
 };
 use humansize::{
     FormatSize,
     BINARY,
 };
+use itertools::Itertools as _;
 
 use crate::{
     array_buffer_allocator::ArrayBufferMemoryLimit,
-    concurrency_limiter::ConcurrencyLimiter,
     context_cache::ContextCache,
     environment::IsolateEnvironment,
     helpers::pump_message_loop,
@@ -43,6 +44,8 @@ use crate::{
         create_isolate_timer,
         destroy_isolate_timer,
         log_heap_statistics,
+        rejected_before_execution_error,
+        RejectedBeforeExecutionReason,
     },
     request_scope::RequestState,
     strings,
@@ -50,6 +53,7 @@ use crate::{
         IsolateHandle,
         IsolateTerminationReason,
     },
+    ConcurrencyPermit,
     Timeout,
 };
 
@@ -69,7 +73,6 @@ pub struct Isolate<RT: Runtime> {
     // The heap limit callback takes ownership of this `Box` allocation, which
     // we reclaim after removing the callback.
     heap_ctx_ptr: *mut HeapContext,
-    limiter: ConcurrencyLimiter,
     array_buffer_memory_limit: Arc<ArrayBufferMemoryLimit>,
     max_user_heap_size: usize,
 
@@ -153,12 +156,7 @@ impl IsolateHeapStats {
 }
 
 impl<RT: Runtime> Isolate<RT> {
-    pub fn new(
-        rt: RT,
-        max_user_timeout: Option<Duration>,
-        limiter: ConcurrencyLimiter,
-        max_user_heap_size: usize,
-    ) -> Self {
+    pub fn new(rt: RT, max_user_timeout: Option<Duration>, max_user_heap_size: usize) -> Self {
         let _timer = create_isolate_timer();
         let (array_buffer_memory_limit, array_buffer_allocator) =
             crate::array_buffer_allocator::limited_array_buffer_allocator(
@@ -202,6 +200,17 @@ impl<RT: Runtime> Isolate<RT> {
             heap_ctx_ptr as *mut ffi::c_void,
         );
 
+        v8_isolate.add_gc_prologue_callback(
+            gc_prologue_callback,
+            ptr::null_mut(),
+            v8::GCType::kGCTypeAll,
+        );
+        v8_isolate.add_gc_epilogue_callback(
+            gc_epilogue_callback,
+            ptr::null_mut(),
+            v8::GCType::kGCTypeAll,
+        );
+
         assert!(v8_isolate.set_slot(handle.clone()));
         assert!(v8_isolate.set_slot(array_buffer_memory_limit.clone()));
 
@@ -212,7 +221,6 @@ impl<RT: Runtime> Isolate<RT> {
             handle,
             heap_ctx_ptr,
             max_user_timeout,
-            limiter,
             array_buffer_memory_limit,
             max_user_heap_size,
         }
@@ -276,17 +284,15 @@ impl<RT: Runtime> Isolate<RT> {
         // The heap should have enough memory available.
         let stats = self.v8_isolate.get_heap_statistics();
         log_heap_statistics(&stats);
-        if stats.total_available_size() < *ISOLATE_MAX_USER_HEAP_SIZE {
-            if !context_cache.report_memory_pressure(true) {
-                self.handle
-                    .terminate(IsolateTerminationReason::OutOfMemory.into());
-                return Err(IsolateNotClean::TooMuchMemoryCarryOver(
-                    stats.total_available_size().format_size(BINARY),
-                    stats.heap_size_limit().format_size(BINARY),
-                ));
-            }
-        } else {
-            context_cache.report_memory_pressure(false);
+        if stats.total_available_size() < *ISOLATE_MAX_USER_HEAP_SIZE
+            && !context_cache.has_saved_context()
+        {
+            self.handle
+                .terminate(IsolateTerminationReason::OutOfMemory.into());
+            return Err(IsolateNotClean::TooMuchMemoryCarryOver(
+                stats.total_available_size().format_size(BINARY),
+                stats.heap_size_limit().format_size(BINARY),
+            ));
         }
         if stats.number_of_detached_contexts() > 0 {
             return Err(IsolateNotClean::DetachedContext(
@@ -300,32 +306,16 @@ impl<RT: Runtime> Isolate<RT> {
     pub async fn start_request<E: IsolateEnvironment<RT>>(
         &mut self,
         context_cache: &mut ContextCache,
-        client_id: Arc<String>,
+        permit: ConcurrencyPermit,
         environment: E,
     ) -> anyhow::Result<(IsolateHandle, RequestState<RT, E>, Timeout<RT>)> {
         // Double check that the isolate is clean.
         // It's unexpected to encounter this error, since we are supposed to
         // have already checked after the last request finished, but in practice
         // it does happen - so make this error retryable.
-        self.check_isolate_clean(context_cache).context(
-            ErrorMetadata::rejected_before_execution(
-                "IsolateNotClean",
-                "Selected isolate was not clean",
-            ),
-        )?;
-        // Acquire a concurrency permit without counting it against the timeout.
-        let permit = tokio::select! {
-            biased;
-            permit = self.limiter.acquire(client_id) => permit,
-            // Do not apply a timeout for subfunctions that can't be retried
-            () = self.rt.wait(*FUNRUN_INITIAL_PERMIT_TIMEOUT),
-                    if !environment.is_nested_function() => {
-                anyhow::bail!(ErrorMetadata::rejected_before_execution(
-                    "InitialPermitTimeoutError",
-                    "Couldn't acquire a permit on this funrun",
-                ));
-            }
-        };
+        self.check_isolate_clean(context_cache).with_context(|| {
+            rejected_before_execution_error(RejectedBeforeExecutionReason::IsolateNotClean)
+        })?;
         let context_id = self.handle.push_context(false /* nested */);
         let mut user_timeout = environment.user_timeout();
         if let Some(max_user_timeout) = self.max_user_timeout {
@@ -404,4 +394,74 @@ extern "C" fn near_heap_limit_callback(
     // process if it fails to allocate. We're about to terminate the isolate
     // anyway so any allocation will be very short-lived.
     current_heap_limit * 4
+}
+
+thread_local! {
+    static GC_SPAN: Cell<Option<Span>> = const { Cell::new(None) };
+}
+extern "C" fn gc_prologue_callback(
+    _isolate: v8::UnsafeRawIsolatePtr,
+    gc_type: v8::GCType,
+    gc_flags: v8::GCCallbackFlags,
+    _data: *mut c_void,
+) {
+    GC_SPAN.set(Some(
+        Span::enter_with_local_parent("v8_collect_garbage")
+            .with_property(|| {
+                let gc_type = match gc_type {
+                    v8::GCType::kGCTypeScavenge => "kGCTypeScavenge",
+                    v8::GCType::kGCTypeMinorMarkSweep => "kGCTypeMinorMarkSweep",
+                    v8::GCType::kGCTypeMarkSweepCompact => "kGCTypeMarkSweepCompact",
+                    v8::GCType::kGCTypeIncrementalMarking => "kGCTypeIncrementalMarking",
+                    v8::GCType::kGCTypeProcessWeakCallbacks => "kGCTypeProcessWeakCallbacks",
+                    _ => "unknown",
+                };
+                ("gc_type", gc_type)
+            })
+            .with_property(|| {
+                let gc_flags = [
+                    (
+                        v8::GCCallbackFlags::kGCCallbackFlagConstructRetainedObjectInfos,
+                        "kGCCallbackFlagConstructRetainedObjectInfos",
+                    ),
+                    (
+                        v8::GCCallbackFlags::kGCCallbackFlagForced,
+                        "kGCCallbackFlagForced",
+                    ),
+                    (
+                        v8::GCCallbackFlags::kGCCallbackFlagSynchronousPhantomCallbackProcessing,
+                        "kGCCallbackFlagSynchronousPhantomCallbackProcessing",
+                    ),
+                    (
+                        v8::GCCallbackFlags::kGCCallbackFlagCollectAllAvailableGarbage,
+                        "kGCCallbackFlagCollectAllAvailableGarbage",
+                    ),
+                    (
+                        v8::GCCallbackFlags::kGCCallbackFlagCollectAllExternalMemory,
+                        "kGCCallbackFlagCollectAllExternalMemory",
+                    ),
+                    (
+                        v8::GCCallbackFlags::kGCCallbackScheduleIdleGarbageCollection,
+                        "kGCCallbackScheduleIdleGarbageCollection",
+                    ),
+                    (
+                        v8::GCCallbackFlags::kGCCallbackFlagLastResort,
+                        "kGCCallbackFlagLastResort",
+                    ),
+                ]
+                .into_iter()
+                .filter(|(flag, _)| (gc_flags & *flag).0 != 0)
+                .map(|(_, name)| name)
+                .join("|");
+                ("gc_flags", gc_flags)
+            }),
+    ))
+}
+extern "C" fn gc_epilogue_callback(
+    _isolate: v8::UnsafeRawIsolatePtr,
+    _gc_type: v8::GCType,
+    _gc_flags: v8::GCCallbackFlags,
+    _data: *mut c_void,
+) {
+    GC_SPAN.take(); // drop the span to finish recording it
 }

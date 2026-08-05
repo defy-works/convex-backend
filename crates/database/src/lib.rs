@@ -1,4 +1,5 @@
 #![feature(coroutines)]
+#![feature(binary_heap_pop_if)]
 #![feature(iter_advance_by)]
 #![feature(type_alias_impl_trait)]
 #![feature(iterator_try_collect)]
@@ -77,6 +78,10 @@ pub use reads::{
 pub use schema_registry::SchemaRegistry;
 pub use search_index_bootstrap::FINISHED_BOOTSTRAP_UPDATES;
 pub use table_iteration::{
+    data_sync::{
+        DataSyncIterator,
+        DataSyncStatus,
+    },
     MultiTableIterator,
     TableIterator,
     TableScanCursor,
@@ -194,13 +199,17 @@ pub use self::{
     },
     snapshot_manager::{
         Snapshot,
-        TableSummaries,
+        TableCounts,
     },
     subscription::{
         InvalidationEvent,
         Subscription,
     },
     table_summary::{
+        TableCount,
+        TableShape,
+        TableShapes,
+        TableSummaries,
         TableSummary,
         TableSummaryWriter,
     },

@@ -35,10 +35,11 @@ use common::{
         ExtractClientVersion,
         HttpResponseError,
     },
-    knobs::ACTION_USER_TIMEOUT,
+    knobs::V8_ACTION_USER_TIMEOUT,
     runtime::UnixTimestamp,
     types::{
         FunctionCaller,
+        QueryInvocation,
         SessionId,
         SessionRequestSeqNumber,
         UdfIdentifier,
@@ -49,7 +50,6 @@ use common::{
 use errors::ErrorMetadata;
 use fastrace::future::FutureExt;
 use http::HeaderMap;
-use isolate::UdfArgsJson;
 use keybroker::Identity;
 use model::session_requests::types::SessionRequestIdentifier;
 use serde::{
@@ -64,7 +64,10 @@ use sync_types::{
     AuthenticationToken,
     CanonicalizedUdfPath,
 };
-use udf::ActionCallbacks;
+use udf::{
+    helpers::UdfArgsJson,
+    ActionCallbacks,
+};
 use usage_tracking::FunctionUsageTracker;
 use value::{
     export::ValueFormat,
@@ -104,6 +107,19 @@ pub struct NodeCallbackUdfPostRequest {
 pub struct MutationIdentifierJson {
     pub session_id: String,
     pub request_id: SessionRequestSeqNumber,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LlmGatewayJwtResponse {
+    pub token: String,
+}
+
+pub async fn issue_llm_gateway_jwt(
+    MtState(st): MtState<LocalAppState>,
+) -> Result<impl IntoResponse, HttpResponseError> {
+    let token = st.application.issue_llm_gateway_jwt().await?;
+    Ok(Json(LlmGatewayJwtResponse { token }))
 }
 
 impl TryFrom<MutationIdentifierJson> for SessionRequestIdentifier {
@@ -154,6 +170,7 @@ pub async fn internal_query_post(
                 parent_scheduled_job: context.parent_scheduled_job,
                 parent_execution_id: Some(context.execution_id),
             },
+            QueryInvocation::Fresh,
         )
         .await?;
     if req.format.is_some() {
@@ -601,7 +618,7 @@ async fn check_actions_token(
 
     // Tokens are valid for 2x the action timeout, which should be more than enough
     // assuming the timeout measures in tens of seconds.
-    let validity = 2 * *ACTION_USER_TIMEOUT;
+    let validity = 2 * *V8_ACTION_USER_TIMEOUT;
     st.application
         .key_broker()
         .check_action_token(&token.to_owned(), validity)

@@ -46,6 +46,53 @@ const replaceEnvironmentVariable = auditLogEventValidator(
   },
 );
 
+// The serialized shape of a deployment usage limit's configuration, written by
+// the backend's `SerializedUsageLimitConfig` (serde/strum `camelCase`). `metric`,
+// `window`, and `limitType` are the string forms of the backend enums; `limit`
+// is a count of the metric's raw unit, stored as an int64.
+export const usageLimitConfig = v.object({
+  name: v.optional(v.union(v.string(), v.null())),
+  metric: v.string(),
+  window: v.string(),
+  limitType: v.string(),
+  limit: v.int64(),
+  enabled: v.boolean(),
+});
+
+const createUsageLimit = auditLogEventValidator("create_usage_limit", {
+  id: v.string(),
+  config: usageLimitConfig,
+});
+
+const updateUsageLimit = auditLogEventValidator("update_usage_limit", {
+  id: v.string(),
+  previous: usageLimitConfig,
+  current: usageLimitConfig,
+});
+
+const deleteUsageLimit = auditLogEventValidator("delete_usage_limit", {
+  id: v.string(),
+  config: usageLimitConfig,
+});
+
+const usageLimitExceeded = auditLogEventValidator("usage_limit_exceeded", {
+  id: v.string(),
+  config: usageLimitConfig,
+});
+
+export const usageLimitStopState = v.union(
+  v.literal("none"),
+  v.literal("disabled"),
+);
+
+const changeUsageLimitStopState = auditLogEventValidator(
+  "change_usage_limit_stop_state",
+  {
+    old_state: usageLimitStopState,
+    new_state: usageLimitStopState,
+  },
+);
+
 const updateCanonicalUrl = auditLogEventValidator("update_canonical_url", {
   request_destination: v.string(),
   url: v.string(),
@@ -392,12 +439,21 @@ const periodicBackupTriggered = v.object({
   }),
 });
 
+const createDataSync = auditLogEventValidator("create_data_sync", {
+  sync_id: v.string(),
+});
+
 const deploymentAuditLogTable = defineTable(
   v.union(
     createEnvironmentVariable,
     deleteEnvironmentVariable,
     updateEnvironmentVariable,
     replaceEnvironmentVariable,
+    createUsageLimit,
+    updateUsageLimit,
+    deleteUsageLimit,
+    usageLimitExceeded,
+    changeUsageLimitStopState,
     updateCanonicalUrl,
     deleteCanonicalUrl,
     buildIndexes,
@@ -433,6 +489,7 @@ const deploymentAuditLogTable = defineTable(
     periodicBackupConfigured,
     periodicBackupDisabled,
     periodicBackupTriggered,
+    createDataSync,
   ),
 );
 

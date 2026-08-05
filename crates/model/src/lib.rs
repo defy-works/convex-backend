@@ -1,4 +1,3 @@
-crates/model/src/lib.rs
 //! Authoritative metadata in our system is stored in tables with prefix
 //! [`METADATA_PREFIX`]. Each file in this module stores a category of system
 //! metadata.
@@ -40,7 +39,6 @@ use admin_keys::{
     AdminKeysTable,
     ADMIN_KEYS_BY_HASH_INDEX,
 };
-use periodic_backup::PeriodicBackupConfigTable;
 use audit_log_config::{
     AuditLogConfigTable,
     AUDIT_LOG_CONFIG_TABLE,
@@ -162,6 +160,7 @@ use modules::{
     MODULE_INDEX_BY_DELETED,
     MODULE_INDEX_BY_PATH,
 };
+use periodic_backup::PeriodicBackupConfigTable;
 use scheduled_jobs::{
     ScheduledJobsTable,
     SCHEDULED_JOBS_INDEX,
@@ -203,8 +202,15 @@ use crate::{
         CronJobsTable,
         CronNextRunTable,
     },
+    data_sync_progress::{
+        DataSyncProgressTable,
+        DATA_SYNC_PROGRESS_INDEX_BY_LAST_UPDATED,
+        DATA_SYNC_PROGRESS_INDEX_BY_SYNC_ID,
+        DATA_SYNC_PROGRESS_TABLE,
+    },
     deployment_audit_log::{
         DeploymentAuditLogsTable,
+        AUDIT_LOG_INDEX_BY_ACTION,
         DEPLOYMENT_AUDIT_LOG_TABLE,
     },
     environment_variables::EnvironmentVariablesTable,
@@ -233,6 +239,7 @@ pub mod canonical_urls;
 pub mod components;
 pub mod config;
 pub mod cron_jobs;
+pub mod data_sync_progress;
 pub mod database_globals;
 pub mod deployment_audit_log;
 pub mod environment_variables;
@@ -290,12 +297,28 @@ enum DefaultTableNumber {
     SchemaValidationProgress = 37,
     ScheduledJobArgs = 38,
     AuditLogConfig = 39,
-    AdminKeys = 40,
-    PeriodicBackupConfig = 41,
-    UsageLimits = 42,
+    UsageLimits = 40,
+    DataSyncProgress = 41,
     // Keep this number and your user name up to date. The number makes it easy to know
     // what to use next. The username on the same line detects merge conflicts
-    // Next Number - 43 - mingu
+    // Next Number - 42 - nipunn
+
+    // ---- Fork-only system tables ----
+    // Deliberately in a reserved high range, far above upstream's sequence
+    // above, so upstream can keep appending table numbers indefinitely without
+    // colliding with ours (a collision is a hard build error: E0081). Keep
+    // upstream's numbering untouched — renumbering an upstream table makes this
+    // fork's on-disk layout diverge from every other Convex deployment.
+    //
+    // Changing a value here only affects tables created from now on;
+    // `Transaction::table_number_for_system_table` consults the default solely
+    // at creation time, so existing deployments keep the numbers they have.
+    //
+    // Must stay within [1, 9487]: TableNumber = 512 + this value, and system
+    // tables must land in [513, 10000).
+    // Next Fork Number - 1002 - mingu
+    AdminKeys = 1000,
+    PeriodicBackupConfig = 1001,
 }
 
 impl From<DefaultTableNumber> for TableNumber {
@@ -344,6 +367,7 @@ impl From<DefaultTableNumber> for &'static dyn ErasedSystemTable {
             DefaultTableNumber::AdminKeys => &AdminKeysTable,
             DefaultTableNumber::PeriodicBackupConfig => &PeriodicBackupConfigTable,
             DefaultTableNumber::UsageLimits => &UsageLimitsTable,
+            DefaultTableNumber::DataSyncProgress => &DataSyncProgressTable,
         }
     }
 }
@@ -585,6 +609,7 @@ pub fn app_system_tables() -> Vec<&'static dyn ErasedSystemTable> {
         &AdminKeysTable,
         &PeriodicBackupConfigTable,
         &UsageLimitsTable,
+        &DataSyncProgressTable,
     ];
     system_tables.extend(component_system_tables());
     system_tables.extend(bootstrap_system_tables());
@@ -673,6 +698,7 @@ pub static FIRST_SEEN_TABLE: LazyLock<BTreeMap<TableName, DatabaseVersion>> = La
         SCHEDULED_JOBS_ARGS_TABLE.clone() => 123,
         AUDIT_LOG_CONFIG_TABLE.clone() => 124,
         USAGE_LIMITS_TABLE.clone() => 126,
+        DATA_SYNC_PROGRESS_TABLE.clone() => 127,
     }
 });
 
@@ -700,5 +726,8 @@ pub static FIRST_SEEN_INDEX: LazyLock<BTreeMap<IndexName, DatabaseVersion>> = La
         INDEX_BACKFILLS_BY_INDEX_ID.name() => 120,
         SCHEMA_VALIDATION_PROGRESS_BY_SCHEMA_ID.name() => 122,
         USAGE_LIMITS_INDEX_BY_SELECTOR.name() => 126,
+        DATA_SYNC_PROGRESS_INDEX_BY_SYNC_ID.name() => 127,
+        DATA_SYNC_PROGRESS_INDEX_BY_LAST_UPDATED.name() => 127,
+        AUDIT_LOG_INDEX_BY_ACTION.name() => 128,
     }
 });

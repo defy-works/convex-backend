@@ -57,11 +57,26 @@ static SELF_HOSTED_DOCKER_COMPOSE: LazyLock<PathBuf> =
 const PROD_PROVISION_HOST: &str = "https://api.convex.dev";
 /// Port usher runs on locally
 const USHER_PORT: u16 = 8002;
+/// Port funrun runs on locally, overriding its default of 40994. Must stay
+/// below the Linux ephemeral range (32768–60999): a port inside it can already
+/// be held by an unrelated outbound connection, so the bind fails with
+/// EADDRINUSE.
+const FUNRUN_PORT: u16 = 8005;
 /// Address of local test backend through usher
 static USHER_INSTANCE_URL: LazyLock<String> =
     LazyLock::new(|| format!("http://carnitas.local.convex.cloud:{USHER_PORT}"));
 
 const LOCAL_LOG_SINK_FILENAME: &str = "log_sink.jsonl";
+
+/// Ports the open-source `convex-local-backend` binds. Overridable via env so a
+/// second backend stack (e.g. the conductor stack, which uses 8000) can run
+/// concurrently on the same host without a port collision.
+fn open_source_backend_port() -> u16 {
+    env_config("BACKEND_HARNESS_OSS_PORT", 8000)
+}
+fn open_source_site_proxy_port() -> u16 {
+    env_config("BACKEND_HARNESS_OSS_SITE_PROXY_PORT", 8001)
+}
 
 #[cfg(unix)]
 const NPX: &str = "npx";
@@ -176,7 +191,7 @@ impl ProvisionHandle {
                 let url = if _usher_handle.is_some() {
                     USHER_INSTANCE_URL.clone()
                 } else {
-                    "http://127.0.0.1:8000".to_string()
+                    format!("http://127.0.0.1:{}", open_source_backend_port())
                 };
                 Some(url)
             },
@@ -363,6 +378,8 @@ fn start_local_funrun(logs: &LogInterleaver, release: bool) -> anyhow::Result<Ch
     logs.spawn_with_prefixed_logs(
         "funrun".into(),
         Command::new(funrun_binary)
+            .arg("--port")
+            .arg(FUNRUN_PORT.to_string())
             .arg("--metrics-addr")
             .arg("0.0.0.0:9101")
             .kill_on_drop(true),
@@ -461,7 +478,7 @@ async fn provision(
             if udf_use_funrun {
                 run_conductor_cmd
                     .arg("--register-service")
-                    .arg("funrun-default=http://0.0.0.0:40994");
+                    .arg(format!("funrun-default=http://0.0.0.0:{FUNRUN_PORT}"));
             }
             let conductor_handle = logs.spawn_with_prefixed_logs(
                 "conductor".into(),
@@ -522,9 +539,9 @@ async fn provision(
                 Command::new(backend_binary)
                     .arg(db_path)
                     .arg("--port")
-                    .arg("8000")
+                    .arg(open_source_backend_port().to_string())
                     .arg("--site-proxy-port")
-                    .arg("8001")
+                    .arg(open_source_site_proxy_port().to_string())
                     .arg("--disable-beacon")
                     .arg("--instance-name")
                     .arg(DEV_INSTANCE_NAME)
@@ -533,7 +550,7 @@ async fn provision(
                     .env("CONVEX_RELEASE_VERSION_DEV", "0.0.0-backendharness")
                     .kill_on_drop(true),
             )?;
-            let backend_url = "http://127.0.0.1:8000".to_string();
+            let backend_url = format!("http://127.0.0.1:{}", open_source_backend_port());
             // Give it ~15 seconds to start up (5 retries with 500ms exponential backoff)
             wait_for_http_health(
                 &backend_url.parse()?,

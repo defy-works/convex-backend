@@ -84,9 +84,9 @@ export type DeploymentMetadata = {
    */
   region: string | null;
   /**
-   * The deployment class, e.g. `"s16"`, `"s256"`, or `"d1024"`.
+   * The deployment class, e.g. `"s16"`, `"s256"`, `"d1024"`, or `"d2048"`.
    */
-  class: "s16" | "s256" | "d1024";
+  class: "s16" | "s256" | "d1024" | "d2048";
 };
 
 /**
@@ -114,6 +114,14 @@ export type RequestMetadata = {
    * `null` when the function was not scheduled.
    */
   scheduledFunctionId: string | null;
+  /**
+   * The raw auth token (a JWT) the request was authenticated with, or `null`
+   * when the request was unauthenticated or authenticated with an admin key.
+   *
+   * This is the same token that `ctx.auth.getUserIdentity()` derives its
+   * attributes from.
+   */
+  authToken: string | null;
 };
 
 /**

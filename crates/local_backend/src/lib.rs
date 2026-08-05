@@ -14,6 +14,7 @@ use ::authentication::{
     access_token_auth::NullAccessTokenAuth,
     application_auth::ApplicationAuth,
 };
+use ::usage_limits::NoopUsageLimitNotifier;
 use application::{
     self,
     api::ApplicationApi,
@@ -28,9 +29,9 @@ use common::{
         RouteMapper,
     },
     knobs::{
-        ACTION_USER_TIMEOUT,
         DOCUMENT_RETENTION_RATE_LIMIT,
         INDEX_CACHE_SIZE,
+        NODE_ACTION_USER_TIMEOUT,
         UDF_CACHE_MAX_SIZE,
     },
     persistence::Persistence,
@@ -69,7 +70,7 @@ use model::{
 };
 use node_executor::{
     local::LocalNodeExecutor,
-    Actions,
+    NodeActions,
 };
 use runtime::prod::ProdRuntime;
 use search::{
@@ -112,6 +113,8 @@ pub mod storage;
 pub mod streaming_export;
 pub mod streaming_import;
 pub mod subs;
+pub mod usage_limits;
+
 pub const MAX_CONCURRENT_REQUESTS: usize = 128;
 const HTTP_SERVER_MAX_CONCURRENT_REQUESTS_ENV: &str = "HTTP_SERVER_MAX_CONCURRENT_REQUESTS";
 
@@ -249,12 +252,12 @@ pub async fn make_app(
         region: None,
         class: DeploymentClass::S16,
     };
-    let node_process_timeout = *ACTION_USER_TIMEOUT + Duration::from_secs(5);
+    let node_process_timeout = *NODE_ACTION_USER_TIMEOUT + Duration::from_secs(5);
     let node_executor = Arc::new(LocalNodeExecutor::new(node_process_timeout).await?);
-    let actions = Actions::new(
+    let node_actions = NodeActions::new(
         node_executor,
         config.convex_origin_url()?,
-        *ACTION_USER_TIMEOUT,
+        *NODE_ACTION_USER_TIMEOUT,
         runtime.clone(),
         deployment.clone(),
     );
@@ -296,6 +299,7 @@ pub async fn make_app(
         file_storage.clone(),
         application_storage,
         usage_event_logger,
+        Arc::new(NoopUsageLimitNotifier),
         key_broker.clone(),
         DeploymentMetadata {
             name: config.name(),
@@ -308,7 +312,7 @@ pub async fn make_app(
         searcher.clone(),
         segment_metadata_fetcher,
         persistence,
-        actions,
+        node_actions,
         Arc::new(RedactLogsToClient::new(config.redact_logs_to_client)),
         Arc::new(ApplicationAuth::new(
             key_broker.clone(),
@@ -322,6 +326,7 @@ pub async fn make_app(
         Arc::new(InProcessExportProvider),
         deleted_tablet_receiver,
         oidc_http_client,
+        None,
     )
     .await?;
 

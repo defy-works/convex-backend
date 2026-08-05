@@ -72,12 +72,12 @@ export const screenshots = [
     "light": {
       "filename": "components_health_cache_hit_rate_light.webp",
       "width": 832,
-      "height": 564
+      "height": 566
     },
     "dark": {
       "filename": "components_health_cache_hit_rate_dark.webp",
       "width": 832,
-      "height": 564
+      "height": 566
     }
   },
   {
@@ -149,13 +149,13 @@ export const screenshots = [
     "storyTitle": "docs/components/ProjectCard",
     "light": {
       "filename": "components_project_card_light.webp",
-      "width": 1100,
-      "height": 535
+      "width": 1086,
+      "height": 454
     },
     "dark": {
       "filename": "components_project_card_dark.webp",
-      "width": 1100,
-      "height": 535
+      "width": 1086,
+      "height": 447
     }
   },
   {
@@ -234,6 +234,19 @@ export const screenshots = [
       "filename": "pages_projects_dark.webp",
       "width": 2048,
       "height": 1400
+    }
+  },
+  {
+    "storyTitle": "docs/pages/Projects#Team Switcher",
+    "light": {
+      "filename": "pages_projects_team_switcher_light.webp",
+      "width": 1344,
+      "height": 1027
+    },
+    "dark": {
+      "filename": "pages_projects_team_switcher_dark.webp",
+      "width": 1344,
+      "height": 1027
     }
   },
   {
@@ -358,24 +371,24 @@ export const screenshots = [
     "light": {
       "filename": "pages_project_deployment_data_edit_inline_light.webp",
       "width": 896,
-      "height": 268
+      "height": 284
     },
     "dark": {
       "filename": "pages_project_deployment_data_edit_inline_dark.webp",
       "width": 896,
-      "height": 268
+      "height": 284
     }
   },
   {
     "storyTitle": "docs/pages/project/deployment/Data#Edit Document",
     "light": {
       "filename": "pages_project_deployment_data_edit_document_light.webp",
-      "width": 583,
+      "width": 579,
       "height": 594
     },
     "dark": {
       "filename": "pages_project_deployment_data_edit_document_dark.webp",
-      "width": 583,
+      "width": 579,
       "height": 594
     }
   },
@@ -383,12 +396,12 @@ export const screenshots = [
     "storyTitle": "docs/pages/project/deployment/Data#Context Menu",
     "light": {
       "filename": "pages_project_deployment_data_context_menu_light.webp",
-      "width": 1046,
+      "width": 1034,
       "height": 798
     },
     "dark": {
       "filename": "pages_project_deployment_data_context_menu_dark.webp",
-      "width": 1046,
+      "width": 1034,
       "height": 798
     }
   },
@@ -432,19 +445,6 @@ export const screenshots = [
     }
   },
   {
-    "storyTitle": "docs/pages/project/deployment/Data#Generate Schema",
-    "light": {
-      "filename": "pages_project_deployment_data_generate_schema_light.webp",
-      "width": 2048,
-      "height": 1400
-    },
-    "dark": {
-      "filename": "pages_project_deployment_data_generate_schema_dark.webp",
-      "width": 2048,
-      "height": 1400
-    }
-  },
-  {
     "storyTitle": "docs/pages/project/deployment/Data#Component Dropdown",
     "light": {
       "filename": "pages_project_deployment_data_component_dropdown_light.webp",
@@ -461,13 +461,52 @@ export const screenshots = [
     "storyTitle": "docs/pages/project/deployment/Data#Multiple Dev Deployments Selector",
     "light": {
       "filename": "pages_project_deployment_data_multiple_dev_deployments_selector_light.webp",
-      "width": 920,
-      "height": 922
+      "width": 1344,
+      "height": 924
     },
     "dark": {
       "filename": "pages_project_deployment_data_multiple_dev_deployments_selector_dark.webp",
-      "width": 920,
-      "height": 922
+      "width": 1344,
+      "height": 924
+    }
+  },
+  {
+    "storyTitle": "docs/pages/project/deployment/Data#Deployment Switcher",
+    "light": {
+      "filename": "pages_project_deployment_data_deployment_switcher_light.webp",
+      "width": 1344,
+      "height": 1024
+    },
+    "dark": {
+      "filename": "pages_project_deployment_data_deployment_switcher_dark.webp",
+      "width": 1344,
+      "height": 1024
+    }
+  },
+  {
+    "storyTitle": "docs/pages/project/deployment/Data#Preview Deployment Switcher",
+    "light": {
+      "filename": "pages_project_deployment_data_preview_deployment_switcher_light.webp",
+      "width": 1344,
+      "height": 1024
+    },
+    "dark": {
+      "filename": "pages_project_deployment_data_preview_deployment_switcher_dark.webp",
+      "width": 1344,
+      "height": 1024
+    }
+  },
+  {
+    "storyTitle": "docs/pages/project/deployment/Data#Project Switcher",
+    "light": {
+      "filename": "pages_project_deployment_data_project_switcher_light.webp",
+      "width": 1344,
+      "height": 1027
+    },
+    "dark": {
+      "filename": "pages_project_deployment_data_project_switcher_dark.webp",
+      "width": 1344,
+      "height": 1027
     }
   },
   {
@@ -518,6 +557,32 @@ export const screenshots = [
     },
     "dark": {
       "filename": "pages_project_deployment_history_dark.webp",
+      "width": 2048,
+      "height": 1400
+    }
+  },
+  {
+    "storyTitle": "docs/pages/project/deployment/Schema",
+    "light": {
+      "filename": "pages_project_deployment_schema_light.webp",
+      "width": 2048,
+      "height": 1400
+    },
+    "dark": {
+      "filename": "pages_project_deployment_schema_dark.webp",
+      "width": 2048,
+      "height": 1400
+    }
+  },
+  {
+    "storyTitle": "docs/pages/project/deployment/Schema#Schema File",
+    "light": {
+      "filename": "pages_project_deployment_schema_schema_file_light.webp",
+      "width": 2048,
+      "height": 1400
+    },
+    "dark": {
+      "filename": "pages_project_deployment_schema_schema_file_dark.webp",
       "width": 2048,
       "height": 1400
     }
@@ -624,6 +689,45 @@ export const screenshots = [
       "filename": "pages_project_deployment_settings_integrations_configure_datadog_dark.webp",
       "width": 2048,
       "height": 1400
+    }
+  },
+  {
+    "storyTitle": "docs/pages/project/deployment/settings/Integrations#Custom Audit Topic",
+    "light": {
+      "filename": "pages_project_deployment_settings_integrations_custom_audit_topic_light.webp",
+      "width": 2048,
+      "height": 1400
+    },
+    "dark": {
+      "filename": "pages_project_deployment_settings_integrations_custom_audit_topic_dark.webp",
+      "width": 2048,
+      "height": 1400
+    }
+  },
+  {
+    "storyTitle": "docs/pages/project/deployment/settings/UsageLimits",
+    "light": {
+      "filename": "pages_project_deployment_settings_usage_limits_light.webp",
+      "width": 3024,
+      "height": 2440
+    },
+    "dark": {
+      "filename": "pages_project_deployment_settings_usage_limits_dark.webp",
+      "width": 3024,
+      "height": 2440
+    }
+  },
+  {
+    "storyTitle": "docs/pages/project/deployment/settings/UsageLimits#Empty",
+    "light": {
+      "filename": "pages_project_deployment_settings_usage_limits_empty_light.webp",
+      "width": 3024,
+      "height": 2440
+    },
+    "dark": {
+      "filename": "pages_project_deployment_settings_usage_limits_empty_dark.webp",
+      "width": 3024,
+      "height": 2440
     }
   }
 ] as const;

@@ -20,15 +20,12 @@ use humansize::{
     FormatSize,
     BINARY,
 };
-use serde::Deserialize;
-use serde_json::value::RawValue;
-use sync_types::types::SerializedArgs;
-use value::Size;
-
-use crate::{
-    metrics::log_legacy_positional_args,
-    strings,
+use value::{
+    PendingValue,
+    Size,
 };
+
+use crate::strings;
 
 // The below methods were taken from `deno_core`
 // https://github.com/denoland/deno_core/blob/main/LICENSE.md - MIT License
@@ -113,6 +110,25 @@ pub fn deserialize_udf_result(
     path: &ResolvedComponentFunctionPath,
     result_str: &str,
 ) -> anyhow::Result<Result<ConvexValue, JsError>> {
+    deserialize_udf_result_inner(path, result_str, ConvexValue::try_from)
+}
+
+/// Like [`deserialize_udf_result`], but additionally accepting the
+/// `{"$commitTs": null}` token. Call this only for functions running inside a
+/// mutation's transaction, where the return value may contain unresolved
+/// commit timestamps.
+pub fn deserialize_udf_result_pending(
+    path: &ResolvedComponentFunctionPath,
+    result_str: &str,
+) -> anyhow::Result<Result<PendingValue, JsError>> {
+    deserialize_udf_result_inner(path, result_str, PendingValue::from_uncommitted_json)
+}
+
+fn deserialize_udf_result_inner<V: Size>(
+    path: &ResolvedComponentFunctionPath,
+    result_str: &str,
+    parse: impl FnOnce(serde_json::Value) -> anyhow::Result<V>,
+) -> anyhow::Result<Result<V, JsError>> {
     // Don't print out result_str in error messages - as it may contain pii
     let result_v: serde_json::Value = serde_json::from_str(result_str).map_err(|e| {
         anyhow::anyhow!(ErrorMetadata::bad_request(
@@ -123,7 +139,7 @@ pub fn deserialize_udf_result(
             ),
         ))
     })?;
-    let result = match ConvexValue::try_from(result_v) {
+    let result = match parse(result_v) {
         Ok(value) => {
             let size = value.size();
             let limit = if path.udf_path.is_system() {
@@ -135,7 +151,7 @@ pub fn deserialize_udf_result(
                 Err(JsError::from_message(format!(
                     "Function {} return value is too large (actual: {}, limit: {})",
                     path.clone().for_logging().debug_str(),
-                    value.size().format_size(BINARY),
+                    size.format_size(BINARY),
                     limit.format_size(BINARY),
                 )))
             } else {
@@ -200,27 +216,6 @@ pub fn format_uncaught_error(message: String, name: String) -> String {
         format!("Uncaught {message}")
     } else {
         "Uncaught".to_string()
-    }
-}
-
-#[derive(Deserialize, Debug)]
-#[serde(rename_all = "camelCase")]
-pub struct UdfArgsJson(Box<RawValue>);
-
-impl UdfArgsJson {
-    /// Map it into our internal representation of positional args.
-    /// Modern apps just have a single positional arg with an object.
-    pub fn into_serialized_args(self) -> anyhow::Result<SerializedArgs> {
-        // For legacy positional args array
-        // RawValue from serde is guaranteed to have no leading whitespace.
-        if self.0.get().starts_with("[") {
-            log_legacy_positional_args();
-            return Ok(SerializedArgs::from_raw(self.0));
-        }
-        // For named args - stick it in an array
-        Ok(SerializedArgs::from_raw(serde_json::value::to_raw_value(
-            &[self.0],
-        )?))
     }
 }
 

@@ -35,6 +35,48 @@ function ConductorLogo({ height = 40 }: { height?: number }) {
   );
 }
 
+// An inline "Claude Code" reference (icon + name) for use in a sentence,
+// e.g. "<ClaudeCodeInlineMention /> gets these rules from the plugin instead."
+export function ClaudeCodeInlineMention() {
+  return (
+    <span className="inline-flex items-baseline">
+      <ClaudeCodeLogo
+        aria-hidden="true"
+        className="size-[1em] shrink-0 self-center"
+      />
+      &nbsp;<span className="font-semibold">Claude Code</span>
+    </span>
+  );
+}
+
+// An inline "Cursor" reference (icon + name) for use in a sentence,
+// e.g. "<CursorInlineMention /> gets these rules from the plugin instead."
+export function CursorInlineMention() {
+  return (
+    <span className="inline-flex items-baseline">
+      <CursorLogo
+        aria-hidden="true"
+        className="size-[1em] shrink-0 self-center"
+      />
+      &nbsp;<span className="font-semibold">Cursor</span>
+    </span>
+  );
+}
+
+// An inline "Codex" reference (icon + name) for use in a sentence,
+// e.g. "<CodexInlineMention /> gets these rules from the plugin instead."
+export function CodexInlineMention() {
+  return (
+    <span className="inline-flex items-baseline">
+      <CodexLogo
+        aria-hidden="true"
+        className="size-[1em] shrink-0 self-center"
+      />
+      &nbsp;<span className="font-semibold">Codex</span>
+    </span>
+  );
+}
+
 // This is a variant of DocsCardList.tsx specifically for the Quickstarts page.
 type Item = {
   docId: string;
@@ -135,7 +177,8 @@ export function QuickFrameworksList() {
           label: "Remix",
         },
         {
-          icon: <TanStackLogo height={40} width={40} />,
+          icon: <TanStackLogo height={40} />,
+          invertIcon: true,
           href: "/quickstart/tanstack-start",
           docId: "quickstart/tanstack-start",
           label: "TanStack Start",
@@ -227,6 +270,54 @@ export function QuickHarnessesList() {
   );
 }
 
+export function AgentPluginsList() {
+  return (
+    <DocCardList
+      items={[
+        {
+          icon: <ClaudeCodeLogo height={40} />,
+          href: "/ai/using-claude-code#install-the-convex-plugin-in-claude-code",
+          docId: "ai/using-claude-code",
+          label: "Claude Code",
+        },
+        {
+          icon: <CodexLogo height={40} />,
+          href: "/ai/using-codex#install-the-convex-plugin",
+          docId: "ai/using-codex",
+          label: "Codex",
+        },
+        {
+          icon: <CursorLogo height={40} />,
+          href: "/ai/using-cursor#install-the-convex-plugin-in-cursor",
+          docId: "ai/using-cursor",
+          label: "Cursor",
+        },
+      ]}
+    />
+  );
+}
+
+export function RulesHarnessesList() {
+  return (
+    <DocCardList
+      items={[
+        {
+          icon: <GitHubCopilotLogo height={40} />,
+          href: "/ai/using-github-copilot",
+          docId: "ai/using-github-copilot",
+          label: "GitHub Copilot",
+        },
+        {
+          icon: <ConductorLogo height={40} />,
+          href: "/ai/using-conductor",
+          docId: "ai/using-conductor",
+          label: "Conductor",
+        },
+      ]}
+    />
+  );
+}
+
 export function McpHarnessesList() {
   return (
     <DocCardList
@@ -236,12 +327,6 @@ export function McpHarnessesList() {
           href: "/ai/using-codex#setup-the-convex-mcp-server",
           docId: "ai/using-codex",
           label: "Codex",
-        },
-        {
-          icon: <CursorLogo height={40} />,
-          href: "/ai/using-cursor#setup-the-convex-mcp-server",
-          docId: "ai/using-cursor",
-          label: "Cursor",
         },
         {
           icon: <GitHubCopilotLogo height={40} />,

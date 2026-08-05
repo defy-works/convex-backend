@@ -39,7 +39,6 @@ use common::{
     },
     fastrace_helpers::EncodedSpan,
     knobs::{
-        ALLOW_FUNCTION_CONTEXT_REUSE,
         APPLICATION_FUNCTION_RUNNER_ACTION_SEMAPHORE_TIMEOUT,
         APPLICATION_FUNCTION_RUNNER_SEMAPHORE_TIMEOUT,
         APPLICATION_MAX_CONCURRENT_MUTATIONS,
@@ -47,7 +46,6 @@ use common::{
         APPLICATION_MAX_CONCURRENT_QUERIES,
         APPLICATION_MAX_CONCURRENT_V8_ACTIONS,
         DEFAULT_APPLICATION_MAX_FUNCTION_CONCURRENCY,
-        ISOLATE_MAX_HEAP_FOR_ANALYZE,
         ISOLATE_MAX_USER_HEAP_SIZE,
         UDF_EXECUTOR_OCC_INITIAL_BACKOFF,
         UDF_EXECUTOR_OCC_MAX_BACKOFF,
@@ -70,9 +68,11 @@ use common::{
     },
     types::{
         AllowedVisibility,
+        DeploymentId,
         FunctionCaller,
         ModuleEnvironment,
         NodeDependency,
+        QueryInvocation,
         Timestamp,
         UdfIdentifier,
         UdfType,
@@ -83,6 +83,7 @@ use database::{
     Database,
     Transaction,
     WriteSource,
+    MAX_OCC_FAILURES,
 };
 use errors::{
     ErrorMetadata,
@@ -107,6 +108,7 @@ use keybroker::{
     KeyBroker,
 };
 use model::{
+    backend_info::BackendInfoModel,
     backend_state::BackendStateModel,
     components::handles::FunctionHandlesModel,
     config::{
@@ -152,10 +154,10 @@ use model::{
     udf_config::types::UdfConfig,
 };
 use node_executor::{
-    Actions,
     AnalyzeRequest,
     BuildDepsRequest,
     ExecuteRequest,
+    NodeActions,
 };
 use serde_json::Value as JsonValue;
 use storage::Storage;
@@ -171,6 +173,7 @@ use udf::{
     environment::system_env_vars,
     validation::{
         validate_schedule_args,
+        PendingArgsPolicy,
         ValidatedActionOutcome,
         ValidatedPathAndArgs,
         ValidatedUdfOutcome,
@@ -226,6 +229,7 @@ use crate::{
         FunctionExecutionLog,
         OutstandingFunctionState,
     },
+    llm_gateway_jwt::LlmGatewayJwtMinter,
     ActionError,
     ActionReturn,
     MutationError,
@@ -658,7 +662,7 @@ pub struct ApplicationFunctionRunner<RT: Runtime> {
 
     isolate_functions: FunctionRouter<RT>,
     // Used for analyze, schema, etc.
-    node_actions: Actions<RT>,
+    node_actions: NodeActions<RT>,
 
     pub(crate) module_cache: Arc<dyn ModuleLoader<RT>>,
     modules_storage: Arc<dyn Storage>,
@@ -670,6 +674,11 @@ pub struct ApplicationFunctionRunner<RT: Runtime> {
     cache_manager: CacheManager<RT>,
     default_system_env_vars: BTreeMap<EnvVarName, EnvVarValue>,
     node_action_limiter: Limiter<RT>,
+    llm_gateway_jwt_minter: Option<Arc<dyn LlmGatewayJwtMinter>>,
+    /// A deployment keeps its ID for as long as it stays loaded, and one
+    /// `Application` serves one deployment, so token minting reuses the first
+    /// read instead of opening a transaction per call.
+    deployment_id: tokio::sync::OnceCell<DeploymentId>,
 }
 
 impl<RT: Runtime> ApplicationFunctionRunner<RT> {
@@ -678,7 +687,7 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
         database: Database<RT>,
         key_broker: KeyBroker,
         function_runner: Arc<dyn FunctionRunner<RT>>,
-        node_actions: Actions<RT>,
+        node_actions: NodeActions<RT>,
         file_storage: TransactionalFileStorage<RT>,
         modules_storage: Arc<dyn Storage>,
         module_cache: Arc<dyn ModuleLoader<RT>>,
@@ -686,6 +695,7 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
         audit_log_client: AuditLogClient,
         default_system_env_vars: BTreeMap<EnvVarName, EnvVarValue>,
         cache: QueryCache,
+        llm_gateway_jwt_minter: Option<Arc<dyn LlmGatewayJwtMinter>>,
     ) -> Self {
         let isolate_functions = FunctionRouter::new(
             function_runner,
@@ -725,6 +735,8 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
             cache_manager,
             default_system_env_vars,
             node_action_limiter,
+            llm_gateway_jwt_minter,
+            deployment_id: tokio::sync::OnceCell::new(),
         }
     }
 
@@ -786,7 +798,11 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
             _ => anyhow::bail!("Received non-query outcome for query"),
         };
 
-        let vars = AuditLogVars::from_context(context.clone(), &self.runtime)?;
+        let vars = AuditLogVars::from_context(
+            context.clone(),
+            tx.identity().convex_actor_var(),
+            &self.runtime,
+        )?;
         self.audit_log_client
             .send_logs(
                 outcome.audit_log_lines.resolve_bodies(&vars)?,
@@ -796,7 +812,12 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
 
         let stats = tx.take_stats();
 
-        let result = outcome.result.clone();
+        // A top-level query's result never contains unresolved commit
+        // timestamps.
+        let result = match outcome.result.clone() {
+            Ok(value) => Ok(value.try_into()?),
+            Err(e) => Err(e),
+        };
         let log_lines = outcome.log_lines.clone();
         self.function_log
             .log_query(
@@ -807,6 +828,7 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
                 caller,
                 tx.usage_tracker,
                 context.clone(),
+                QueryInvocation::Fresh,
             )
             .await;
         Ok((result, log_lines))
@@ -980,7 +1002,10 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
                 .await
             {
                 Ok(ts) => Ok(MutationReturn {
-                    value,
+                    // The commit timestamp is known now, so unresolved commit
+                    // timestamps in the return value resolve to it, matching
+                    // the committer's resolution of the transaction's writes.
+                    value: value.resolve_commit_ts(i64::from(ts))?,
                     log_lines,
                     ts,
                 }),
@@ -1141,10 +1166,11 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
             path.clone(),
             arguments.clone(),
             UdfType::Mutation,
+            PendingArgsPolicy::Reject,
         )
         .await?;
 
-        let (path_and_args, returns_validator) = match validate_result {
+        let (path_and_args, returns_validator, _) = match validate_result {
             Ok(tuple) => tuple,
             Err(js_err) => {
                 let mutation_outcome = ValidatedUdfOutcome::from_error(
@@ -1175,7 +1201,8 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
             _ => anyhow::bail!("Received non-mutation outcome for mutation"),
         };
 
-        let vars = AuditLogVars::from_context(context, &self.runtime)?;
+        let vars =
+            AuditLogVars::from_context(context, tx.identity().convex_actor_var(), &self.runtime)?;
         self.audit_log_client
             .send_logs(
                 mutation_outcome.audit_log_lines.resolve_bodies(&vars)?,
@@ -1327,12 +1354,16 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
             path.clone(),
             arguments.clone(),
             UdfType::Action,
+            PendingArgsPolicy::Reject,
         )
         .await?;
 
         // Fetch the returns_validator now to be used at a later ts.
         let (path_and_args, returns_validator) = match validate_result {
-            Ok((path_and_args, returns_validator)) => (path_and_args, returns_validator),
+            // We don't need to store visibility_info for non-queries.
+            Ok((path_and_args, returns_validator, _visibility_info)) => {
+                (path_and_args, returns_validator)
+            },
             Err(js_error) => {
                 return Ok(ActionCompletion {
                     outcome: ValidatedActionOutcome::from_error(
@@ -1686,7 +1717,6 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
             udf_config,
             isolate_modules,
             environment_variables.clone(),
-            *ISOLATE_MAX_HEAP_FOR_ANALYZE,
         );
 
         let node_future = async {
@@ -1770,17 +1800,6 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
         }
 
         self.validate_cron_jobs(&result)??;
-
-        if !*ALLOW_FUNCTION_CONTEXT_REUSE {
-            for (path, m) in &mut result {
-                if m.reuse_context {
-                    tracing::warn!(
-                        "Module {path:?} uses experimental_reuseContext, which is not allowed"
-                    );
-                    m.reuse_context = false;
-                }
-            }
-        }
 
         Ok(Ok(result))
     }
@@ -1885,9 +1904,19 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
         ts: Timestamp,
         journal: Option<QueryJournal>,
         caller: FunctionCaller,
+        invocation: QueryInvocation,
     ) -> anyhow::Result<QueryReturn> {
         let result = self
-            .run_query_at_ts_inner(request_context, path, args, identity, ts, journal, caller)
+            .run_query_at_ts_inner(
+                request_context,
+                path,
+                args,
+                identity,
+                ts,
+                journal,
+                caller,
+                invocation,
+            )
             .await;
         match result.as_ref() {
             Ok(udf_outcome) => {
@@ -1918,6 +1947,7 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
         ts: Timestamp,
         journal: Option<QueryJournal>,
         caller: FunctionCaller,
+        invocation: QueryInvocation,
     ) -> anyhow::Result<QueryReturn> {
         if path.is_system() && !(identity.is_admin() || identity.is_system()) {
             anyhow::bail!(unauthorized_error("query"));
@@ -1936,6 +1966,7 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
                 journal,
                 caller.clone(),
                 usage_tracker.clone(),
+                invocation,
             )
             .await;
 
@@ -1954,6 +1985,7 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
                         start,
                         caller,
                         context,
+                        invocation,
                     )
                     .await?;
                 Err(e)
@@ -1981,8 +2013,10 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
                     identifier
                 );
                 log_mutation_already_committed(age);
+                // Sessions are recorded transactionally in mutations so can use the same commit
+                // ts.
                 Ok(MutationReturn {
-                    value: result,
+                    value: result.resolve_commit_ts(i64::from(ts))?,
                     log_lines,
                     ts,
                 })
@@ -2034,6 +2068,31 @@ impl<RT: Runtime> ApplicationFunctionRunner<RT> {
 #[async_trait]
 impl<RT: Runtime> ActionCallbacks for ApplicationFunctionRunner<RT> {
     #[fastrace::trace]
+    async fn issue_llm_gateway_jwt(&self) -> anyhow::Result<String> {
+        let backend_deployment_id = match self.deployment_id.get() {
+            Some(deployment_id) => Some(*deployment_id),
+            None => {
+                let mut tx = self.database.begin_system().await?;
+                let deployment_id = BackendInfoModel::new(&mut tx)
+                    .get()
+                    .await?
+                    .map(|backend_info| backend_info.deployment);
+                if let Some(deployment_id) = deployment_id {
+                    // Backend info can arrive after the first call, so only a real
+                    // ID is worth remembering. Concurrent callers race here and
+                    // read back the same value.
+                    let _ = self.deployment_id.set(deployment_id);
+                }
+                deployment_id
+            },
+        };
+        self.llm_gateway_jwt_minter
+            .as_ref()
+            .context("LLM gateway JWT minting is not configured")?
+            .mint(backend_deployment_id)
+    }
+
+    #[fastrace::trace]
     async fn execute_query(
         &self,
         identity: Identity,
@@ -2054,6 +2113,7 @@ impl<RT: Runtime> ActionCallbacks for ApplicationFunctionRunner<RT> {
                     parent_scheduled_job: context.parent_scheduled_job,
                     parent_execution_id: Some(context.execution_id),
                 },
+                QueryInvocation::Fresh,
             )
             .await?
             .result;
@@ -2161,6 +2221,7 @@ impl<RT: Runtime> ActionCallbacks for ApplicationFunctionRunner<RT> {
             .execute_with_occ_retries(
                 identity,
                 FunctionUsageTracker::new(),
+                MAX_OCC_FAILURES,
                 "app_funrun_storage_store_file_entry",
                 |tx| {
                     async {
@@ -2192,6 +2253,7 @@ impl<RT: Runtime> ActionCallbacks for ApplicationFunctionRunner<RT> {
             .execute_with_occ_retries(
                 identity,
                 FunctionUsageTracker::new(),
+                MAX_OCC_FAILURES,
                 "app_funrun_storage_delete",
                 |tx| {
                     async {
@@ -2222,6 +2284,7 @@ impl<RT: Runtime> ActionCallbacks for ApplicationFunctionRunner<RT> {
             .execute_with_occ_retries(
                 identity,
                 FunctionUsageTracker::new(),
+                MAX_OCC_FAILURES,
                 "app_funrun_schedule_job",
                 |tx| {
                     let path = scheduled_path.clone();
@@ -2275,6 +2338,7 @@ impl<RT: Runtime> ActionCallbacks for ApplicationFunctionRunner<RT> {
             .execute_with_occ_retries(
                 identity,
                 FunctionUsageTracker::new(),
+                MAX_OCC_FAILURES,
                 "app_funrun_cancel_job",
                 |tx| {
                     async {

@@ -17,7 +17,17 @@ import {
   componentDiff,
   cronDiffType,
   schemaDiffType,
+  usageLimitConfig,
 } from "system-udfs/convex/tableDefs/deploymentAuditLogTable";
+import {
+  METRIC_CONFIG,
+  WINDOW_SUFFIX,
+  LIMIT_TYPE_LABEL,
+  formatAmount,
+  type UsageMetric,
+  type UsageLimitWindow,
+  type UsageLimitType,
+} from "@common/features/settings/components/UsageLimits";
 import { SchemaJson, displaySchema } from "@common/lib/format";
 import { DeploymentAuditLogEvent } from "@common/lib/useDeploymentAuditLog";
 import { DeploymentInfoContext } from "@common/lib/deploymentContext";
@@ -46,6 +56,13 @@ export function DeploymentEventContent({
   inPanel?: boolean;
 }) {
   const { TeamMemberLink } = useContext(DeploymentInfoContext);
+  // Usage limit breaches and the resulting deployment state changes aren't
+  // attributable to a member, so the action text reads as a standalone
+  // sentence rather than "<actor> did X".
+  const hasActor = ![
+    "usage_limit_exceeded",
+    "change_usage_limit_stop_state",
+  ].includes(event.action);
   let body;
   switch (event.action) {
     case "build_indexes":
@@ -90,6 +107,10 @@ export function DeploymentEventContent({
       body = <SnapshotImportContent event={event} />;
       break;
 
+    case "update_usage_limit":
+      body = UsageLimitUpdateBody({ event });
+      break;
+
     case "create_environment_variable":
     case "delete_environment_variable":
     case "update_environment_variable":
@@ -99,6 +120,7 @@ export function DeploymentEventContent({
     case "change_deployment_state":
     case "pause_deployment":
     case "unpause_deployment":
+    case "change_usage_limit_stop_state":
     case "change_system_stop_state":
     case "clear_tables":
     case "delete_scheduled_jobs_table":
@@ -125,6 +147,7 @@ export function DeploymentEventContent({
     case "periodic_backup_configured":
     case "periodic_backup_disabled":
     case "periodic_backup_triggered":
+    case "create_data_sync":
     default:
       body = null;
   }
@@ -133,10 +156,14 @@ export function DeploymentEventContent({
     <div className="flex flex-col gap-2 text-sm">
       <div className="flex items-center justify-between">
         <span className={cn(!inPanel && "leading-6")}>
-          <TeamMemberLink
-            memberId={Number(event.member_id)}
-            name={event.memberName}
-          />{" "}
+          {hasActor && (
+            <>
+              <TeamMemberLink
+                memberId={Number(event.member_id)}
+                name={event.memberName}
+              />{" "}
+            </>
+          )}
           <ActionText event={event} />
         </span>
         {!inPanel && <TimestampDistance date={new Date(event._creationTime)} />}
@@ -642,6 +669,71 @@ export function ActionText({ event }: { event: DeploymentAuditLogEvent }) {
         </>
       );
 
+    case "create_data_sync":
+      return (
+        <>
+          <span>started a </span>
+          <Tooltip
+            tip={<span className="font-mono">{event.metadata.sync_id}</span>}
+            maxWidthClassName="max-w-md"
+          >
+            <span className="underline decoration-dotted">data sync</span>
+          </Tooltip>
+        </>
+      );
+
+    case "create_usage_limit":
+      return (
+        <>
+          <span>created a usage limit: </span>
+          <UsageLimitSummary config={event.metadata.config} />
+        </>
+      );
+
+    case "delete_usage_limit":
+      return (
+        <>
+          <span>deleted a usage limit: </span>
+          <UsageLimitSummary config={event.metadata.config} />
+        </>
+      );
+
+    case "usage_limit_exceeded":
+      return (
+        <>
+          <span>A usage limit was exceeded: </span>
+          <UsageLimitSummary
+            config={event.metadata.config}
+            showStatus={false}
+          />
+        </>
+      );
+
+    case "change_usage_limit_stop_state":
+      return event.metadata.new_state === "disabled" ? (
+        <span>The deployment was disabled after exceeding a usage limit</span>
+      ) : (
+        <span>
+          The deployment was re-enabled after usage fell back under its limits
+        </span>
+      );
+
+    case "update_usage_limit": {
+      // The changed fields are shown as a diff in the event body; the sentence
+      // just names which limit was updated.
+      const { metricName, typeLabel } = usageLimitLabels(
+        event.metadata.current,
+      );
+      return (
+        <>
+          <span>updated the </span>
+          <span className="font-semibold">{typeLabel}</span>
+          <span> on </span>
+          <span className="font-semibold">{metricName}</span>
+        </>
+      );
+    }
+
     default:
       event satisfies never;
       return null;
@@ -663,6 +755,79 @@ function AdminKeyId({ id }: { id: string }) {
     <Tooltip tip={<span className="font-mono">{id}</span>}>
       <span className="underline decoration-dotted">admin key</span>
     </Tooltip>
+  );
+}
+
+function usageLimitLabels(config: Infer<typeof usageLimitConfig>) {
+  const metricConfig = METRIC_CONFIG[config.metric as UsageMetric];
+  return {
+    metricName: metricConfig?.name ?? config.metric,
+    unit: metricConfig?.rawUnitShort ?? "",
+    windowSuffix: WINDOW_SUFFIX[config.window as UsageLimitWindow] ?? "",
+    typeLabel:
+      LIMIT_TYPE_LABEL[config.limitType as UsageLimitType] ?? config.limitType,
+  };
+}
+
+function UsageLimitSummary({
+  config,
+  showStatus = true,
+}: {
+  config: Infer<typeof usageLimitConfig>;
+  showStatus?: boolean;
+}) {
+  const { metricName, unit, windowSuffix, typeLabel } =
+    usageLimitLabels(config);
+  return (
+    <>
+      <span className="font-semibold">{typeLabel}</span>
+      <span> on </span>
+      <span className="font-semibold">{metricName}</span>
+      <span>
+        {" ("}
+        {formatAmount(Number(config.limit))} {unit} {windowSuffix}
+        {showStatus && (config.enabled ? ", enabled" : ", disabled")})
+      </span>
+    </>
+  );
+}
+
+function UsageLimitUpdateBody({
+  event,
+}: {
+  event: DeploymentAuditLogEvent & { action: "update_usage_limit" };
+}) {
+  const { previous, current } = event.metadata;
+  const { unit, windowSuffix } = usageLimitLabels(current);
+  const rows: { label: string; from: string; to: string }[] = [];
+  if (previous.limit !== current.limit) {
+    rows.push({
+      label: "Limit",
+      from: `${formatAmount(Number(previous.limit))} ${unit} ${windowSuffix}`,
+      to: `${formatAmount(Number(current.limit))} ${unit} ${windowSuffix}`,
+    });
+  }
+  if (previous.enabled !== current.enabled) {
+    rows.push({
+      label: "Status",
+      from: previous.enabled ? "Enabled" : "Disabled",
+      to: current.enabled ? "Enabled" : "Disabled",
+    });
+  }
+  if (rows.length === 0) {
+    return null;
+  }
+  return (
+    <div className="flex flex-col gap-1 text-sm">
+      {rows.map((row) => (
+        <div key={row.label} className="flex items-center gap-1.5">
+          <span className="text-content-secondary">{row.label}</span>
+          <span className="font-mono">{row.from}</span>
+          <span className="text-content-secondary">→</span>
+          <span className="font-mono font-semibold">{row.to}</span>
+        </div>
+      ))}
+    </div>
   );
 }
 

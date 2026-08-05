@@ -10,24 +10,35 @@ use common::{
         FUNRUN_MODULE_MAX_CONCURRENCY,
         FUNRUN_MODULE_QUEUE_SIZE,
     },
-    runtime::Runtime,
+    runtime::{
+        try_join,
+        Runtime,
+    },
 };
-use futures::FutureExt;
-use isolate::environment::helpers::module_loader::get_modules_and_prefetch;
+use isolate::module_cache::V8ModuleSource;
 use model::{
-    config::module_loader::ModuleLoader,
     modules::{
+        hash_module_source,
         module_versions::FullModuleSource,
         types::ModuleMetadata,
     },
-    source_packages::types::SourcePackage,
+    source_packages::{
+        types::SourcePackage,
+        upload_download::download_package,
+    },
 };
 use moka::sync::Cache;
 use storage::Storage;
 use sync_types::CanonicalizedModulePath;
-use value::sha256::Sha256Digest;
+use value::{
+    heap_size::HeapSize,
+    sha256::Sha256Digest,
+};
 
-use crate::record_module_sizes;
+use crate::{
+    metrics::module_load_timer,
+    record_module_sizes,
+};
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct ModuleCacheKey {
@@ -37,7 +48,9 @@ pub(crate) struct ModuleCacheKey {
 }
 
 #[derive(Clone)]
-pub(crate) struct ModuleCache<RT: Runtime>(AsyncLru<RT, ModuleCacheKey, FullModuleSource>);
+pub(crate) struct ModuleCache<RT: Runtime>(
+    AsyncLru<RT, ModuleCacheKey, V8ModuleSource, (String, Sha256Digest)>,
+);
 
 impl<RT: Runtime> ModuleCache<RT> {
     pub(crate) fn new(rt: RT) -> Self {
@@ -82,51 +95,57 @@ impl<RT: Runtime> FunctionRunnerModuleLoader<RT> {
 }
 
 #[async_trait]
-impl<RT: Runtime> ModuleLoader<RT> for FunctionRunnerModuleLoader<RT> {
+impl<RT: Runtime> isolate::module_cache::ModuleCache<RT> for FunctionRunnerModuleLoader<RT> {
     #[fastrace::trace]
     async fn get_module_with_metadata(
         &self,
         module_metadata: &ParsedDocument<ModuleMetadata>,
         source_package: &ParsedDocument<SourcePackage>,
-    ) -> anyhow::Result<Arc<FullModuleSource>> {
-        let deployment_name = self.deployment_name.clone();
+    ) -> anyhow::Result<Arc<V8ModuleSource>> {
         let key = self.cache_key(module_metadata);
-        let modules_storage = self.modules_storage.clone();
-        let source_package = source_package.clone();
         let result = self
             .cache
             .0
-            .get_and_prepopulate(
-                key.clone(),
-                async move {
-                    let modules =
-                        get_modules_and_prefetch(modules_storage, &source_package).await?;
-                    Ok(modules
-                        .into_iter()
-                        .map(move |((module_path, sha256), source)| {
-                            (
-                                ModuleCacheKey {
-                                    deployment_name: deployment_name.clone(),
-                                    module_path,
-                                    sha256,
-                                },
-                                source,
-                            )
-                        })
-                        .collect())
-                }
-                .boxed(),
-            )
+            .get_and_prepopulate(&key, || {
+                let deployment_name = self.deployment_name.clone();
+                let modules_storage = self.modules_storage.clone();
+                let source_package = source_package.clone();
+                let fetch_key = (self.deployment_name.clone(), source_package.sha256.clone());
+                (
+                    fetch_key,
+                    try_join("get_modules_and_prefetch", async move {
+                        let _timer = module_load_timer("package");
+                        let package = download_package(modules_storage, &source_package).await?;
+                        Ok(package
+                            .into_iter()
+                            .map(move |(module_path, module_config)| {
+                                (
+                                    ModuleCacheKey {
+                                        deployment_name: deployment_name.clone(),
+                                        module_path,
+                                        sha256: hash_module_source(
+                                            &module_config.source,
+                                            module_config.source_map.as_ref(),
+                                        ),
+                                    },
+                                    Arc::new(V8ModuleSource::new(FullModuleSource {
+                                        source: module_config.source,
+                                        source_map: module_config.source_map,
+                                    })),
+                                )
+                            })
+                            .collect())
+                    }),
+                )
+            })
             .await?;
         record_module_sizes(
-            result.source.len(),
-            result.source_map.as_ref().map(|sm| sm.len()),
+            result.source().heap_size(),
+            result.source_map().map(|sm| sm.len()),
         );
         Ok(result)
     }
-}
 
-impl<RT: Runtime> isolate::module_cache::ModuleCache<RT> for FunctionRunnerModuleLoader<RT> {
     fn put_cached_code(&self, module_metadata: &ModuleMetadata, cached_data: Arc<[u8]>) {
         self.code_cache
             .0

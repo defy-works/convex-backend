@@ -2,6 +2,7 @@ import { DeploymentInfo } from "@common/lib/deploymentContext";
 
 export const mockDeploymentInfo: DeploymentInfo = {
   ok: true,
+  usageLimitsEnabled: true,
   reportHttpError: () => {},
   captureException: () => {},
   captureMessage: () => {},
@@ -102,11 +103,12 @@ export const mockDeploymentInfo: DeploymentInfo = {
   ),
   DisconnectOverlay: () => <div>Disconnected</div>,
   useTeamUsageState: () => "Default",
+  useTeamPlanType: () => null,
   teamsURI: "",
   projectsURI: "",
   deploymentsURI: "",
   isSelfHosted: true,
   workosIntegrationEnabled: false,
-  logStreamTopicFiltersEnabled: false,
+  copyEnvVarNameAndValueEnabled: false,
   connectionStateCheckIntervalMs: 2500,
 };

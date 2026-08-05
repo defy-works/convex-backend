@@ -71,6 +71,10 @@ export type DeploymentInfo = (
     | undefined;
   useTeamUsageState(teamId: number | null): string | undefined;
   useCurrentUsageBanner(teamId: number | null): string | null;
+  // The team's Orb plan type (e.g. "CONVEX_BUSINESS"), or null when there is no
+  // subscription (Free) or plan tier isn't available (self-hosted). Note that
+  // Business and Enterprise share the "CONVEX_BUSINESS" plan type.
+  useTeamPlanType(teamId: number | null): string | null | undefined;
   useCurrentProject():
     | {
         id: number;
@@ -326,7 +330,10 @@ export type DeploymentInfo = (
    */
   deploymentBackendOwnsAdminKeys?: boolean;
   workosIntegrationEnabled: boolean;
-  logStreamTopicFiltersEnabled: boolean;
+  usageLimitsEnabled: boolean;
+  // When enabled, the per-row copy button in the environment variables UI
+  // copies the name and value in .env format instead of just the value.
+  copyEnvVarNameAndValueEnabled: boolean;
   connectionStateCheckIntervalMs: number;
 };
 
@@ -421,14 +428,21 @@ export const ConnectedDeploymentContext = createContext<{
   },
 );
 
-const MaybeConnectedDeploymentContext = createContext<MaybeConnectedDeployment>(
-  // use a bad default value to detect being used incorrectly
-  undefined as unknown as {
-    deployment: undefined;
-    loading: false;
-    errorKind: "DoesNotExist";
-  },
-);
+export const MaybeConnectedDeploymentContext =
+  createContext<MaybeConnectedDeployment>(
+    // use a bad default value to detect being used incorrectly
+    undefined as unknown as {
+      deployment: undefined;
+      loading: false;
+      errorKind: "DoesNotExist";
+    },
+  );
+
+export function useMaybeConnectedDeployment():
+  | MaybeConnectedDeployment
+  | undefined {
+  return useContext(MaybeConnectedDeploymentContext);
+}
 
 const useConnectedDeployment = (
   deploymentName: string | undefined,

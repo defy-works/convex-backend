@@ -209,7 +209,7 @@ impl<RT: Runtime> IndexWorker<RT> {
             }
         }
         log_num_indexes_to_backfill(num_to_backfill);
-        tracing::info!(
+        tracing::debug!(
             "{num_to_backfill} database indexes to backfill @ {}",
             tx.begin_timestamp()
         );
@@ -288,7 +288,7 @@ impl<RT: Runtime> IndexWorker<RT> {
                     if backfill_bytes_read > 0 {
                         usage.track_database_egress_v2(
                             component_path.clone(),
-                            table_name.to_string(),
+                            &table_name,
                             backfill_bytes_read,
                             table_name.is_system(),
                         );
@@ -296,7 +296,7 @@ impl<RT: Runtime> IndexWorker<RT> {
                     if backfill_bytes_written > 0 {
                         usage.track_database_ingress_v2(
                             component_path,
-                            table_name.to_string(),
+                            &table_name,
                             backfill_bytes_written,
                             table_name.is_system(),
                         );
@@ -315,7 +315,7 @@ impl<RT: Runtime> IndexWorker<RT> {
             }
             // Alternatively, wait for invalidation
             ts = subscription_fut.fuse() => {
-                tracing::info!("Index backfill worker got invalidation at {ts:?}");
+                tracing::debug!("Index backfill worker got invalidation at {ts:?}");
                 self.backoff.reset();
             }
         }
@@ -374,10 +374,15 @@ impl<RT: Runtime> IndexWorker<RT> {
         let _timer = tablet_index_backfill_timer();
         let mut backfills = BTreeMap::new();
         for index_id in &index_ids {
-            let (index_name, retention_started) =
-                Self::begin_backfill(*index_id, &database).await?;
+            let Some((index_name, retention_started)) =
+                Self::begin_backfill(*index_id, &database).await?
+            else {
+                tracing::info!("Skipping backfill of index {index_id:?} that no longer exists");
+                continue;
+            };
             backfills.insert(*index_id, (index_name, retention_started));
         }
+        let live_index_ids: Vec<IndexId> = backfills.keys().copied().collect();
 
         let needs_backfill = backfills
             .iter()
@@ -413,9 +418,9 @@ impl<RT: Runtime> IndexWorker<RT> {
                     "Starting backfill of {} indexes for {table_name}: {needs_backfill:?}",
                     needs_backfill.len(),
                 );
-                let table_summary =
-                    snapshot.table_summary(table_mapping.tablet_namespace(tablet_id)?, table_name);
-                let total_docs = table_summary.map(|summary| summary.num_values());
+                let table_count =
+                    snapshot.table_count(table_mapping.tablet_namespace(tablet_id)?, table_name);
+                let total_docs = table_count.map(|count| count.num_values());
                 let mut index_backfill_model = IndexBackfillModel::new(&mut tx);
                 for index_id in needs_backfill.keys() {
                     index_backfill_model
@@ -446,9 +451,13 @@ impl<RT: Runtime> IndexWorker<RT> {
         // here to avoid creating OCC conflicts with ourselves.
         let indexes_lock = metadata_mutex.lock().await;
         let mut tx = database.begin(Identity::system()).await?;
-        for index_id in &index_ids {
-            let (backfill_begin_ts, index_name, indexed_fields) =
-                Self::begin_retention(&mut tx, *index_id).await?;
+        for index_id in &live_index_ids {
+            let Some((backfill_begin_ts, index_name, indexed_fields)) =
+                Self::begin_retention(&mut tx, *index_id).await?
+            else {
+                tracing::info!("Skipping retention for index {index_id:?} that no longer exists");
+                continue;
+            };
 
             min_begin_ts = min_begin_ts
                 .map(|t| cmp::min(t, backfill_begin_ts))
@@ -470,7 +479,7 @@ impl<RT: Runtime> IndexWorker<RT> {
 
         let indexes_lock = metadata_mutex.lock().await;
         let mut tx = database.begin(Identity::system()).await?;
-        for index_id in index_ids {
+        for index_id in live_index_ids {
             Self::finish_backfill(&mut tx, index_id).await?;
         }
         database
@@ -481,10 +490,12 @@ impl<RT: Runtime> IndexWorker<RT> {
         Ok(docs_indexed)
     }
 
+    /// Returns `None` if the index was dropped (e.g. by a schema push) while
+    /// its backfill was in flight.
     async fn begin_backfill(
         index_id: IndexId,
         database: &Database<RT>,
-    ) -> anyhow::Result<(TabletIndexName, bool)> {
+    ) -> anyhow::Result<Option<(TabletIndexName, bool)>> {
         let mut tx = database.begin(Identity::system()).await?;
         let index_table_id = tx.bootstrap_tables().index_id;
 
@@ -492,13 +503,15 @@ impl<RT: Runtime> IndexWorker<RT> {
         // know that all documents written after `ts` will already be in the index.
         // The index may contain writes from before `ts` too, but that's okay. We'll
         // just overwrite them.
-        let index_doc = tx
+        let Some(index_doc) = tx
             .get(ResolvedDocumentId::new(
                 index_table_id.tablet_id,
                 DeveloperDocumentId::new(index_table_id.table_number, index_id.0),
             ))
             .await?
-            .ok_or_else(|| anyhow::anyhow!("Index {index_id:?} no longer exists"))?;
+        else {
+            return Ok(None);
+        };
         let index_metadata = TabletIndexMetadata::from_document(index_doc)?;
 
         // Assuming that the IndexWorker is the only writer of index state, we expect
@@ -521,22 +534,26 @@ impl<RT: Runtime> IndexWorker<RT> {
             ),
         };
 
-        Ok((index_metadata.name.clone(), retention_started))
+        Ok(Some((index_metadata.name.clone(), retention_started)))
     }
 
+    /// Returns `None` if the index was dropped (e.g. by a schema push) while
+    /// its backfill was in flight.
     async fn begin_retention(
         tx: &mut Transaction<RT>,
         index_id: IndexId,
-    ) -> anyhow::Result<(RepeatableTimestamp, TabletIndexName, IndexedFields)> {
+    ) -> anyhow::Result<Option<(RepeatableTimestamp, TabletIndexName, IndexedFields)>> {
         let index_table_id = tx.bootstrap_tables().index_id;
 
-        let index_doc = tx
+        let Some(index_doc) = tx
             .get(ResolvedDocumentId::new(
                 index_table_id.tablet_id,
                 DeveloperDocumentId::new(index_table_id.table_number, index_id.0),
             ))
             .await?
-            .ok_or_else(|| anyhow::anyhow!("Index {index_id:?} no longer exists"))?;
+        else {
+            return Ok(None);
+        };
         let mut index_metadata = TabletIndexMetadata::from_document(index_doc)?;
 
         // Assuming that the IndexWorker is the only writer of index state, we expect
@@ -573,9 +590,12 @@ impl<RT: Runtime> IndexWorker<RT> {
             .replace(index_metadata.id(), index_metadata.into_value().try_into()?)
             .await?;
 
-        Ok((index_ts, name, indexed_fields))
+        Ok(Some((index_ts, name, indexed_fields)))
     }
 
+    /// Returns `false` if the index was dropped (e.g. by a schema push) while
+    /// its backfill was in flight, so callers can skip it rather than
+    /// failing.
     async fn finish_backfill(tx: &mut Transaction<RT>, index_id: IndexId) -> anyhow::Result<()> {
         // Now that we're done, write that we've finished backfilling the index, sanity
         // checking that it wasn't written concurrently with our backfill.
@@ -584,10 +604,10 @@ impl<RT: Runtime> IndexWorker<RT> {
             index_table_id.tablet_id,
             DeveloperDocumentId::new(index_table_id.table_number, index_id.0),
         );
-        let index_doc = tx
-            .get(full_index_id)
-            .await?
-            .ok_or_else(|| anyhow::anyhow!("Index {index_id:?} no longer exists"))?;
+        let Some(index_doc) = tx.get(full_index_id).await? else {
+            tracing::info!("Skipping finish of index {index_id:?} that no longer exists");
+            return Ok(());
+        };
         let mut index_metadata = TabletIndexMetadata::from_document(index_doc)?;
         let is_system_index_on_user_table = index_metadata.name.descriptor().is_reserved();
         let is_index_on_system_table = tx

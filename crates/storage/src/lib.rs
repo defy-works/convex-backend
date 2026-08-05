@@ -32,7 +32,10 @@ use std::{
         Context,
         Poll,
     },
-    time::Duration,
+    time::{
+        Duration,
+        SystemTime,
+    },
 };
 
 use anyhow::Context as _;
@@ -177,6 +180,17 @@ pub trait Storage: Send + Sync + Debug {
         key: &FullyQualifiedObjectKey,
         bytes_range: Range<u64>,
     ) -> BoxFuture<'static, anyhow::Result<StorageGetStream>>;
+    /// Returns None immediately if the caller should use
+    /// `get_fq_object_attributes` instead. The returned future yields None
+    /// if the object doesn't exist, and yields an InvalidGetRangeError if the
+    /// requested range starts after the object's size.
+    fn get_small_range_and_total_size(
+        &self,
+        _key: &FullyQualifiedObjectKey,
+        _bytes_range: Range<u64>,
+    ) -> Option<BoxFuture<'static, anyhow::Result<Option<(StorageGetStream, u64)>>>> {
+        None
+    }
     fn storage_type_proto(&self) -> pb::searchlight::StorageType;
     /// Return a cache key suitable for the given ObjectKey, even in
     /// a multi-tenant cache.
@@ -190,6 +204,12 @@ pub trait Storage: Send + Sync + Debug {
     ) -> anyhow::Result<ObjectKey>;
     /// Delete the given object.
     async fn delete_object(&self, key: &ObjectKey) -> anyhow::Result<()>;
+
+    /// Upload `bytes` to `key`, overwriting any object already at that key.
+    async fn put_object(&self, key: ObjectKey, bytes: Bytes) -> anyhow::Result<()>;
+
+    /// List all objects whose key begins with `key_prefix`.
+    async fn list_objects(&self, key_prefix: &str) -> anyhow::Result<Vec<ObjectListing>>;
 }
 
 pub struct ObjectAttributes {
@@ -197,25 +217,14 @@ pub struct ObjectAttributes {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct VersionedS3Object {
-    pub bucket: String,
-    pub key: String,
-    pub version_id: String,
+pub struct ObjectListing {
+    pub key: ObjectKey,
+    pub last_modified: SystemTime,
 }
 
-#[async_trait]
-pub trait VersionedS3Storage: Send + Sync + Debug {
-    async fn put_versioned_object(
-        &self,
-        key: ObjectKey,
-        bytes: Bytes,
-    ) -> anyhow::Result<VersionedS3Object>;
-
-    async fn latest_versioned_object(
-        &self,
-        key: &ObjectKey,
-    ) -> anyhow::Result<Option<VersionedS3Object>>;
-}
+#[derive(thiserror::Error, Debug)]
+#[error("Requested get range exceeds object's size")]
+pub struct InvalidGetRangeError;
 
 pub struct SizeAndHash {
     sha256: Sha256,
@@ -612,29 +621,73 @@ impl StorageExt for Arc<dyn Storage> {
         key: &FullyQualifiedObjectKey,
         bytes_range: (std::ops::Bound<u64>, std::ops::Bound<u64>),
     ) -> anyhow::Result<Option<StorageGetStream>> {
-        let Some(attributes) = self.get_fq_object_attributes(key).await? else {
-            return Ok(None);
+        let start_byte = match bytes_range.0 {
+            std::ops::Bound::Included(bound) => bound,
+            std::ops::Bound::Excluded(bound) => bound.saturating_add(1),
+            std::ops::Bound::Unbounded => 0,
+        };
+        let end_byte_bound = match bytes_range.1 {
+            std::ops::Bound::Included(bound) => bound.saturating_add(1),
+            std::ops::Bound::Excluded(bound) => bound,
+            std::ops::Bound::Unbounded => u64::MAX, // this will be corrected later
+        };
+        let prefetch_end = start_byte
+            .saturating_add(DOWNLOAD_CHUNK_SIZE)
+            .min(end_byte_bound);
+        let (first_chunk, total_size) = if start_byte < prefetch_end
+            && let Some(f) = self.get_small_range_and_total_size(key, start_byte..prefetch_end)
+        {
+            // Fetch the first chunk and total size at the same time.
+            // This is faster for small files than calling `get_fq_object_attributes`.
+            match f.await {
+                Ok(Some((first_chunk, total_size))) => (
+                    Some(StorageGetStream {
+                        content_length: first_chunk.content_length,
+                        // wrap the returned stream in a retrying one
+                        stream: Box::pin(stream_object_with_retries(
+                            first_chunk.stream,
+                            self.clone(),
+                            key.clone(),
+                            start_byte..(start_byte + first_chunk.content_length as u64),
+                            STORAGE_GET_RETRIES,
+                        )),
+                    }),
+                    total_size,
+                ),
+                Ok(None) => return Ok(None),
+                // This function's contract is to return only the matching bytes, which is nothing
+                // in this case
+                Err(e) if e.is::<InvalidGetRangeError>() => {
+                    return Ok(Some(StorageGetStream {
+                        content_length: 0,
+                        stream: Box::pin(stream::empty()),
+                    }))
+                },
+                Err(e) => return Err(e),
+            }
+        } else {
+            let Some(attributes) = self.get_fq_object_attributes(key).await? else {
+                return Ok(None);
+            };
+            (None, attributes.size)
         };
         let start_byte = cmp::min(
-            match bytes_range.0 {
-                std::ops::Bound::Included(bound) => bound,
-                std::ops::Bound::Excluded(bound) => bound + 1,
-                std::ops::Bound::Unbounded => 0,
-            },
-            attributes.size,
+            start_byte
+                + first_chunk
+                    .as_ref()
+                    .map_or(0, |chunk| chunk.content_length as u64),
+            total_size,
         );
-        let end_byte_bound = cmp::min(
-            match bytes_range.1 {
-                std::ops::Bound::Included(bound) => bound + 1,
-                std::ops::Bound::Excluded(bound) => bound,
-                std::ops::Bound::Unbounded => attributes.size,
-            },
-            attributes.size,
-        );
-        Ok(Some(self.get_fq_object_exact_range(
-            key,
-            start_byte..end_byte_bound,
-        )))
+        let end_byte_bound = cmp::min(end_byte_bound, total_size);
+        let remaining_bytes = self.get_fq_object_exact_range(key, start_byte..end_byte_bound);
+        if let Some(first_chunk) = first_chunk {
+            Ok(Some(StorageGetStream {
+                content_length: first_chunk.content_length + remaining_bytes.content_length,
+                stream: first_chunk.stream.chain(remaining_bytes.stream).boxed(),
+            }))
+        } else {
+            Ok(Some(remaining_bytes))
+        }
     }
 
     fn get_fq_object_exact_range(
@@ -645,7 +698,13 @@ impl StorageExt for Arc<dyn Storage> {
             end: end_byte_bound,
         }: Range<u64>,
     ) -> StorageGetStream {
-        let num_chunks = 1 + (end_byte_bound - start_byte) / DOWNLOAD_CHUNK_SIZE;
+        if start_byte >= end_byte_bound {
+            return StorageGetStream {
+                content_length: 0,
+                stream: Box::pin(stream::empty()),
+            };
+        }
+        let num_chunks = (end_byte_bound - start_byte).div_ceil(DOWNLOAD_CHUNK_SIZE);
         // A list of futures, each of which resolves to a stream.
         let mut chunk_futures = vec![];
         for idx in 0..num_chunks {
@@ -1039,6 +1098,53 @@ impl<RT: Runtime> Storage for LocalDirStorage<RT> {
         let path = self.dir.join(key);
         fs::remove_file(path)?;
         Ok(())
+    }
+
+    async fn put_object(&self, key: ObjectKey, bytes: Bytes) -> anyhow::Result<()> {
+        let filename = self.filename_for_key(key);
+        let filepath = self.dir.join(filename);
+        fs::create_dir_all(filepath.parent().expect("Must have parent")).context(
+            "LocalDirStorage file creation failed. Perhaps the storage object key isn't valid?",
+        )?;
+        let mut file = File::create(filepath)?;
+        file.write_all(&bytes)?;
+        Ok(())
+    }
+
+    async fn list_objects(&self, key_prefix: &str) -> anyhow::Result<Vec<ObjectListing>> {
+        fn walk(dir: &Path, out: &mut Vec<(PathBuf, SystemTime)>) -> anyhow::Result<()> {
+            if !dir.exists() {
+                return Ok(());
+            }
+            for entry in fs::read_dir(dir)? {
+                let entry = entry?;
+                let path = entry.path();
+                if path.is_dir() {
+                    walk(&path, out)?;
+                } else {
+                    out.push((path, entry.metadata()?.modified()?));
+                }
+            }
+            Ok(())
+        }
+
+        let mut files = Vec::new();
+        walk(&self.dir, &mut files)?;
+        let mut objects = Vec::new();
+        for (path, last_modified) in files {
+            let relative = path.strip_prefix(&self.dir)?.to_string_lossy();
+            let Some(key) = relative.strip_suffix(".blob") else {
+                continue;
+            };
+            if !key.starts_with(key_prefix) {
+                continue;
+            }
+            objects.push(ObjectListing {
+                key: ObjectKey::try_from(key)?,
+                last_modified,
+            });
+        }
+        Ok(objects)
     }
 }
 

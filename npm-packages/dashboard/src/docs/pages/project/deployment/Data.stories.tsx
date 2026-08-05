@@ -12,7 +12,16 @@ import { GenericId } from "convex/values";
 import { GenericDocument } from "convex/server";
 import { PlatformDeploymentResponse } from "@convex-dev/platform/managementApi";
 import { useDeployments } from "api/deployments";
-import { fn, mocked, userEvent, within, waitFor, expect } from "storybook/test";
+import { useInfiniteProjects } from "api/projects";
+import {
+  fn,
+  mocked,
+  screen,
+  userEvent,
+  within,
+  waitFor,
+  expect,
+} from "storybook/test";
 import { useTableShapes } from "@common/lib/deploymentApi";
 import { Shape } from "shapes";
 import { DataView } from "@common/features/data/components/DataView";
@@ -609,26 +618,6 @@ export const CustomQueryRunner: Story = {
   },
 };
 
-/**
- * Shows Data page with the full schema view open.
- */
-export const GenerateSchema: Story = {
-  play: async ({ canvasElement }) => {
-    const canvas = within(canvasElement);
-
-    // Wait for the sidebar "Schema" button to be visible
-    await waitFor(async () => {
-      await expect(
-        canvas.queryByRole("button", { name: /^Schema$/ }),
-      ).toBeTruthy();
-    });
-
-    // Click the sidebar "Schema" button
-    const schemaButton = canvas.getByRole("button", { name: /^Schema$/ });
-    await userEvent.click(schemaButton);
-  },
-};
-
 const mockComponents = [
   {
     id: "k17componentsaaaaaaaaaaaaaaaa1111" as GenericId<"_components">,
@@ -760,7 +749,9 @@ export const ComponentDropdown: Story = {
 export const MultipleDevDeploymentsSelector: Story = {
   parameters: {
     ...meta.parameters,
-    screenshotSelector: "#select-deployment, [role='menu']",
+    // Clicking the deployment badge opens the command palette's deployment
+    // switcher menu (a cmdk dialog anchored beneath the badge).
+    screenshotSelector: "#select-deployment, [cmdk-root]",
   },
   decorators: [
     (storyFn) => {
@@ -794,20 +785,6 @@ export const MultipleDevDeploymentsSelector: Story = {
             reference: "production",
             region: "aws-us-east-1",
           },
-          {
-            id: 13,
-            name: "steady-hawk-789",
-            deploymentType: "prod" as const,
-            kind: "cloud" as const,
-            isDefault: false,
-            projectId: mockProject.id,
-            creator: 1,
-            createTime: NOW - 100000000,
-            class: "s256",
-            deploymentUrl: "https://steady-hawk-789.convex.cloud",
-            reference: "prod/staging",
-            region: "aws-eu-west-1",
-          },
           // Ari's feature branch deployments
           {
             id: 21,
@@ -823,34 +800,6 @@ export const MultipleDevDeploymentsSelector: Story = {
             reference: "dev/ari/auth-flow",
             region: "aws-us-east-1",
           },
-          {
-            id: 22,
-            name: "calm-tiger-203",
-            deploymentType: "dev" as const,
-            kind: "cloud" as const,
-            isDefault: false,
-            projectId: mockProject.id,
-            creator: 2,
-            createTime: NOW - 60000000,
-            class: "s256",
-            deploymentUrl: "https://calm-tiger-203.convex.cloud",
-            reference: "dev/ari/payment-v2",
-            region: "aws-us-east-1",
-          },
-          {
-            id: 23,
-            name: "swift-eagle-204",
-            deploymentType: "dev" as const,
-            kind: "cloud" as const,
-            isDefault: false,
-            projectId: mockProject.id,
-            creator: 2,
-            createTime: NOW - 48000000,
-            class: "s256",
-            deploymentUrl: "https://swift-eagle-204.convex.cloud",
-            reference: "dev/ari/onboarding",
-            region: "aws-us-east-1",
-          },
         ] satisfies PlatformDeploymentResponse[],
         isLoading: false,
       });
@@ -861,5 +810,157 @@ export const MultipleDevDeploymentsSelector: Story = {
     const selectDeployment =
       await within(canvasElement).findByTestId("select-deployment");
     await userEvent.click(selectDeployment);
+    // The palette renders in a portal outside the canvas; wait until its
+    // deployment list is populated so the screenshot captures the open menu.
+    const body = within(canvasElement.ownerDocument.body);
+    await body.findByText("dev/ari/auth-flow");
+  },
+};
+
+/**
+ * The deployment switcher, on a project with just a production and a personal
+ * development deployment.
+ */
+export const DeploymentSwitcher: Story = {
+  parameters: {
+    ...meta.parameters,
+    screenshotSelector: "#select-deployment, .command-palette--anchored",
+    // The menu's list is capped at min(330px, 40vh): at the default 700px-tall
+    // viewport the 40vh half of that clips the last deployment.
+    screenshotViewport: { width: 1024, height: 1000 },
+  },
+  play: async ({ canvasElement }) => {
+    await userEvent.click(
+      await within(canvasElement).findByTestId("select-deployment"),
+    );
+    await screen.findByText("Deployments");
+  },
+};
+
+/**
+ * The deployment switcher on a project that also has a preview deployment, as
+ * created by a PR build.
+ */
+export const PreviewDeploymentSwitcher: Story = {
+  parameters: {
+    ...meta.parameters,
+    screenshotSelector: "#select-deployment, .command-palette--anchored",
+    screenshotViewport: { width: 1024, height: 1000 },
+  },
+  decorators: [
+    (storyFn) => {
+      mocked(useDeployments).mockReturnValue({
+        deployments: [
+          {
+            id: 11,
+            name: "happy-capybara-123",
+            deploymentType: "dev",
+            kind: "cloud",
+            isDefault: true,
+            projectId: mockProject.id,
+            creator: 1,
+            createTime: NOW,
+            class: "s256",
+            deploymentUrl: "https://happy-capybara-123.convex.cloud",
+            reference: "dev/nicolas",
+            region: "aws-us-east-1",
+          },
+          {
+            id: 12,
+            name: "musical-otter-456",
+            deploymentType: "prod",
+            kind: "cloud",
+            isDefault: true,
+            projectId: mockProject.id,
+            creator: 1,
+            createTime: NOW,
+            class: "s256",
+            deploymentUrl: "https://musical-otter-456.convex.cloud",
+            reference: "production",
+            region: "aws-us-east-1",
+          },
+          {
+            id: 13,
+            name: "fearless-gerbil-789",
+            deploymentType: "preview",
+            kind: "cloud",
+            isDefault: false,
+            projectId: mockProject.id,
+            creator: 1,
+            createTime: NOW - 6 * 60 * 1000,
+            class: "s256",
+            deploymentUrl: "https://fearless-gerbil-789.convex.cloud",
+            reference: "preview/my-cool-feature",
+            previewIdentifier: "my-cool-feature",
+            region: "aws-us-east-1",
+          },
+        ] satisfies PlatformDeploymentResponse[],
+        isLoading: false,
+      });
+      return storyFn();
+    },
+  ],
+  play: async ({ canvasElement }) => {
+    await userEvent.click(
+      await within(canvasElement).findByTestId("select-deployment"),
+    );
+    await screen.findByText("Deployments");
+  },
+};
+
+const otherProjects = [
+  mockProject,
+  {
+    id: 8,
+    teamId: mockTeam.id,
+    name: "Marketing site",
+    slug: "marketing-site",
+  },
+  {
+    id: 9,
+    teamId: mockTeam.id,
+    name: "Internal tools",
+    slug: "internal-tools",
+  },
+] as ReturnType<typeof useInfiniteProjects>["projects"];
+
+/**
+ * The project switcher the header's project name opens.
+ */
+export const ProjectSwitcher: Story = {
+  parameters: {
+    ...meta.parameters,
+    screenshotSelector:
+      '[aria-label="Switch project"], .command-palette--anchored',
+    screenshotViewport: { width: 1024, height: 1000 },
+  },
+  decorators: [
+    (storyFn) => {
+      // `useInfiniteProjects` is server-backed: its rows bypass the palette's
+      // client-side filter, so the mock filters by the search argument itself.
+      mocked(useInfiniteProjects).mockImplementation(
+        (_teamId, searchQuery = "") => {
+          const q = searchQuery.trim().toLowerCase();
+          return {
+            projects: otherProjects.filter(
+              (p) => !q || `${p.name} ${p.slug}`.toLowerCase().includes(q),
+            ),
+            isLoading: false,
+            isLoadingMore: false,
+            hasMore: false,
+            loadMore: () => {},
+            debouncedQuery: searchQuery,
+            pageSize: 20,
+          };
+        },
+      );
+      return storyFn();
+    },
+  ],
+  play: async () => {
+    // The header is rendered by the docs decorator and the palette portals to
+    // document.body, so query the whole screen rather than the story canvas.
+    await userEvent.click(await screen.findByLabelText("Switch project"));
+    await screen.findByText("Create Project…");
   },
 };

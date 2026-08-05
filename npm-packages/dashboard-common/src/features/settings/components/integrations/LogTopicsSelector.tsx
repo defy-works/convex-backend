@@ -79,8 +79,7 @@ const ALL_LOG_TOPICS: LogTopic[] = TOPICS.map((t) => t.key);
  * `null` value shows every selectable topic as checked. Any interaction emits an
  * explicit array of the checked topics.
  *
- * Renders nothing unless the `logStreamTopicFilters` flag is enabled. The
- * `custom_audit` topic is gated behind a team entitlement.
+ * The `custom_audit` topic is gated behind a team entitlement.
  */
 export function LogTopicsSelector({
   value,
@@ -91,16 +90,13 @@ export function LogTopicsSelector({
   onChange: (value: LogTopic[] | null) => void;
   error?: string;
 }) {
-  const { logStreamTopicFiltersEnabled, useCurrentTeam, useTeamEntitlements } =
-    useContext(DeploymentInfoContext);
+  const { useCurrentTeam, useTeamEntitlements } = useContext(
+    DeploymentInfoContext,
+  );
   const team = useCurrentTeam();
   const entitlements = useTeamEntitlements(team?.id);
   const customAuditEnabled =
     entitlements?.customAuditLogsInLogStreamsConfigEnabled ?? false;
-
-  if (!logStreamTopicFiltersEnabled) {
-    return null;
-  }
 
   // A `null` value means "subscribed to all topics", which (matching the
   // backend) excludes the opt-in `custom_audit` topic. Render it as every
@@ -123,10 +119,14 @@ export function LogTopicsSelector({
           const isChecked = selected.has(topic.key);
           // Block adding entitlement-gated topics, but still allow removing
           // one that was somehow already subscribed.
-          const disabled =
-            !!topic.requiresCustomAuditEntitlement &&
-            !customAuditEnabled &&
-            !isChecked;
+          const missingCustomAuditEntitlement =
+            !!topic.requiresCustomAuditEntitlement && !customAuditEnabled;
+          const disabled = missingCustomAuditEntitlement && !isChecked;
+          const customAuditTooltip = missingCustomAuditEntitlement
+            ? isChecked
+              ? " This topic is selected but ignored because your plan doesn't have access to custom audit logs."
+              : " Your plan doesn't have access to custom audit logs."
+            : "";
           return (
             <label
               key={topic.key}
@@ -152,9 +152,7 @@ export function LogTopicsSelector({
               <span className="font-mono">{topic.key}</span>
               <HelpTooltip>
                 {topic.description}
-                {topic.requiresCustomAuditEntitlement &&
-                  !customAuditEnabled &&
-                  " Your plan doesn't have access to custom audit logs."}
+                {customAuditTooltip}
                 {topic.docsUrl && (
                   <>
                     {" "}

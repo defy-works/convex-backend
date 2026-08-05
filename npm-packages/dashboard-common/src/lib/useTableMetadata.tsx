@@ -1,43 +1,73 @@
-import { useCallback, useEffect } from "react";
-import { Shape } from "shapes";
+import { useCallback, useEffect, useMemo } from "react";
 import { NextRouter, useRouter } from "next/router";
-import { useTableShapes } from "@common/lib/deploymentApi";
+import { useQuery } from "convex/react";
+import { createGlobalState } from "react-use";
+import udfs from "@common/udfs";
+import { useNents } from "@common/lib/useNents";
+import { isUserTableName } from "@common/lib/utils";
+
+// Remembers each table's most recent (already base64-encoded) `filters` query
+// param so switching back to a table restores its filters. Populated as you
+// leave a table and read when you arrive; the URL stays the source of truth.
+export const useFilterMap = createGlobalState(
+  {} as Record<string, string | undefined>,
+);
 
 export type TableMetadata = {
   name: string | null;
-  tables: Map<string, Shape>;
+  tableNames: string[];
   selectTable: (table: string) => void;
 };
 
 export function useTableMetadata(): TableMetadata | undefined {
   const router = useRouter();
+  const { selectedNent } = useNents();
 
-  // Gets initial Table Shapes (names, columns)
-  const { tables } = useTableShapes();
+  const tableMapping = useQuery(udfs.getTableMapping.default, {
+    componentId: selectedNent?.id ?? null,
+  });
+
+  const tableNames = useMemo(
+    () =>
+      tableMapping === undefined
+        ? undefined
+        : Object.values(tableMapping).filter(isUserTableName).sort(),
+    [tableMapping],
+  );
+
+  const [filterMap, setFilterMap] = useFilterMap();
 
   const selectTable = useCallback(
     (table: string) => {
-      if (tables === undefined) {
+      if (tableNames === undefined) {
         return;
       }
-      if (table === router.query.table) {
+      const currentTable = router.query.table as string | undefined;
+      if (table === currentTable) {
         return;
+      }
+      // Remember the table we're leaving so we can restore its filters, and
+      // restore the destination table's filters if we've seen them before.
+      if (currentTable) {
+        setFilterMap((prev) => ({
+          ...prev,
+          [currentTable]: router.query.filters as string | undefined,
+        }));
       }
       void shallowNavigate(router, {
         ...router.query,
         table,
-        filters: undefined,
+        filters: filterMap[table],
       });
     },
-    [tables, router],
+    [tableNames, router, filterMap, setFilterMap],
   );
 
-  if (tables === undefined) {
+  if (tableNames === undefined) {
     return undefined;
   }
 
   const tableNameFromURL = router.query.table as string | undefined;
-  const tableNames = Array.from(tables.keys());
   const firstTableName = (tableNames[0] as string | undefined) ?? null;
 
   const shownTableName =
@@ -47,7 +77,7 @@ export function useTableMetadata(): TableMetadata | undefined {
 
   return {
     name: shownTableName,
-    tables,
+    tableNames,
     selectTable,
   };
 }
