@@ -32,10 +32,28 @@ COPY rust-toolchain /rust-toolchain
 RUN rustup self update && rustup toolchain install && cargo search -q convex
 
 WORKDIR /convex
+
+# Provision protoc via mise before the cargo layers (version + checksum from
+# mise.toml/mise.lock; mise's own version from min_version). mise lives only in
+# this build stage, never the runtime image. $PROTOC is set per cargo RUN below
+# so it's available to both `cargo chef cook` and the real build.
+#
+# The orchestrator reaches `pb` — whose build script shells out to protoc —
+# through `keybroker` and `common`, so this is required even though nothing
+# here defines protos of its own. Mirrors Dockerfile.backend.
+COPY mise.toml mise.lock ./
+ENV MISE_INSTALL_PATH="/usr/local/bin/mise" \
+    MISE_DATA_DIR="/mise" \
+    MISE_CONFIG_DIR="/mise" \
+    MISE_CACHE_DIR="/mise/cache"
+RUN curl -fsSL https://mise.run | MISE_VERSION="v$(sed -nE 's/^min_version = "([^"]+)"/\1/p' mise.toml)" sh \
+    && mise trust && mise install --locked protoc
+
 COPY --from=chef /tmp/recipe.json recipe.json
 RUN --mount=type=cache,target=/convex/target/ \
     --mount=type=cache,target=/usr/local/cargo/git/db \
     --mount=type=cache,target=/usr/local/cargo/registry/ \
+    PROTOC="$(mise which protoc)" \
     cargo chef cook --release --recipe-path recipe.json
 
 # Copy the rest of the workspace and build the orchestrator binary.
@@ -52,6 +70,7 @@ RUN --mount=type=cache,target=/convex/target/ \
 # heredoc and `cp` happily copies the chef-cook stub binary, producing a
 # broken image that exits silently at runtime.
 set -e
+export PROTOC="$(mise which protoc)"
 # COPY . . above can leave .rs files with mtimes older than the target/
 # artifacts produced by chef cook. Touch every source file so cargo's
 # incremental build correctly recompiles against real sources instead of
