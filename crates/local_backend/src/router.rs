@@ -101,6 +101,7 @@ use crate::{
         internal_action_post,
         internal_mutation_post,
         internal_query_post,
+        issue_llm_gateway_jwt,
         schedule_job,
         storage_delete,
         storage_generate_upload_url,
@@ -237,6 +238,15 @@ impl Modify for SecurityAddon {
 #[derive(OpenApi)]
 #[openapi(
     modifiers(&SecurityAddon),
+    // The data sync selection tree must be registered explicitly: these types
+    // are referenced only from flattened maps' `additionalProperties`, which
+    // utoipa's derived `schemas()` fails to register
+    // (https://github.com/juhaku/utoipa/issues/1330).
+    components(schemas(
+        common::types::streaming_export::selection::ComponentSelection,
+        common::types::streaming_export::selection::TableSelection,
+        common::types::streaming_export::selection::ColumnSelection,
+    )),
     info(
         title = "Convex Deployment API",
         version = "1.0.0",
@@ -376,9 +386,12 @@ pub fn router(st: LocalAppState) -> Router {
             .merge(platform_router())
             .merge(crate::deployment_audit_log::platform_router())
             .merge(crate::deployment_info::platform_router())
+            .merge(crate::usage_limits::platform_router())
             .merge(crate::canonical_urls::platform_router())
             .merge(crate::log_sinks::platform_router())
             .merge(crate::deployment_state::platform_router())
+            // Streaming export ("data sync") API at /api/v1/data/sync.
+            .merge(crate::streaming_export::platform_router())
             .split_for_parts();
     let platform_openapi_spec = platform_openapi.to_pretty_json().unwrap();
     let platform_routes = Router::new().merge(platform_routes).route(
@@ -464,6 +477,7 @@ where
         .route("/query", post(internal_query_post))
         .route("/mutation", post(internal_mutation_post))
         .route("/action", post(internal_action_post))
+        .route("/llm_gateway_jwt", post(issue_llm_gateway_jwt))
         .route("/schedule_job", post(schedule_job))
         .route("/vector_search", post(vector_search))
         .route("/cancel_job", post(cancel_developer_job))

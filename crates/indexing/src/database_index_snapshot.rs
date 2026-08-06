@@ -17,7 +17,10 @@ use common::{
         },
         IndexConfig,
     },
-    document::PackedDocument,
+    document::{
+        IndexKeyBuffer,
+        PackedDocument,
+    },
     document_index_keys::DatabaseIndexWrite,
     index::IndexKeyBytes,
     interval::{
@@ -89,6 +92,22 @@ struct IndexCacheReader {
     reader: Arc<dyn IndexReader>,
     handle: IndexCacheHandle,
     index_registry: ReadOnly<IndexRegistry>,
+}
+
+impl IndexCacheHandle {
+    /// Constructs an `IndexReader` that reads through from `reader` and caches
+    /// the result.
+    pub fn caching_index_reader(
+        self,
+        reader: Arc<dyn IndexReader>,
+        index_registry: IndexRegistry,
+    ) -> impl IndexReader {
+        IndexCacheReader {
+            reader,
+            handle: self,
+            index_registry: ReadOnly::new(index_registry),
+        }
+    }
 }
 
 /// Deliberately logs only document ids, timestamps, and sizes — never index
@@ -305,11 +324,7 @@ impl DatabaseIndexSnapshot {
             .map(|c| c.cache)
             .unwrap_or(DatabaseIndexSnapshotCache::new());
         let reader = if let Some(handle) = index_cache_handle {
-            Arc::new(IndexCacheReader {
-                reader,
-                handle,
-                index_registry: ReadOnly::new(index_registry.clone()),
-            })
+            Arc::new(handle.caching_index_reader(reader, index_registry.clone()))
         } else {
             reader
         };
@@ -562,6 +577,7 @@ impl DatabaseIndexSnapshot {
         cache_miss_results: Vec<(Timestamp, PackedDocument)>,
         interval_read: Interval,
     ) {
+        let mut buffer = IndexKeyBuffer::new();
         for (ts, doc) in cache_miss_results {
             // Populate all index point lookups that can result in the given
             // document.
@@ -576,7 +592,7 @@ impl DatabaseIndexSnapshot {
                 else {
                     continue;
                 };
-                let index_key = doc.index_key_owned(&fields[..]);
+                let index_key = doc.index_key(&fields[..], &mut buffer);
                 self.cache.populate(
                     index.id(),
                     index.metadata.name.is_by_id(),
@@ -652,54 +668,6 @@ impl DatabaseIndexSnapshot {
 
     pub fn timestamp(&self) -> RepeatableTimestamp {
         self.reader.timestamp()
-    }
-
-    /// Scan a page of the index, checking in-memory indexes first and falling
-    /// back to the persistence reader. Unlike `range_batch`, this skips the
-    /// per-transaction cache. Later this will be served by the IndexCache.
-    pub async fn index_page(
-        &self,
-        index_id: IndexId,
-        tablet_id: TabletId,
-        interval: &Interval,
-        order: Order,
-        max_size: usize,
-    ) -> anyhow::Result<(
-        Vec<(IndexKeyBytes, Timestamp, LazyDocument)>,
-        CursorPosition,
-    )> {
-        // Try to serve from in-memory indexes.
-        let table_name = self.table_mapping.tablet_to_name()(tablet_id)?;
-        if let Some(range) = self
-            .in_memory_indexes
-            .range(index_id, interval, order, tablet_id, table_name)
-            .await?
-        {
-            let results = range
-                .into_iter()
-                .take(max_size)
-                .map(|(key, ts, doc)| (key, ts, LazyDocument::Memory(doc)))
-                .collect::<Vec<_>>();
-            let cursor = if results.len() >= max_size {
-                CursorPosition::After(results.last().unwrap().0.clone())
-            } else {
-                CursorPosition::End
-            };
-            return Ok((results, cursor));
-        }
-        let index_page = self
-            .reader
-            .index_page(index_id, tablet_id, interval, order, max_size)
-            .await?;
-        let results = index_page
-            .entries
-            .into_iter()
-            .map(|entry| {
-                let IndexEntry { key, ts, value } = Arc::unwrap_or_clone(entry);
-                (key, ts, LazyDocument::Packed(value))
-            })
-            .collect();
-        Ok((results, index_page.cursor))
     }
 }
 
@@ -806,7 +774,7 @@ impl DatabaseIndexSnapshotCache {
         &mut self,
         index_id: IndexId,
         is_by_id: bool,
-        index_key_bytes: IndexKeyBytes,
+        index_key_bytes: &IndexKeyBytes,
         ts: Timestamp,
         doc: PackedDocument,
     ) -> bool {
@@ -827,7 +795,7 @@ impl DatabaseIndexSnapshotCache {
                 total_size: if is_by_id { Some(0) } else { None },
                 ..Default::default()
             });
-        index_docs.insert(index_key_bytes, ts, doc);
+        index_docs.insert(index_key_bytes.clone(), ts, doc);
         index_docs.interval_set.add(interval);
         true
     }
@@ -916,7 +884,7 @@ impl DatabaseIndexSnapshotCache {
         write: &DatabaseIndexWrite,
     ) -> bool {
         // Remove old entry from cache.
-        if let Some(old_key) = write.update.old.as_ref()
+        if let Some(old_key) = &write.update.old
             && let Some(index_docs) = self.documents.get_mut(&index_id)
             && let Some((_, old_doc)) = index_docs.remove(old_key)
             && is_by_id
@@ -925,15 +893,13 @@ impl DatabaseIndexSnapshotCache {
         }
         // Insert new entry if not a delete, but only for indexes where the
         // key falls within the range the cache is already tracking.
-        if let Some(doc) = write.new_document.clone()
-            && let Some(new_key) = write.update.new.clone()
-            && self
-                .documents
-                .get(&index_id)
-                .is_some_and(|index_docs| index_docs.interval_set.contains(&new_key))
+        if let Some(doc) = &write.new_document
+            && let Some(new_key) = &write.update.new
+            && let Some(index_docs) = self.documents.get(&index_id)
+            && index_docs.interval_set.contains(new_key)
         {
             // If the cache is too big, empty the cache
-            if !self.populate(index_id, is_by_id, new_key, ts, doc) {
+            if !self.populate(index_id, is_by_id, new_key, ts, doc.clone()) {
                 log_index_cache_cleared();
                 *self = Self::new();
                 return false;

@@ -21,6 +21,7 @@ use common::{
     },
     runtime::Runtime,
     types::{
+        IndexId,
         IndexName,
         StorageUuid,
     },
@@ -32,6 +33,7 @@ use database::{
         TableFilter,
     },
     unauthorized_error,
+    DataSyncStatus,
     DatabaseSnapshot,
     IndexModel,
     ResolvedQuery,
@@ -41,7 +43,6 @@ use database::{
     Transaction,
 };
 use errors::ErrorMetadata;
-use futures::TryStreamExt;
 use imbl::ordmap;
 use keybroker::Identity;
 use maplit::btreemap;
@@ -57,6 +58,7 @@ use value::{
     ResolvedDocumentId,
     TableName,
     TableNamespace,
+    TabletId,
 };
 
 use self::virtual_table::FileStorageDocMapper;
@@ -258,19 +260,17 @@ impl<'a, RT: Runtime> FileStorageModel<'a, RT> {
                     )
                     .context(ErrorMetadata::bad_request(
                         "InvalidArgument",
-                        format!(
-                            "Invalid storage ID. Storage ID cannot be an ID on any table other \
-                             than '_storage'.",
-                        ),
+                        "Invalid storage ID. Storage ID cannot be an ID on any table other than \
+                         '_storage'."
+                            .to_string(),
                     ))?;
                 anyhow::ensure!(
                     table_name == FILE_STORAGE_VIRTUAL_TABLE,
                     ErrorMetadata::bad_request(
                         "InvalidArgument",
-                        format!(
-                            "Invalid storage ID. Storage ID cannot be an ID on any table other \
-                             than '_storage'.",
-                        ),
+                        "Invalid storage ID. Storage ID cannot be an ID on any table other than \
+                         '_storage'."
+                            .to_string(),
                     )
                 );
                 let table_mapping = self.tx.table_mapping().clone();
@@ -316,49 +316,79 @@ impl<'a, RT: Runtime> FileStorageModel<'a, RT> {
     }
 }
 
+/// The `_file_storage` tablets to iterate, mapped to their `by_id` index id.
+async fn file_storage_target_tables<RT: Runtime>(
+    identity: &Identity,
+    snapshot: &DatabaseSnapshot<RT>,
+) -> anyhow::Result<BTreeMap<TabletId, IndexId>> {
+    let mut tx = snapshot.begin_tx(
+        identity.clone(),
+        Arc::new(SearchNotEnabled),
+        FunctionUsageTracker::new(),
+        virtual_system_mapping().clone(),
+    )?;
+    let by_id_indexes = IndexModel::new(&mut tx).by_id_indexes().await?;
+    let table_mapping = tx.table_mapping();
+    table_mapping
+        .iter()
+        .filter(|(tablet_id, _, _, table_name)| {
+            **table_name == FILE_STORAGE_TABLE && table_mapping.is_active(*tablet_id)
+        })
+        .map(|(tablet_id, ..)| {
+            anyhow::Ok((
+                tablet_id,
+                *by_id_indexes
+                    .get(&tablet_id)
+                    .context("_file_storage by_id index not found")?,
+            ))
+        })
+        .try_collect()
+}
+
+/// Total size of all `_file_storage` documents across the deployment.
+///
+/// Computed with the `DataSyncIterator`, which picks its own consistent
+/// snapshot (`Synced { ts }`) at the *end* of the sync rather than reading at
+/// `snapshot`'s timestamp — `snapshot` only supplies the set of tablets to
+/// iterate.
 #[fastrace::trace]
 pub async fn get_total_file_storage_size<RT: Runtime>(
     identity: &Identity,
-    db: &DatabaseSnapshot<RT>,
+    snapshot: &DatabaseSnapshot<RT>,
 ) -> anyhow::Result<u64> {
-    let tablet_id_to_by_id_index = {
-        let mut tx = db.begin_tx(
-            identity.clone(),
-            Arc::new(SearchNotEnabled),
-            FunctionUsageTracker::new(),
-            virtual_system_mapping().clone(),
-        )?;
-        let by_id_indexes = IndexModel::new(&mut tx).by_id_indexes().await?;
-        let table_mapping = tx.table_mapping();
-        let tablet_id_to_by_id_index: BTreeMap<_, _> = table_mapping
-            .iter()
-            .filter(|(tablet_id, _, _, table_name)| {
-                **table_name == FILE_STORAGE_TABLE && table_mapping.is_active(*tablet_id)
-            })
-            .map(|(tablet_id, ..)| {
-                anyhow::Ok((
-                    tablet_id,
-                    *by_id_indexes
-                        .get(&tablet_id)
-                        .context("_file_storage by_id index not found")?,
-                ))
-            })
-            .try_collect()?;
-        tablet_id_to_by_id_index
-    };
-    let mut table_iterator = db
-        .table_iterator()
-        .multi(tablet_id_to_by_id_index.keys().copied().collect());
-    let mut total_size = 0;
-    for (tablet_id, by_id_index) in tablet_id_to_by_id_index {
-        let mut table_stream =
-            Box::pin(table_iterator.stream_documents_in_table(tablet_id, by_id_index, None));
-        while let Some(storage_document) = table_stream.try_next().await? {
-            let storage_entry: ParsedDocument<FileStorageEntry> = storage_document.value.parse()?;
-            total_size += storage_entry.size as u64;
+    let target_tables = file_storage_target_tables(identity, snapshot).await?;
+
+    // Drive the data sync iterator to a consistent snapshot, keeping a running
+    // total via deltas. It may emit a document more than once (a `ts` page
+    // re-emits a captured document at a newer revision), so we add each
+    // revision's size and subtract its predecessor's — supplied only when the
+    // iterator previously emitted that predecessor. Memory stays constant rather
+    // than materializing a per-document size map.
+    let iterator = snapshot.data_sync_iterator()?;
+    let mut total_size: i64 = 0;
+    let mut cursor = None;
+    loop {
+        let page = iterator
+            .next_page_with_prev_revs(cursor, &target_tables)
+            .await?;
+        for entry in page.entries {
+            if let Some(value) = entry.log_entry.value {
+                let storage_entry: ParsedDocument<FileStorageEntry> = value.parse()?;
+                total_size += storage_entry.size;
+            }
+            if let Some(prev_rev) = entry.prev_rev {
+                let prev_entry: ParsedDocument<FileStorageEntry> = prev_rev.parse()?;
+                total_size -= prev_entry.size;
+            }
         }
-        drop(table_stream);
-        table_iterator.unregister_table(tablet_id)?;
+        cursor = Some(page.cursor);
+        if let DataSyncStatus::Stale { .. } | DataSyncStatus::UpToDate { .. } = page.status {
+            break;
+        }
     }
-    Ok(total_size)
+
+    // A negative running total is only possible via a `DataSyncIterator` bug.
+    u64::try_from(total_size).map_err(|_| {
+        anyhow::anyhow!("DataSyncIterator returned negative file storage total {total_size}")
+    })
 }

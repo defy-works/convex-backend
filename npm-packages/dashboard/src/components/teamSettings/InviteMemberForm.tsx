@@ -12,12 +12,12 @@ import { useTeamEntitlements } from "api/teams";
 import { useHasCustomRolePermission, useListCustomRoles } from "api/roles";
 import { CUSTOM_ROLE_RESOURCE } from "lib/permissions";
 import { permissionDeniedTip } from "elements/permissionDeniedTip";
-import { useLaunchDarkly } from "hooks/useLaunchDarkly";
 import { TeamResponse } from "generatedApi";
 import { TeamMember } from "@convex-dev/platform/managementApi";
 import * as Yup from "yup";
 import { Link } from "@ui/Link";
 import { CustomRolesSelector } from "./CustomRolesSelector";
+import { TEAM_SETTINGS_SECTIONS } from "lib/sectionAnchors";
 
 type RoleChoice = "admin" | "developer" | "custom";
 
@@ -37,7 +37,6 @@ export function InviteMemberForm({
   const inviteAllowed = canInvite === true;
   const { subscription } = useTeamOrbSubscription(team.id);
   const entitlements = useTeamEntitlements(team.id);
-  const { customRoles: customRolesFlag } = useLaunchDarkly();
   const customRolesEnabled = entitlements?.customRolesEnabled ?? false;
   const canViewCustomRoles = useHasCustomRolePermission(
     team.id,
@@ -46,7 +45,7 @@ export function InviteMemberForm({
     true,
   );
   const customRolesAvailable =
-    customRolesFlag && customRolesEnabled && canViewCustomRoles === true;
+    customRolesEnabled && canViewCustomRoles === true;
   const { data: customRolesData } = useListCustomRoles(
     customRolesAvailable ? team.id : undefined,
   );
@@ -115,15 +114,11 @@ export function InviteMemberForm({
   const roleOptions = [
     { label: "Admin", value: "admin" as const, disabled: false },
     { label: "Developer", value: "developer" as const, disabled: false },
-    ...(customRolesFlag
-      ? [
-          {
-            label: "Custom",
-            value: "custom" as const,
-            disabled: customDisabledReason !== undefined,
-          },
-        ]
-      : []),
+    {
+      label: "Custom",
+      value: "custom" as const,
+      disabled: customDisabledReason !== undefined,
+    },
   ];
 
   const customSelectionEmpty =
@@ -133,7 +128,10 @@ export function InviteMemberForm({
     formState.values.role === "custom" && availableCustomRoles.length === 0;
 
   return (
-    <Sheet className="min-w-fit text-sm">
+    <Sheet
+      id={TEAM_SETTINGS_SECTIONS.inviteMember.id}
+      className="min-w-fit text-sm"
+    >
       <h3 className="mb-4">Invite Member</h3>
       <form onSubmit={formState.handleSubmit} aria-label="Invite team member">
         <div className="mb-4 flex w-full grow flex-wrap items-start gap-4 sm:flex-nowrap">

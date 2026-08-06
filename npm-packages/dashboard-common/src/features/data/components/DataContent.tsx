@@ -17,7 +17,6 @@ import {
   FilterExpression,
   SchemaJson,
 } from "system-udfs/convex/_system/frontend/lib/filters";
-import { Shape } from "shapes";
 import { LoadingLogo, LoadingTransition } from "@ui/Loading";
 import { Sheet } from "@ui/Sheet";
 import { Button } from "@ui/Button";
@@ -62,14 +61,12 @@ import { clearFilters } from "./DataFilters/clearFilters";
 
 export function DataContent({
   tableName,
-  shape,
   componentId,
   activeSchema,
   onDocumentsAdded,
 }: {
   tableName: string;
   componentId: string | null;
-  shape: Shape | null;
   activeSchema: SchemaJson | null;
   onDocumentsAdded?: (count: number) => void;
 }) {
@@ -126,7 +123,7 @@ export function DataContent({
 
   const selectedRows = useSelectionState(allIds, status === "Exhausted");
 
-  const tableFields = useTableFields(tableName, shape, activeSchema, data);
+  const tableFields = useTableFields(tableName, activeSchema, data);
 
   const columns = useDataColumns({
     tableName,
@@ -398,7 +395,7 @@ export function DataContent({
                       field: sortField,
                     }}
                     totalRowCount={
-                      router.query.filters
+                      filters
                         ? status === "Exhausted"
                           ? data.length
                           : // If we are filtering, we need to add 1 to the total row count to
@@ -489,6 +486,11 @@ export function DataContent({
                 />
               ))}
           </LoadingTransition>
+          {rowsThatAreSelected.size > 0 && !allRowsSelected && (
+            <p className="flex shrink-0 items-center gap-1 pt-1 text-xs text-content-secondary">
+              Shift-click a checkbox to select a range of documents
+            </p>
+          )}
         </div>
       </Panel>
       {popupEl}

@@ -65,9 +65,11 @@ use crate::{
         Isolate,
         CONVEX_SCHEME,
     },
+    module_cache::V8ModuleSource,
     request_scope::RequestScope,
     strings,
     timeout::Timeout,
+    ConcurrencyPermit,
 };
 
 pub struct SchemaEnvironment {
@@ -130,7 +132,7 @@ impl<RT: Runtime> IsolateEnvironment<RT> for SchemaEnvironment {
         &mut self,
         path: &str,
         _timeout: &mut Timeout<RT>,
-    ) -> anyhow::Result<Option<(Arc<FullModuleSource>, ModuleCodeCacheResult)>> {
+    ) -> anyhow::Result<Option<(Arc<V8ModuleSource>, ModuleCodeCacheResult)>> {
         if path != "schema.js" {
             anyhow::bail!(ErrorMetadata::bad_request(
                 "NoImportModuleInSchema",
@@ -138,10 +140,10 @@ impl<RT: Runtime> IsolateEnvironment<RT> for SchemaEnvironment {
             ))
         }
         Ok(Some((
-            Arc::new(FullModuleSource {
+            Arc::new(V8ModuleSource::new(FullModuleSource {
                 source: self.schema_bundle.clone(),
                 source_map: self.source_map.clone(),
-            }),
+            })),
             ModuleCodeCacheResult::noop(),
         )))
     }
@@ -193,9 +195,9 @@ impl<RT: Runtime> IsolateEnvironment<RT> for SchemaEnvironment {
 
 impl SchemaEnvironment {
     pub async fn evaluate_schema<RT: Runtime>(
-        client_id: String,
         isolate: &mut Isolate<RT>,
         context_cache: &mut ContextCache,
+        permit: ConcurrencyPermit,
         schema_bundle: ModuleSource,
         source_map: Option<SourceMap>,
         rng_seed: [u8; 32],
@@ -208,9 +210,8 @@ impl SchemaEnvironment {
             rng,
             unix_timestamp,
         };
-        let client_id = Arc::new(client_id);
         let (handle, state, mut timeout) = isolate
-            .start_request(context_cache, client_id, environment)
+            .start_request(context_cache, permit, environment)
             .await?;
         scope!(let handle_scope, isolate.isolate());
         let v8_context = context_cache.get_or_create_fresh_context(handle_scope);

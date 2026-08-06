@@ -9,6 +9,7 @@ use super::{
     aes,
     ec,
     ed25519,
+    hkdf,
     hmac,
     pbkdf2,
     rsa,
@@ -22,6 +23,7 @@ use crate::{
         DOMExceptionName,
         FromV8,
         ToV8,
+        TypeError,
     },
     strings,
 };
@@ -35,6 +37,10 @@ pub(super) enum CryptoKeyKind {
     Pbkdf2 {
         algorithm: pbkdf2::Pbkdf2Algorithm,
         key: pbkdf2::Pbkdf2Key,
+    },
+    Hkdf {
+        algorithm: hkdf::HkdfAlgorithm,
+        key: hkdf::HkdfKey,
     },
     Hmac {
         algorithm: hmac::HmacKeyAlgorithm,
@@ -119,7 +125,7 @@ impl FromV8 for CryptoKey {
         let input = input.try_cast::<v8::Object>()?;
         anyhow::ensure!(
             input.instance_of(scope, crypto_key_constructor.into()) == Some(true),
-            "TypeError"
+            TypeError::new("not of type CryptoKey")
         );
         let (id, ok) = input
             .get_internal_field(scope, 0)
@@ -179,6 +185,7 @@ impl ToV8 for CryptoKey {
         // looks ugly when inspected.
         let algorithm = match &self.kind {
             CryptoKeyKind::Pbkdf2 { algorithm, .. } => algorithm.to_v8(scope)?,
+            CryptoKeyKind::Hkdf { algorithm, .. } => algorithm.to_v8(scope)?,
             CryptoKeyKind::Hmac { algorithm, .. } => algorithm.to_v8(scope)?,
             CryptoKeyKind::Aes { algorithm, .. } => algorithm.to_v8(scope)?,
             CryptoKeyKind::RsaPrivate { algorithm, .. } => algorithm.to_v8(scope)?,

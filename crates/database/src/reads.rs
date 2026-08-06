@@ -25,7 +25,6 @@ use common::{
         TabletIndexName,
         Timestamp,
     },
-    value::ResolvedDocumentId,
     virtual_system_mapping::VirtualSystemMapping,
 };
 use errors::ErrorMetadata;
@@ -192,14 +191,14 @@ impl ReadSet {
         updates: impl Iterator<
             Item = (
                 &'a Timestamp,
-                impl Iterator<Item = &'a (ResolvedDocumentId, PackedDocumentUpdate)>,
+                impl Iterator<Item = &'a PackedDocumentUpdate>,
                 &'a WriteSource,
             ),
         >,
     ) -> Option<ConflictingReadWithWriteSource> {
         let mut buffer = IndexKeyBuffer::new();
         for (update_ts, updates, write_source) in updates {
-            for (_, update) in updates {
+            for update in updates {
                 if let Some(ref document) = update.new_document
                     && let Some(conflicting_read) = self.overlaps_document(document, &mut buffer)
                 {
@@ -451,13 +450,13 @@ impl TransactionReadSet {
         let skip_logging_usage = table_name.is_system();
         usage_tracker.track_database_egress(
             component_path.clone(),
-            table_name.to_string(),
+            &table_name,
             document_size as u64,
             skip_logging_usage,
         );
         usage_tracker.track_database_egress_v2(
             component_path.clone(),
-            table_name.to_string(),
+            &table_name,
             document_size as u64,
             table_name.is_system(),
         );
@@ -466,13 +465,13 @@ impl TransactionReadSet {
         {
             usage_tracker.track_virtual_table_egress(
                 component_path.clone(),
-                virtual_table_name.to_string(),
+                virtual_table_name,
                 document_size as u64,
             );
         }
         usage_tracker.track_database_egress_rows(
             component_path,
-            table_name.to_string(),
+            &table_name,
             1,
             skip_logging_usage,
         );

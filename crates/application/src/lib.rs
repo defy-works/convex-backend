@@ -145,6 +145,7 @@ use common::{
         ModuleEnvironment,
         NodeDependency,
         ObjectKey,
+        QueryInvocation,
         RepeatableTimestamp,
         TableName,
         Timestamp,
@@ -164,10 +165,12 @@ use database::{
     SchemaModel,
     Snapshot,
     TableModel,
+    TableShapes,
     Token,
     Transaction,
     UserFacingModel,
     WriteSource,
+    MAX_OCC_FAILURES,
 };
 use either::Either;
 use errors::{
@@ -316,8 +319,9 @@ use model::{
         types::UdfConfig,
         UdfConfigModel,
     },
+    usage_limits::UsageLimitsModel,
 };
-use node_executor::Actions;
+use node_executor::NodeActions;
 use parking_lot::Mutex;
 use rand::Rng;
 use roles::RequireDeploymentOp;
@@ -369,11 +373,18 @@ use udf::{
         CONVEX_ORIGIN,
         CONVEX_SITE,
     },
+    ActionCallbacks,
     HttpActionRequest,
     HttpActionResponseStreamer,
     HttpActionResult,
 };
 use usage_gauges_tracking_worker::UsageGaugesTrackingWorker;
+use usage_limits::{
+    UsageLimitNotifier,
+    UsageLimitRecorder,
+    UsageLimitWorker,
+    UsageMeter,
+};
 use usage_tracking::{
     FunctionUsageStats,
     FunctionUsageTracker,
@@ -396,7 +407,6 @@ use vector::{
 use crate::{
     application_function_runner::ApplicationFunctionRunner,
     exports::worker::ExportWorker,
-    periodic_backup::worker::PeriodicBackupWorker,
     function_log::{
         FunctionEntriesLog,
         FunctionExecutionLog,
@@ -404,6 +414,7 @@ use crate::{
     },
     log_visibility::LogVisibility,
     module_cache::ModuleCache,
+    periodic_backup::worker::PeriodicBackupWorker,
     redaction::{
         RedactedJsError,
         RedactedLogLines,
@@ -417,6 +428,7 @@ use crate::{
 pub mod admin_keys_cache;
 pub mod airbyte_import;
 pub mod api;
+pub mod app_metric_seed;
 pub mod application_function_runner;
 pub mod audit_logging;
 mod cache;
@@ -426,6 +438,7 @@ pub mod deployment_state;
 mod execute_query_timestamp;
 mod exports;
 pub mod function_log;
+pub mod llm_gateway_jwt;
 pub mod log_streaming;
 pub mod log_visibility;
 mod metrics;
@@ -600,6 +613,7 @@ pub struct Application<RT: Runtime> {
     application_storage: ApplicationStorage,
     usage_counter: UsageCounter,
     usage_event_logger: Arc<dyn UsageEventLogger>,
+    usage_meter: Arc<UsageMeter>,
     key_broker: KeyBroker,
     deployment: DeploymentMetadata,
     workers: WorkerHandles,
@@ -691,6 +705,7 @@ impl<RT: Runtime> Application<RT> {
         file_storage: FileStorage<RT>,
         application_storage: ApplicationStorage,
         usage_event_logger: Arc<dyn UsageEventLogger>,
+        usage_limit_notifier: Arc<dyn UsageLimitNotifier>,
         key_broker: KeyBroker,
         deployment: DeploymentMetadata,
         function_runner: Arc<dyn FunctionRunner<RT>>,
@@ -699,7 +714,7 @@ impl<RT: Runtime> Application<RT> {
         searcher: Arc<dyn Searcher>,
         segment_term_metadata_fetcher: Arc<dyn SegmentTermMetadataFetcher>,
         persistence: Arc<dyn Persistence>,
-        node_actions: Actions<RT>,
+        node_actions: NodeActions<RT>,
         log_visibility: Arc<dyn LogVisibility<RT>>,
         app_auth: Arc<ApplicationAuth<RT>>,
         cache: QueryCache,
@@ -709,7 +724,14 @@ impl<RT: Runtime> Application<RT> {
         export_provider: Arc<dyn ExportProvider<RT>>,
         deleted_tablet_receiver: tokio::sync::mpsc::Receiver<TabletId>,
         oidc_http_client: CachedHttpClient,
+        llm_gateway_jwt_minter: Option<Arc<dyn llm_gateway_jwt::LlmGatewayJwtMinter>>,
     ) -> anyhow::Result<Self> {
+        // Wrap the usage logger so usage is recorded for enforcement before
+        // being forwarded downstream.
+        let usage_meter = Arc::new(UsageMeter::new(runtime.system_time())?);
+        let usage_event_logger: Arc<dyn UsageEventLogger> =
+            UsageLimitRecorder::new(runtime.clone(), usage_meter.clone(), usage_event_logger);
+
         let deployment_name = deployment.name.clone();
         let deployment_region = deployment.region.clone();
         let module_cache =
@@ -805,6 +827,27 @@ impl<RT: Runtime> Application<RT> {
         )
         .await?;
 
+        let usage_limit_configs = UsageLimitsModel::new(&mut tx)
+            .list()
+            .await?
+            .into_iter()
+            .map(|config| {
+                let id = config.id();
+                (id, config.into_value())
+            })
+            .collect();
+        usage_meter.refresh_configs(usage_limit_configs);
+        let usage_limit_worker = Arc::new(Mutex::new(Some(runtime.spawn(
+            "usage_limit_worker",
+            UsageLimitWorker::start(
+                runtime.clone(),
+                database.clone(),
+                Arc::new(log_manager_client.clone()),
+                usage_limit_notifier.clone(),
+                usage_meter.clone(),
+            ),
+        ))));
+
         let function_log = FunctionExecutionLog::new(
             runtime.clone(),
             usage_counter.clone(),
@@ -831,6 +874,7 @@ impl<RT: Runtime> Application<RT> {
             audit_log_client.clone(),
             default_system_env_vars.clone(),
             cache,
+            llm_gateway_jwt_minter,
         ));
         function_runner.set_action_callbacks(runner.clone());
 
@@ -869,8 +913,7 @@ impl<RT: Runtime> Application<RT> {
         // Self-hosted periodic-backup worker. Reads `_periodic_backup_config`
         // every minute and inserts a `requested` row into `_exports` (which the
         // ExportWorker above then picks up) when the cron schedule is due.
-        let periodic_backup_worker =
-            PeriodicBackupWorker::start(runtime.clone(), database.clone());
+        let periodic_backup_worker = PeriodicBackupWorker::start(runtime.clone(), database.clone());
         let periodic_backup_worker = Arc::new(Mutex::new(Some(
             runtime.spawn("periodic_backup_worker", periodic_backup_worker),
         )));
@@ -919,11 +962,15 @@ impl<RT: Runtime> Application<RT> {
             periodic_backup_worker,
             system_table_cleanup_worker,
             migration_worker,
+            usage_limit_worker,
+            usage_limit_notifier,
         };
 
         let admin_keys_cache = {
             let mut tx = database.begin_system().await?;
-            let rows = model::admin_keys::AdminKeysModel::new(&mut tx).list().await?;
+            let rows = model::admin_keys::AdminKeysModel::new(&mut tx)
+                .list()
+                .await?;
             let entries = rows.into_iter().map(|doc| {
                 let id = doc.id().to_string();
                 let v = doc.into_value();
@@ -949,6 +996,7 @@ impl<RT: Runtime> Application<RT> {
             application_storage,
             usage_event_logger,
             usage_counter,
+            usage_meter,
             key_broker,
             deployment,
             workers,
@@ -961,6 +1009,10 @@ impl<RT: Runtime> Application<RT> {
             oidc_http_client,
             admin_keys_cache,
         })
+    }
+
+    pub fn usage_meter(&self) -> &Arc<UsageMeter> {
+        &self.usage_meter
     }
 
     pub fn runtime(&self) -> RT {
@@ -985,6 +1037,10 @@ impl<RT: Runtime> Application<RT> {
 
     pub fn runner(&self) -> Arc<ApplicationFunctionRunner<RT>> {
         self.runner.clone()
+    }
+
+    pub async fn issue_llm_gateway_jwt(&self) -> anyhow::Result<String> {
+        self.runner.issue_llm_gateway_jwt().await
     }
 
     pub fn metrics_log(&self, identity: &Identity) -> anyhow::Result<FunctionMetricsLog<'_, RT>> {
@@ -1044,7 +1100,7 @@ impl<RT: Runtime> Application<RT> {
         }
 
         let (events, next_cursor) = DeploymentAuditLogModel::new(&mut tx)
-            .list_events_from_time(from_ts_ms, cursor, limit)
+            .list_events_from_time(from_ts_ms, None, cursor, limit)
             .await?;
         let cursor = next_cursor.map(|cursor| self.key_broker().encrypt_cursor(&cursor));
         Ok((events, cursor))
@@ -1125,6 +1181,23 @@ impl<RT: Runtime> Application<RT> {
         self.database.latest_snapshot()
     }
 
+    /// The latest table shapes published by the `TableSummaryWorker`, or
+    /// `None` if the worker has not published yet. These may lag the latest
+    /// snapshot -- see [`TableShapes`].
+    pub fn table_shapes(&self) -> Option<Arc<TableShapes>> {
+        self.database.table_shapes()
+    }
+
+    /// Table shapes exact at `ts`, catching up the published shapes by
+    /// replaying the documents log if they are stale. `None` if the
+    /// `TableSummaryWorker` has not published yet.
+    pub async fn table_shapes_at(
+        &self,
+        ts: RepeatableTimestamp,
+    ) -> anyhow::Result<Option<Arc<TableShapes>>> {
+        self.database.table_shapes_at(ts).await
+    }
+
     pub fn app_auth(&self) -> &Arc<ApplicationAuth<RT>> {
         &self.app_auth
     }
@@ -1178,10 +1251,20 @@ impl<RT: Runtime> Application<RT> {
         args: SerializedArgs,
         identity: Identity,
         caller: FunctionCaller,
+        invocation: QueryInvocation,
     ) -> anyhow::Result<RedactedQueryReturn> {
         let ts = *self.now_ts_for_reads();
-        self.read_only_udf_at_ts(request_context, path, args, identity, ts, None, caller)
-            .await
+        self.read_only_udf_at_ts(
+            request_context,
+            path,
+            args,
+            identity,
+            ts,
+            None,
+            caller,
+            invocation,
+        )
+        .await
     }
 
     #[fastrace::trace]
@@ -1194,6 +1277,7 @@ impl<RT: Runtime> Application<RT> {
         ts: Timestamp,
         journal: Option<Option<String>>,
         caller: FunctionCaller,
+        invocation: QueryInvocation,
     ) -> anyhow::Result<RedactedQueryReturn> {
         let request_id = request_context.request_id.clone();
         let persistence_version = self.database.persistence_version();
@@ -1222,6 +1306,7 @@ impl<RT: Runtime> Application<RT> {
                     ts,
                     journal,
                     caller,
+                    invocation,
                 )
                 .await?
         });
@@ -1512,6 +1597,7 @@ impl<RT: Runtime> Application<RT> {
                     args,
                     identity,
                     caller,
+                    QueryInvocation::Fresh,
                 )
                 .await
                 .map(
@@ -2297,15 +2383,11 @@ impl<RT: Runtime> Application<RT> {
                 // Download root package
                 let existing_app_modules: BTreeMap<CanonicalizedModulePath, ModuleConfig> =
                     if let Some(root_pkg) = existing_root_package {
-                        download_package(
-                            self.modules_storage().clone(),
-                            root_pkg.storage_key.clone(),
-                            root_pkg.sha256.clone(),
-                        )
-                        .await?
-                        .into_values()
-                        .map(|v| (v.path.clone().canonicalize(), v))
-                        .collect()
+                        download_package(self.modules_storage().clone(), &root_pkg)
+                            .await?
+                            .into_values()
+                            .map(|v| (v.path.clone().canonicalize(), v))
+                            .collect()
                     } else {
                         anyhow::bail!("Failed to download source package for root component.");
                     };
@@ -2544,13 +2626,12 @@ impl<RT: Runtime> Application<RT> {
 
         let object_key = {
             let mut tx = self.begin(identity.clone()).await?;
-            let export = ExportsModel::new(&mut tx)
-                .get(export_id)
-                .await?
-                .context(ErrorMetadata::not_found(
+            let export = ExportsModel::new(&mut tx).get(export_id).await?.context(
+                ErrorMetadata::not_found(
                     "ExportNotFound",
                     format!("The requested export {export_id} was not found"),
-                ))?;
+                ),
+            )?;
             match export.into_value() {
                 Export::Completed { zip_object_key, .. } => zip_object_key,
                 Export::Failed { .. }
@@ -2559,9 +2640,7 @@ impl<RT: Runtime> Application<RT> {
                 | Export::Requested { .. } => {
                     anyhow::bail!(ErrorMetadata::bad_request(
                         "ExportNotComplete",
-                        format!(
-                            "Export {export_id} has not completed and cannot be restored"
-                        ),
+                        format!("Export {export_id} has not completed and cannot be restored"),
                     ))
                 },
             }
@@ -2574,9 +2653,7 @@ impl<RT: Runtime> Application<RT> {
             .await?
             .context(ErrorMetadata::not_found(
                 "ExportObjectNotFound",
-                format!(
-                    "The requested export object {object_key:?} was not found in storage"
-                ),
+                format!("The requested export object {object_key:?} was not found in storage"),
             ))?;
         let body_stream: BoxStream<'_, anyhow::Result<Bytes>> =
             stream.map_err(anyhow::Error::from).boxed();
@@ -3190,14 +3267,15 @@ impl<RT: Runtime> Application<RT> {
     /// unknown keys — on DB write failure, logs a warning and returns
     /// `Ok(())` (fail-open on adoption writes).
     async fn check_admin_key_tracked(&self, raw_admin_key: &str) -> anyhow::Result<()> {
-        use crate::admin_keys_cache::{
-            AdminKeyCheck,
-            CachedAdminKey,
-        };
         use keybroker::{
             admin_key_hash,
             admin_key_suffix,
             ADMIN_KEY_SUFFIX_LEN,
+        };
+
+        use crate::admin_keys_cache::{
+            AdminKeyCheck,
+            CachedAdminKey,
         };
 
         let hash = admin_key_hash(raw_admin_key, self.key_broker().deployment_secret());
@@ -3210,8 +3288,7 @@ impl<RT: Runtime> Application<RT> {
             AdminKeyCheck::Unknown => {
                 let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
                 let proposed_name = format!("Adopted {today}");
-                let proposed_suffix =
-                    Some(admin_key_suffix(raw_admin_key, ADMIN_KEY_SUFFIX_LEN));
+                let proposed_suffix = Some(admin_key_suffix(raw_admin_key, ADMIN_KEY_SUFFIX_LEN));
 
                 // adopt_result carries the row we ended up with plus a flag for
                 // whether we inserted it (to gate the audit log).
@@ -3230,12 +3307,13 @@ impl<RT: Runtime> Application<RT> {
                     if was_inserted {
                         self.commit_with_audit_log_events(
                             tx,
-                            vec![
-                                model::deployment_audit_log::types::DeploymentAuditLogEvent::AdminKeyAdopted {
-                                    id: entry.doc_id.clone(),
-                                    name: entry.name.clone(),
-                                },
-                            ],
+                            vec![DeploymentAuditLogEvent::AdminKeyAdopted {
+                                id: entry.doc_id.clone(),
+                                name: entry.name.clone(),
+                            }],
+                            // Adoption happens during key verification, with no
+                            // client request metadata plumbed through.
+                            RequestMetadata::system(),
                             "adopt_admin_key",
                         )
                         .await?;
@@ -3284,7 +3362,7 @@ impl<RT: Runtime> Application<RT> {
                                 "Admin identity returned from check_admin_key was not an admin."
                             );
                         };
-                        Identity::ActingUser(i, acting_user)
+                        Identity::ActingUser(i, acting_user.into())
                     },
                     None => admin_identity,
                 }
@@ -3525,6 +3603,7 @@ impl<RT: Runtime> Application<RT> {
         identity: Identity,
         request_metadata: RequestMetadata,
         write_source: impl Into<WriteSource>,
+        max_occ_failures: u32,
         f: F,
     ) -> anyhow::Result<(T, Timestamp)>
     where
@@ -3537,9 +3616,16 @@ impl<RT: Runtime> Application<RT> {
     {
         let db = self.database.clone();
         let (ts, (t, events), _stats) = db
-            .execute_with_occ_retries(identity, FunctionUsageTracker::new(), write_source, |tx| {
-                Self::insert_deployment_audit_log_events(tx, &f, request_metadata.clone()).into()
-            })
+            .execute_with_occ_retries(
+                identity,
+                FunctionUsageTracker::new(),
+                max_occ_failures,
+                write_source,
+                |tx| {
+                    Self::insert_deployment_audit_log_events(tx, &f, request_metadata.clone())
+                        .into()
+                },
+            )
             .await?;
         // Send deployment audit logs
         let logs = events
@@ -3570,9 +3656,16 @@ impl<RT: Runtime> Application<RT> {
     {
         let db = self.database.clone();
         let (ts, (t, events), stats) = db
-            .execute_with_occ_retries(identity, FunctionUsageTracker::new(), write_source, |tx| {
-                Self::insert_deployment_audit_log_events(tx, &f, request_metadata.clone()).into()
-            })
+            .execute_with_occ_retries(
+                identity,
+                FunctionUsageTracker::new(),
+                MAX_OCC_FAILURES,
+                write_source,
+                |tx| {
+                    Self::insert_deployment_audit_log_events(tx, &f, request_metadata.clone())
+                        .into()
+                },
+            )
             .await?;
         // Send deployment audit logs
         // TODO CX-5139 Remove this when audit logs are being processed in LogManager.
@@ -3591,6 +3684,7 @@ impl<RT: Runtime> Application<RT> {
         &'a self,
         identity: Identity,
         usage: FunctionUsageTracker,
+        max_failures: u32,
         write_source: impl Into<WriteSource>,
         f: F,
     ) -> anyhow::Result<(Timestamp, T)>
@@ -3600,7 +3694,7 @@ impl<RT: Runtime> Application<RT> {
         F: for<'b> Fn(&'b mut Transaction<RT>) -> ShortBoxFuture<'b, 'a, anyhow::Result<T>>,
     {
         self.database
-            .execute_with_occ_retries(identity, usage, write_source, f)
+            .execute_with_occ_retries(identity, usage, max_failures, write_source, f)
             .await
             .map(|(ts, t, _)| (ts, t))
     }

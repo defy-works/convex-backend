@@ -21,6 +21,7 @@ use common::{
         IndexName,
         MemberId,
         SystemStopState,
+        UsageLimitStopState,
     },
 };
 use errors::ErrorMetadata;
@@ -69,6 +70,7 @@ use crate::{
         NodeVersionDiff,
         SerializedNodeVersionDiff,
     },
+    usage_limits::types::UsageLimitConfig,
 };
 
 pub const DEPLOYMENT_AUDIT_LOG_TABLE: TableName = TableName::const_new("_deployment_audit_log");
@@ -127,6 +129,34 @@ pub enum DeploymentAuditLogEvent {
     },
     DeleteEnvironmentVariable {
         name: EnvVarName,
+    },
+    // The config fields are pinned to fixed values in proptests: generating
+    // nested arbitrary `UsageLimitConfig`s inside this large derived enum
+    // strategy overflows the test thread's stack.
+    CreateUsageLimit {
+        id: String,
+        config: UsageLimitConfig,
+    },
+    UpdateUsageLimit {
+        id: String,
+        previous: UsageLimitConfig,
+        current: UsageLimitConfig,
+    },
+    DeleteUsageLimit {
+        id: String,
+        config: UsageLimitConfig,
+    },
+    UsageLimitExceeded {
+        id: String,
+        config: UsageLimitConfig,
+    },
+    /// The deployment's usage-limit stop state changed: it was disabled by
+    /// crossing a `Disable` limit, or re-enabled after coming back under
+    /// every enabled `Disable` limit. Deployment-level, unlike the per-limit
+    /// `UsageLimitExceeded`.
+    ChangeUsageLimitStopState {
+        old_state: UsageLimitStopState,
+        new_state: UsageLimitStopState,
     },
     ReplaceEnvironmentVariable {
         previous_name: EnvVarName,
@@ -281,6 +311,9 @@ pub enum DeploymentAuditLogEvent {
     PeriodicBackupTriggered {
         export_id: String,
     },
+    CreateDataSync {
+        sync_id: String,
+    },
 }
 
 impl From<IndexDiff> for DeploymentAuditLogEvent {
@@ -322,65 +355,7 @@ impl DeploymentAuditLogEventKind {
 
 impl DeploymentAuditLogEvent {
     pub fn action(&self) -> &'static str {
-        match self {
-            DeploymentAuditLogEvent::CreateEnvironmentVariable { .. } => {
-                "create_environment_variable"
-            },
-            DeploymentAuditLogEvent::UpdateEnvironmentVariable { .. } => {
-                "update_environment_variable"
-            },
-            DeploymentAuditLogEvent::DeleteEnvironmentVariable { .. } => {
-                "delete_environment_variable"
-            },
-            DeploymentAuditLogEvent::ReplaceEnvironmentVariable { .. } => {
-                "replace_environment_variable"
-            },
-            DeploymentAuditLogEvent::UpdateCanonicalUrl { .. } => "update_canonical_url",
-            DeploymentAuditLogEvent::DeleteCanonicalUrl { .. } => "delete_canonical_url",
-            DeploymentAuditLogEvent::PushConfig { .. } => "push_config",
-            DeploymentAuditLogEvent::PushConfigWithComponents { .. } => {
-                "push_config_with_components"
-            },
-            DeploymentAuditLogEvent::BuildIndexes { .. } => "build_indexes",
-            DeploymentAuditLogEvent::ChangeDeploymentState { .. } => "change_deployment_state",
-            DeploymentAuditLogEvent::PauseDeployment => "pause_deployment",
-            DeploymentAuditLogEvent::UnpauseDeployment => "unpause_deployment",
-            DeploymentAuditLogEvent::ChangeSystemStopState { .. } => "change_system_stop_state",
-            DeploymentAuditLogEvent::SnapshotImport { .. } => "snapshot_import",
-            DeploymentAuditLogEvent::ClearTables => "clear_tables",
-            DeploymentAuditLogEvent::DeleteScheduledJobsTable { .. } => {
-                "delete_scheduled_jobs_table"
-            },
-            DeploymentAuditLogEvent::DeleteTables { .. } => "delete_tables",
-            DeploymentAuditLogEvent::DeleteComponent { .. } => "delete_component",
-            DeploymentAuditLogEvent::CancelAllScheduledFunctions { .. } => {
-                "cancel_all_scheduled_functions"
-            },
-            DeploymentAuditLogEvent::CancelScheduledFunction { .. } => "cancel_scheduled_function",
-            DeploymentAuditLogEvent::RequestExport { .. } => "request_export",
-            DeploymentAuditLogEvent::CancelExport { .. } => "cancel_export",
-            DeploymentAuditLogEvent::SetExportExpiration { .. } => "set_export_expiration",
-            DeploymentAuditLogEvent::CreateIntegration { .. } => "create_integration",
-            DeploymentAuditLogEvent::UpdateIntegration { .. } => "update_integration",
-            DeploymentAuditLogEvent::DeleteIntegration { .. } => "delete_integration",
-            DeploymentAuditLogEvent::AddDocuments { .. } => "add_documents",
-            DeploymentAuditLogEvent::DeleteDocuments { .. } => "delete_documents",
-            DeploymentAuditLogEvent::UpdateDocuments { .. } => "update_documents",
-            DeploymentAuditLogEvent::CreateTable { .. } => "create_table",
-            DeploymentAuditLogEvent::DeleteFiles { .. } => "delete_files",
-            DeploymentAuditLogEvent::GenerateUploadUrl { .. } => "generate_upload_url",
-            DeploymentAuditLogEvent::AdminKeyCreated { .. } => "admin_key_created",
-            DeploymentAuditLogEvent::AdminKeyAdopted { .. } => "admin_key_adopted",
-            DeploymentAuditLogEvent::AdminKeyRevoked { .. } => "admin_key_revoked",
-            DeploymentAuditLogEvent::AdminKeyRenamed { .. } => "admin_key_renamed",
-            DeploymentAuditLogEvent::PeriodicBackupConfigured { .. } => {
-                "periodic_backup_configured"
-            },
-            DeploymentAuditLogEvent::PeriodicBackupDisabled => "periodic_backup_disabled",
-            DeploymentAuditLogEvent::PeriodicBackupTriggered { .. } => {
-                "periodic_backup_triggered"
-            },
-        }
+        DeploymentAuditLogEventKind::from(self).action()
     }
 
     pub fn metadata(self) -> anyhow::Result<ConvexObject> {
@@ -389,6 +364,25 @@ impl DeploymentAuditLogEvent {
             | DeploymentAuditLogEvent::UpdateEnvironmentVariable { name }
             | DeploymentAuditLogEvent::DeleteEnvironmentVariable { name } => {
                 obj!("variable_name" => name.to_string())
+            },
+            DeploymentAuditLogEvent::CreateUsageLimit { id, config }
+            | DeploymentAuditLogEvent::DeleteUsageLimit { id, config }
+            | DeploymentAuditLogEvent::UsageLimitExceeded { id, config } => {
+                obj!(
+                    "id" => id,
+                    "config" => ConvexValue::try_from(config)?,
+                )
+            },
+            DeploymentAuditLogEvent::UpdateUsageLimit {
+                id,
+                previous,
+                current,
+            } => {
+                obj!(
+                    "id" => id,
+                    "previous" => ConvexValue::try_from(previous)?,
+                    "current" => ConvexValue::try_from(current)?,
+                )
             },
             DeploymentAuditLogEvent::ReplaceEnvironmentVariable {
                 previous_name,
@@ -458,6 +452,12 @@ impl DeploymentAuditLogEvent {
             },
             DeploymentAuditLogEvent::PauseDeployment => obj!(),
             DeploymentAuditLogEvent::UnpauseDeployment => obj!(),
+            DeploymentAuditLogEvent::ChangeUsageLimitStopState {
+                old_state,
+                new_state,
+            } => {
+                obj!("old_state" => old_state.to_string(), "new_state" => new_state.to_string())
+            },
             DeploymentAuditLogEvent::ChangeSystemStopState {
                 old_state,
                 new_state,
@@ -717,6 +717,9 @@ impl DeploymentAuditLogEvent {
             DeploymentAuditLogEvent::PeriodicBackupTriggered { export_id } => {
                 obj!("export_id" => export_id)
             },
+            DeploymentAuditLogEvent::CreateDataSync { sync_id } => {
+                obj!("sync_id" => sync_id)
+            },
         }
     }
 
@@ -881,6 +884,27 @@ impl TryFrom<ConvexObject> for DeploymentAuditLogEvent {
             },
             "update_environment_variable" => DeploymentAuditLogEvent::UpdateEnvironmentVariable {
                 name: remove_string(&mut fields, "variable_name")?.parse()?,
+            },
+            "create_usage_limit" => DeploymentAuditLogEvent::CreateUsageLimit {
+                id: remove_string(&mut fields, "id")?,
+                config: remove_object(&mut fields, "config")?,
+            },
+            "update_usage_limit" => DeploymentAuditLogEvent::UpdateUsageLimit {
+                id: remove_string(&mut fields, "id")?,
+                previous: remove_object(&mut fields, "previous")?,
+                current: remove_object(&mut fields, "current")?,
+            },
+            "delete_usage_limit" => DeploymentAuditLogEvent::DeleteUsageLimit {
+                id: remove_string(&mut fields, "id")?,
+                config: remove_object(&mut fields, "config")?,
+            },
+            "usage_limit_exceeded" => DeploymentAuditLogEvent::UsageLimitExceeded {
+                id: remove_string(&mut fields, "id")?,
+                config: remove_object(&mut fields, "config")?,
+            },
+            "change_usage_limit_stop_state" => DeploymentAuditLogEvent::ChangeUsageLimitStopState {
+                old_state: remove_string(&mut fields, "old_state")?.parse()?,
+                new_state: remove_string(&mut fields, "new_state")?.parse()?,
             },
             "replace_environment_variable" => DeploymentAuditLogEvent::ReplaceEnvironmentVariable {
                 previous_name: remove_string(&mut fields, "previous_variable_name")?.parse()?,
@@ -1178,6 +1202,9 @@ impl TryFrom<ConvexObject> for DeploymentAuditLogEvent {
             "periodic_backup_triggered" => {
                 let export_id = remove_string(&mut fields, "export_id")?;
                 DeploymentAuditLogEvent::PeriodicBackupTriggered { export_id }
+            },
+            "create_data_sync" => DeploymentAuditLogEvent::CreateDataSync {
+                sync_id: remove_string(&mut fields, "sync_id")?,
             },
             _ => anyhow::bail!("action {action} unrecognized"),
         };

@@ -21,6 +21,7 @@ use anyhow::{
     Context,
     Error,
 };
+use arc_swap::ArcSwapOption;
 use async_lru::async_lru::AsyncLru;
 use cmd_util::env::env_config;
 use common::{
@@ -53,6 +54,10 @@ use common::{
     index::IndexKeyBytes,
     interval::Interval,
     knobs::{
+        DATA_SYNC_BY_ID_FRESHNESS,
+        DATA_SYNC_MAX_ROWS_READ,
+        DATA_SYNC_PAGE_BYTES_LIMIT,
+        DATA_SYNC_PAGE_SIZE_LIMIT,
         DEFAULT_DOCUMENTS_PAGE_SIZE,
         LIST_SNAPSHOT_MAX_AGE_SECS,
         SNAPSHOT_LIST_TIME_LIMIT,
@@ -139,6 +144,10 @@ use indexing::{
         IndexCacheHandle,
         IndexCacheHandleBuilder,
     },
+    index_reader::{
+        IndexEntry,
+        IndexReader,
+    },
     index_registry::IndexRegistry,
 };
 use itertools::Itertools;
@@ -202,7 +211,7 @@ use crate::{
     snapshot_manager::{
         Snapshot,
         SnapshotManager,
-        TableSummaries,
+        TableCounts,
     },
     stack_traces::StackTrace,
     streaming_export_selection::{
@@ -223,6 +232,8 @@ use crate::{
     table_summary::{
         self,
         BootstrapKind,
+        TableShapes,
+        TableSummaries,
     },
     table_usage::TablesUsage,
     token::Token,
@@ -239,6 +250,7 @@ use crate::{
     BootstrapComponentsModel,
     ComponentRegistry,
     ComponentsTable,
+    DataSyncIterator,
     MultiTableIterator,
     SchemasTable,
     TableIterator,
@@ -293,6 +305,9 @@ pub struct Database<RT: Runtime> {
     subscriptions: SubscriptionsClient,
     log: LogReader,
     snapshot_manager: Reader<SnapshotManager>,
+    /// Table shapes maintained asynchronously by the `TableSummaryWorker`,
+    /// `None` until the worker has published for the first time.
+    table_shapes: Arc<ArcSwapOption<TableShapes>>,
     pub(crate) runtime: RT,
     reader: Arc<dyn PersistenceReader>,
     write_commits_since_load: Arc<AtomicUsize>,
@@ -336,6 +351,10 @@ pub struct DatabaseSnapshot<RT: Runtime> {
     ts: RepeatableTimestamp,
     pub bootstrap_metadata: BootstrapMetadata,
     pub snapshot: Snapshot,
+    /// Counts and shapes for offline tools (`db-info`, `db-verifier`),
+    /// populated by `load_table_summaries`. The inner `snapshot` only holds
+    /// counts.
+    table_summaries: Option<TableSummaries>,
     pub persistence_snapshot: PersistenceSnapshot,
     index_cache_handle: Option<IndexCacheHandle>,
 
@@ -534,6 +553,22 @@ impl<RT: Runtime> DatabaseSnapshot<RT> {
         )
     }
 
+    /// A streaming-export iterator over this snapshot's persistence. Note the
+    /// iterator picks its own recent snapshot rather than reading at this
+    /// snapshot's timestamp. See [`DataSyncIterator`] and
+    /// [`Database::data_sync_iterator`].
+    pub fn data_sync_iterator(&self) -> anyhow::Result<DataSyncIterator<RT>> {
+        DataSyncIterator::new(
+            self.runtime.clone(),
+            self.persistence_reader.clone(),
+            self.retention_validator.clone(),
+            *DATA_SYNC_PAGE_SIZE_LIMIT,
+            *DATA_SYNC_PAGE_BYTES_LIMIT,
+            *DATA_SYNC_MAX_ROWS_READ,
+            *DATA_SYNC_BY_ID_FRESHNESS,
+        )
+    }
+
     #[fastrace::trace]
     pub fn get_document_and_index_storage(
         &self,
@@ -636,9 +671,9 @@ impl<RT: Runtime> DatabaseSnapshot<RT> {
             anyhow::bail!(unauthorized_error("get_document_counts"));
         }
         let mut document_counts = vec![];
-        for entry in self.snapshot.iter_table_summaries()? {
-            let (_namespace, component_path, table_name, summary) = entry?;
-            let count = summary.num_values();
+        for entry in self.snapshot.iter_table_counts()? {
+            let (_namespace, component_path, table_name, table_count) = entry?;
+            let count = table_count.num_values();
             // exclude orphaned tables (in incomplete component namespaces)
             if let Some(component_path) = component_path {
                 document_counts.push((component_path, table_name, count));
@@ -801,13 +836,14 @@ impl<RT: Runtime> DatabaseSnapshot<RT> {
                 table_registry,
                 schema_registry,
                 component_registry,
-                table_summaries: None,
+                table_counts: None,
                 index_registry,
                 in_memory_indexes,
                 virtual_system_mapping,
                 text_indexes: search,
                 vector_indexes: vector,
             },
+            table_summaries: None,
             persistence_snapshot,
             index_cache_handle: None,
 
@@ -826,7 +862,7 @@ impl<RT: Runtime> DatabaseSnapshot<RT> {
     /// committer in these services).
     #[fastrace::trace]
     pub async fn load_table_summaries(&mut self) -> anyhow::Result<()> {
-        if self.snapshot.table_summaries.is_some() {
+        if self.table_summaries.is_some() {
             return Ok(());
         }
 
@@ -839,12 +875,16 @@ impl<RT: Runtime> DatabaseSnapshot<RT> {
             BootstrapKind::FromCheckpoint,
         )
         .await?;
-        let table_summaries = TableSummaries::new(
-            table_summary_snapshot,
+        let table_counts = TableCounts::new(
+            table_summary_snapshot.clone(),
             self.table_registry().table_mapping(),
             &self.snapshot.virtual_system_mapping,
         )?;
-        self.snapshot.table_summaries = Some(table_summaries);
+        self.snapshot.table_counts = Some(table_counts);
+        self.table_summaries = Some(TableSummaries::new(
+            table_summary_snapshot,
+            self.table_registry().table_mapping(),
+        ));
         tracing::info!("Bootstrapped table summaries (read {summaries_num_rows} rows)");
         Ok(())
     }
@@ -890,7 +930,7 @@ impl<RT: Runtime> DatabaseSnapshot<RT> {
     }
 
     pub fn table_summaries(&self) -> Option<&TableSummaries> {
-        self.snapshot.table_summaries.as_ref()
+        self.table_summaries.as_ref()
     }
 
     /// Create a [`Transaction`] at the snapshot's timestamp. This allows using
@@ -930,7 +970,7 @@ impl<RT: Runtime> DatabaseSnapshot<RT> {
             self.snapshot.table_registry.clone(),
             self.snapshot.schema_registry.clone(),
             self.snapshot.component_registry.clone(),
-            Arc::new(self.snapshot.table_summaries.clone()),
+            Arc::new(self.snapshot.table_counts.clone()),
             self.runtime.clone(),
             usage_tracker,
             virtual_system_mapping,
@@ -1056,6 +1096,7 @@ impl<RT: Runtime> Database<RT> {
             retention_manager,
             retention_workers,
             snapshot_manager: snapshot_reader,
+            table_shapes: Arc::new(ArcSwapOption::empty()),
             reader: persistence_reader.clone(),
             write_commits_since_load: Arc::new(AtomicUsize::new(0)),
             searcher,
@@ -1088,6 +1129,55 @@ impl<RT: Runtime> Database<RT> {
             .set(search_storage.clone())
             .expect("Tried to set search storage more than once");
         tracing::info!("Set search storage to {search_storage:?}");
+    }
+
+    /// The latest table shapes published by the `TableSummaryWorker`, or `None`
+    /// if the worker has not published yet. These are maintained asynchronously
+    /// and may be stale and inconsistent with the latest snapshot.
+    pub fn table_shapes(&self) -> Option<Arc<TableShapes>> {
+        self.table_shapes.load_full()
+    }
+
+    /// Publish table shapes to the in-memory store. Deliberately
+    /// `pub(crate)`: the only caller should be
+    /// `TableSummaryWriter::checkpoint`, which persists a checkpoint first.
+    /// [`Database::table_shapes_at`] relies on every published [`TableShapes`]
+    /// having a persisted checkpoint to replay the documents log from.
+    pub(crate) fn publish_table_shapes(&self, shapes: TableShapes) {
+        self.table_shapes.store(Some(Arc::new(shapes)));
+    }
+
+    /// Table shapes exact at `ts`, for consumers (like schema validation) that
+    /// cannot tolerate the staleness of the published [`TableShapes`].
+    ///
+    /// Returns `None` if the `TableSummaryWorker` has not published yet. When
+    /// the published shapes lag (or lead) `ts`, this catches them up by
+    /// replaying the documents log between the last persisted checkpoint and
+    /// `ts`
+    pub async fn table_shapes_at(
+        &self,
+        ts: RepeatableTimestamp,
+    ) -> anyhow::Result<Option<Arc<TableShapes>>> {
+        let Some(published) = self.table_shapes() else {
+            return Ok(None);
+        };
+        if published.ts == *ts {
+            return Ok(Some(published));
+        }
+        tracing::info!(
+            "Catching up table shapes from published ts {} to {}",
+            published.ts,
+            *ts
+        );
+        let (snapshot, _) = table_summary::bootstrap(
+            self.runtime.clone(),
+            self.reader.clone(),
+            self.retention_validator(),
+            ts,
+            BootstrapKind::FromCheckpoint,
+        )
+        .await?;
+        Ok(Some(Arc::new(snapshot.into())))
     }
 
     pub fn start_search_and_vector_bootstrap(&self) -> Box<dyn SpawnHandle> {
@@ -1208,13 +1298,27 @@ impl<RT: Runtime> Database<RT> {
         )
     }
 
+    /// A streaming-export iterator that syncs many tables with bounded reads
+    /// and a small, resumable cursor. See [`DataSyncIterator`].
+    pub fn data_sync_iterator(&self) -> anyhow::Result<DataSyncIterator<RT>> {
+        DataSyncIterator::new(
+            self.runtime.clone(),
+            self.reader.clone(),
+            self.retention_validator(),
+            *DATA_SYNC_PAGE_SIZE_LIMIT,
+            *DATA_SYNC_PAGE_BYTES_LIMIT,
+            *DATA_SYNC_MAX_ROWS_READ,
+            *DATA_SYNC_BY_ID_FRESHNESS,
+        )
+    }
+
     #[fastrace::trace]
     async fn snapshot_table_mapping(
         &self,
         ts: RepeatableTimestamp,
     ) -> anyhow::Result<Arc<TableMapping>> {
         self.table_mapping_snapshot_cache
-            .get(*ts, self.clone().compute_snapshot_table_mapping(ts).boxed())
+            .get(&*ts, || self.clone().compute_snapshot_table_mapping(ts))
             .await
     }
 
@@ -1258,7 +1362,7 @@ impl<RT: Runtime> Database<RT> {
         ts: RepeatableTimestamp,
     ) -> anyhow::Result<Arc<BTreeMap<TabletId, IndexId>>> {
         self.by_id_indexes_snapshot_cache
-            .get(*ts, self.clone().compute_snapshot_by_id_indexes(ts).boxed())
+            .get(&*ts, || self.clone().compute_snapshot_by_id_indexes(ts))
             .await
     }
 
@@ -1291,10 +1395,7 @@ impl<RT: Runtime> Database<RT> {
         ts: RepeatableTimestamp,
     ) -> anyhow::Result<Arc<BTreeMap<ComponentId, ComponentPath>>> {
         self.component_paths_snapshot_cache
-            .get(
-                *ts,
-                self.clone().compute_snapshot_component_paths(ts).boxed(),
-            )
+            .get(&*ts, || self.clone().compute_snapshot_component_paths(ts))
             .await
     }
 
@@ -1537,6 +1638,11 @@ impl<RT: Runtime> Database<RT> {
         self.reader.version()
     }
 
+    /// Scan a page of the index, checking in-memory indexes and the index cache
+    /// first and falling back to the persistence reader.
+    ///
+    /// The read is not attached to any transaction. Reads inside of a
+    /// transaction should go through `DatabaseIndexSnapshot` instead.
     pub async fn index_page(
         &self,
         ts: RepeatableTimestamp,
@@ -1549,26 +1655,56 @@ impl<RT: Runtime> Database<RT> {
         Vec<(IndexKeyBytes, Timestamp, PackedDocument)>,
         CursorPosition,
     )> {
-        let snapshot = self.snapshot_manager.lock().snapshot(*ts)?;
-        let persistence_snapshot =
-            RepeatablePersistence::new(self.reader.clone(), ts, self.retention_validator())
-                .read_snapshot(ts)?;
-        let db_index_snapshot = DatabaseIndexSnapshot::new(
-            snapshot.index_registry,
-            Arc::new(snapshot.in_memory_indexes),
-            snapshot.table_registry.table_mapping().clone(),
-            Arc::new(persistence_snapshot),
-            self.index_cache_handle.clone(),
-            None,
-        );
-        let (results, cursor) = db_index_snapshot
-            .index_page(index_id, tablet_id, interval, order, max_size)
-            .await?;
-        let entries = results
-            .into_iter()
-            .map(|(key, ts, doc)| (key, ts, doc.pack()))
-            .collect();
-        Ok((entries, cursor))
+        let snapshot = {
+            let snapshot_manager = self.snapshot_manager.lock();
+            if *ts < snapshot_manager.earliest_ts() {
+                None
+            } else {
+                Some(snapshot_manager.snapshot(*ts)?)
+            }
+        };
+        // Try to serve from in-memory indexes.
+        if let Some(snapshot) = &snapshot
+            && let Some(range) = snapshot
+                .in_memory_indexes
+                .range(index_id, interval, order)?
+        {
+            let results = range
+                .into_iter()
+                .take(max_size)
+                .map(|(key, ts, doc)| (key, ts, doc.packed_document))
+                .collect::<Vec<_>>();
+            let cursor = if results.len() >= max_size {
+                CursorPosition::After(results.last().unwrap().0.clone())
+            } else {
+                CursorPosition::End
+            };
+            Ok((results, cursor))
+        } else {
+            let persistence_snapshot =
+                RepeatablePersistence::new(self.reader.clone(), ts, self.retention_validator())
+                    .read_snapshot(ts)?;
+            let mut reader = Arc::new(persistence_snapshot) as Arc<dyn IndexReader>;
+            if let Some(snapshot) = snapshot
+                && let Some(handle) = self.index_cache_handle.clone()
+            {
+                // TODO: it is probably OK to still use the index cache even if
+                // we don't have an index_registry at the same timestamp.
+                reader = Arc::new(handle.caching_index_reader(reader, snapshot.index_registry));
+            }
+            let index_page = reader
+                .index_page(index_id, tablet_id, interval, order, max_size)
+                .await?;
+            let results = index_page
+                .entries
+                .into_iter()
+                .map(|entry| {
+                    let IndexEntry { key, ts, value } = Arc::unwrap_or_clone(entry);
+                    (key, ts, value)
+                })
+                .collect();
+            Ok((results, index_page.cursor))
+        }
     }
 
     pub fn now_ts_for_reads(&self) -> RepeatableTimestamp {
@@ -1670,6 +1806,7 @@ impl<RT: Runtime> Database<RT> {
         &'a self,
         identity: Identity,
         usage: FunctionUsageTracker,
+        max_failures: u32,
         write_source: impl Into<WriteSource>,
         f: F,
     ) -> anyhow::Result<(Timestamp, T, OccRetryStats)>
@@ -1681,7 +1818,7 @@ impl<RT: Runtime> Database<RT> {
         let is_retriable = |e: &Error| e.is_occ();
         self.execute_with_retries(
             identity,
-            MAX_OCC_FAILURES,
+            max_failures,
             backoff,
             usage,
             is_retriable,
@@ -1827,7 +1964,7 @@ impl<RT: Runtime> Database<RT> {
                 self.search_storage.clone(),
             )),
         );
-        let count_snapshot = Arc::new(snapshot.table_summaries);
+        let count_snapshot = Arc::new(snapshot.table_counts);
         let tx = Transaction::new(
             identity,
             id_generator,
@@ -1880,6 +2017,7 @@ impl<RT: Runtime> Database<RT> {
             ts,
             bootstrap_metadata: self.bootstrap_metadata.clone(),
             snapshot,
+            table_summaries: None,
             persistence_snapshot: repeatable_persistence.read_snapshot(ts)?,
             index_cache_handle: self.index_cache_handle.clone(),
             persistence_reader: self.reader.clone(),
@@ -2085,16 +2223,11 @@ impl<RT: Runtime> Database<RT> {
                     let doc_size = doc.size();
                     usage.track_database_egress_v2(
                         component_path.clone(),
-                        table_name.to_string(),
+                        &table_name,
                         doc_size as u64,
                         false,
                     );
-                    usage.track_database_egress_rows(
-                        component_path.clone(),
-                        table_name.to_string(),
-                        1,
-                        false,
-                    );
+                    usage.track_database_egress_rows(component_path.clone(), &table_name, 1, false);
                 }
 
                 deltas.push((ts, id, component_path, table_name, filtered_doc));
@@ -2313,16 +2446,11 @@ impl<RT: Runtime> Database<RT> {
             let doc_size = filtered_doc.size();
             usage.track_database_egress_v2(
                 component_path.clone(),
-                table_name.to_string(),
+                &table_name,
                 doc_size as u64,
                 false,
             );
-            usage.track_database_egress_rows(
-                component_path.clone(),
-                table_name.to_string(),
-                1,
-                false,
-            );
+            usage.track_database_egress_rows(component_path.clone(), &table_name, 1, false);
 
             documents.push((ts, component_path, table_name, filtered_doc));
             if rows_read >= rows_read_limit
@@ -2417,11 +2545,11 @@ impl<RT: Runtime> Database<RT> {
         Ok(())
     }
 
-    pub fn has_table_summaries_bootstrapped(&self) -> bool {
+    pub fn has_table_counts_bootstrapped(&self) -> bool {
         self.snapshot_manager
             .lock()
             .latest_snapshot()
-            .table_summaries
+            .table_counts
             .is_some()
     }
 
@@ -2518,7 +2646,7 @@ impl<RT: Runtime> Database<RT> {
         let component_path = snapshot
             .component_registry
             .must_component_path(component_id, &mut TransactionReadSet::new())?;
-        usage.track_vector_egress(component_path.clone(), index_name.table().to_string(), size);
+        usage.track_vector_egress(component_path.clone(), index_name.table(), size);
         usage.track_vector_query(component_path, index_name, index_size, dimensions);
         timer.finish();
         Ok((results, usage.gather_user_stats()))
@@ -2687,6 +2815,10 @@ impl ConflictingReadWithWriteSource {
     }
 }
 
+/// `op` requires system identity, and the caller does not have it.
 pub fn unauthorized_error(op: &'static str) -> ErrorMetadata {
-    ErrorMetadata::forbidden("Unauthorized", format!("Operation {op} not permitted"))
+    ErrorMetadata::forbidden(
+        "SystemIdentityRequired",
+        format!("Operation {op} not permitted"),
+    )
 }

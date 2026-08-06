@@ -638,6 +638,7 @@ pub enum ValidatorJson {
     Null,
     Number,
     Bigint,
+    CommitTs,
     Boolean,
     String,
     Bytes,
@@ -678,6 +679,7 @@ impl TryFrom<ValidatorJson> for Validator {
             ValidatorJson::Null => Ok(Validator::Null),
             ValidatorJson::Number => Ok(Validator::Float64),
             ValidatorJson::Bigint => Ok(Validator::Int64),
+            ValidatorJson::CommitTs => Ok(Validator::CommitTs),
             ValidatorJson::Boolean => Ok(Validator::Boolean),
             ValidatorJson::String => Ok(Validator::String),
             ValidatorJson::Bytes => Ok(Validator::Bytes),
@@ -702,13 +704,13 @@ impl TryFrom<ValidatorJson> for Validator {
                 if keys_validator.is_string_subtype_with_string_literal() {
                     anyhow::bail!(ErrorMetadata::bad_request(
                         error_short_code,
-                        format!("Records cannot have string literal keys")
+                        "Records cannot have string literal keys".to_string()
                     ));
                 }
                 if values_validator.optional {
                     anyhow::bail!(ErrorMetadata::bad_request(
                         error_short_code,
-                        format!("Records cannot have optional values")
+                        "Records cannot have optional values".to_string()
                     ));
                 }
                 Ok(Validator::Record(
@@ -739,6 +741,7 @@ impl TryFrom<Validator> for ValidatorJson {
             Validator::Null => ValidatorJson::Null,
             Validator::Float64 => ValidatorJson::Number,
             Validator::Int64 => ValidatorJson::Bigint,
+            Validator::CommitTs => ValidatorJson::CommitTs,
             Validator::Boolean => ValidatorJson::Boolean,
             Validator::String => ValidatorJson::String,
             Validator::Bytes => ValidatorJson::Bytes,

@@ -68,23 +68,23 @@ const CronSchedule = v.union(
   }),
   v.object({
     type: v.literal("hourly"),
-    minuteUTC: v.int64(),
+    minuteUTC: v.optional(v.int64()),
   }),
   v.object({
     type: v.literal("daily"),
-    minuteUTC: v.int64(),
+    minuteUTC: v.optional(v.int64()),
     hourUTC: v.int64(),
   }),
   v.object({
     type: v.literal("weekly"),
     dayOfWeek: v.int64(),
     hourUTC: v.int64(),
-    minuteUTC: v.int64(),
+    minuteUTC: v.optional(v.int64()),
   }),
   v.object({
     type: v.literal("monthly"),
     day: v.int64(),
-    minuteUTC: v.int64(),
+    minuteUTC: v.optional(v.int64()),
     hourUTC: v.int64(),
   }),
   v.object({
@@ -281,8 +281,11 @@ const logSinksTable = defineTable({
 
 const userStopState = v.union(v.literal("none"), v.literal("paused"));
 
+const usageLimitStopState = v.union(v.literal("none"), v.literal("disabled"));
+
 export const backendState = v.object({
   system: systemStopState,
+  usage_limit: usageLimitStopState,
   user: userStopState,
 });
 

@@ -31,6 +31,7 @@ import { useLogDeploymentEvent } from "hooks/deploymentApi";
 import { useAccessToken } from "hooks/useServerSideData";
 import { Fallback } from "pages/500";
 import { useTeamUsageState } from "api/usage";
+import { useTeamOrbSubscription } from "api/billing";
 import { useProjectEnvironmentVariables } from "api/environmentVariables";
 import { useCurrentProject } from "api/projects";
 import { useLaunchDarkly } from "hooks/useLaunchDarkly";
@@ -135,9 +136,9 @@ export function DeploymentInfoProvider({
     accessTokenRef.current = accessToken;
   }, [accessToken]);
   const {
-    workOsEnvironmentProvisioningDashboardUi,
     connectionStateCheckIntervalMs,
-    logStreamTopicFilters,
+    usageLimits,
+    copyEnvVarNameAndValue,
   } = useLaunchDarkly();
   const selectedTeamSlug = router.query.team as string;
   const projectSlug = router.query.project as string;
@@ -161,6 +162,10 @@ export function DeploymentInfoProvider({
         useCurrentProject,
         useCurrentUsageBanner,
         useTeamUsageState,
+        useTeamPlanType: (teamId) => {
+          const { subscription } = useTeamOrbSubscription(teamId ?? undefined);
+          return subscription?.plan?.planType ?? null;
+        },
         useCurrentDeployment: () => {
           const deployment = useCurrentDeployment();
           if (!deployment) return undefined;
@@ -213,8 +218,9 @@ export function DeploymentInfoProvider({
         projectsURI,
         deploymentsURI,
         isSelfHosted: false,
-        workosIntegrationEnabled: workOsEnvironmentProvisioningDashboardUi,
-        logStreamTopicFiltersEnabled: logStreamTopicFilters,
+        workosIntegrationEnabled: true,
+        usageLimitsEnabled: usageLimits,
+        copyEnvVarNameAndValueEnabled: copyEnvVarNameAndValue,
         connectionStateCheckIntervalMs,
       });
     };
@@ -231,8 +237,8 @@ export function DeploymentInfoProvider({
     deploymentsURI,
     projectsURI,
     teamsURI,
-    workOsEnvironmentProvisioningDashboardUi,
-    logStreamTopicFilters,
+    usageLimits,
+    copyEnvVarNameAndValue,
     connectionStateCheckIntervalMs,
   ]);
 

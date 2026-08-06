@@ -1,3 +1,4 @@
+import { randomUUID } from "crypto";
 import { z } from "zod";
 
 import { DeploymentMetadata, UserIdentity } from "convex/server";
@@ -12,6 +13,124 @@ const STATUS_CODE_BAD_REQUEST = 400;
 //
 // Must match the constant of the same name in Rust.
 const STATUS_CODE_UDF_FAILED = 560;
+
+// Retry settings for transient (5xx) failures when an action calls back into
+// the backend to run a query or mutation.
+const CALLBACK_MAX_ATTEMPTS = 5;
+// Env-overridable so tests exercising retries against an unreachable backend
+// can zero out the backoff. Must be read at module load, before invocations
+// replace `process.env` with user environment variables.
+const CALLBACK_INITIAL_BACKOFF_MS = process.env.CALLBACK_INITIAL_BACKOFF_MS
+  ? parseInt(process.env.CALLBACK_INITIAL_BACKOFF_MS)
+  : 1000;
+const CALLBACK_MAX_BACKOFF_MS = 20000;
+
+function callbackBackoffMs(attempt: number): number {
+  const base = Math.min(
+    CALLBACK_MAX_BACKOFF_MS,
+    CALLBACK_INITIAL_BACKOFF_MS * 2 ** attempt,
+  );
+  // Full jitter to avoid synchronized retries across concurrent callbacks.
+  return Math.random() * base;
+}
+
+// Sleep for `ms`, returning early if `signal` aborts. Callers check
+// `signal.aborted` afterwards to distinguish a completed backoff from an abort.
+function abortableSleep(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    if (signal.aborted) {
+      resolve();
+      return;
+    }
+    const onAbort = () => {
+      clearTimeout(timer);
+      resolve();
+    };
+    // Remove the listener when the backoff completes normally. `{ once: true }`
+    // only fires on an actual abort, so without this each completed sleep would
+    // leak a listener on the shared signal (MaxListenersExceededWarning).
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+// A promise that never settles. Used for dangling callbacks whose owning action
+// has already returned: not settling means they can never reject and be
+// reported as an `unhandledRejection` against an unrelated later invocation.
+function neverSettle(): Promise<never> {
+  return new Promise<never>(() => {});
+}
+
+// Run `fn`, but if it rejects once `signal` has aborted (i.e. the owning action
+// already settled, so this is a dangling call), park it by never settling
+// instead of letting the rejection surface as an `unhandledRejection` against
+// an unrelated later invocation. Errors on a still-live call propagate normally.
+async function parkIfAborted<T>(
+  signal: AbortSignal,
+  fn: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await fn();
+  } catch (e) {
+    if (signal.aborted) {
+      return await neverSettle();
+    }
+    throw e;
+  }
+}
+
+// A 5xx status other than STATUS_CODE_UDF_FAILED (which represents a real
+// error thrown by the called function) is a transient backend/proxy failure
+// that is safe to retry.
+function isTransientStatus(status: number): boolean {
+  return status >= 500 && status < 600 && status !== STATUS_CODE_UDF_FAILED;
+}
+
+// Failures during connection establishment: no bytes were sent, so the
+// request provably never ran and even a non-idempotent callback is safe to
+// retry. Mid-flight codes (ECONNRESET, EPIPE, ...) stay non-retryable here
+// because the request may have been delivered.
+const CONNECT_PHASE_ERROR_CODES = new Set([
+  "ECONNREFUSED",
+  "ENOTFOUND", // DNS lookup failed (https://nodejs.org/api/errors.html#common-system-errors)
+  "EAI_AGAIN",
+  "UND_ERR_CONNECT_TIMEOUT",
+]);
+
+function isConnectPhaseError(e: unknown): boolean {
+  const cause = (e as any)?.cause;
+  // Multi-address connect failures arrive as an AggregateError.
+  if (cause instanceof AggregateError) {
+    return cause.errors.every((err) =>
+      CONNECT_PHASE_ERROR_CODES.has(err?.code),
+    );
+  }
+  return CONNECT_PHASE_ERROR_CODES.has(cause?.code);
+}
+
+// Undici reports every network-level failure as a bare `TypeError: fetch
+// failed` with the real reason (ECONNRESET, DNS, connect timeout, ...) on
+// `cause`, which log serialization drops. Surface it in the message. Codes:
+// https://nodejs.org/api/errors.html#common-system-errors
+// https://github.com/nodejs/undici/blob/1089808/docs/docs/api/Errors.md
+function callbackNetworkError(
+  e: unknown,
+  operationName: string,
+  attempts: number,
+): Error {
+  const cause = (e as any)?.cause;
+  const code =
+    (cause instanceof AggregateError ? cause.errors[0]?.code : cause?.code) ??
+    "unknown cause";
+  return new Error(
+    `Transient network error running ${operationName} (${code}, ` +
+      `${attempts} attempt${attempts === 1 ? "" : "s"})`,
+    { cause: e },
+  );
+}
 
 const runFunctionArgs = z.object({
   name: z.optional(z.string()),
@@ -55,6 +174,7 @@ export interface Syscalls {
   asyncJsSyscall(op: string, args: Record<string, any>): Promise<any>;
 
   assertNoPendingSyscalls(): void;
+  dispose(): void;
 }
 
 async function defaultHandleResponseError(
@@ -92,6 +212,19 @@ export class SyscallsImpl {
 
   deployment: DeploymentMetadata;
 
+  // Identifies this action execution as a "session" for the purpose of making
+  // the mutations it runs idempotent across client-side retries. Each mutation
+  // callback gets a monotonically increasing `requestId` within this session.
+  mutationSessionId: string;
+  nextMutationRequestId: number;
+
+  // Aborted by `dispose()` once the owning action has settled. Any callback
+  // still in flight after that point is a dangling promise the user didn't
+  // await; we stop retrying it and never settle it, so its eventual failure
+  // can't surface as an `unhandledRejection` attributed to the next,
+  // unrelated invocation that reuses this process.
+  abortController: AbortController;
+
   constructor(
     udfPath: UdfPath,
     lambdaExecuteId: string,
@@ -114,6 +247,16 @@ export class SyscallsImpl {
     this.executionContext = executionContext;
     this.encodedParentTrace = encodedParentTrace;
     this.deployment = deployment;
+    this.mutationSessionId = randomUUID();
+    this.nextMutationRequestId = 0;
+    this.abortController = new AbortController();
+  }
+
+  // Called once the owning action has settled (success, error, or timeout).
+  // Aborts any callback still in flight so a dangling promise can't leak into
+  // a subsequent invocation on a reused process.
+  dispose() {
+    this.abortController.abort();
   }
 
   async actionCallback<ResponseValidator extends z.ZodType>(args: {
@@ -126,22 +269,76 @@ export class SyscallsImpl {
       operationName: string,
     ) => Promise<void>;
     responseValidator: ResponseValidator;
+    // Whether to retry transient (5xx) failures. Only safe for read-only
+    // queries and for mutations carrying a `mutationIdentifier` (which makes
+    // the backend dedupe a retried mutation that already committed).
+    retryTransient: boolean;
   }): Promise<z.infer<ResponseValidator>> {
     const headers = this.headers(args.version);
     const url = new URL(args.path, this.backendAddress);
-    const response = await fetch(url, {
-      body: JSON.stringify(args.body),
-      method: "POST",
-      headers,
-    });
+    const body = JSON.stringify(args.body);
+    const signal = this.abortController.signal;
+    const maxAttempts = args.retryTransient ? CALLBACK_MAX_ATTEMPTS : 1;
+    let response: Response;
+    let attempt = 0;
+    for (;;) {
+      attempt += 1;
+      try {
+        response = await fetch(url, { body, method: "POST", headers, signal });
+      } catch (e) {
+        // If the owning action has already settled, this is a dangling call.
+        // Never settle so its failure can't be misattributed to a later,
+        // unrelated invocation that reuses this process.
+        if (signal.aborted) {
+          return await neverSettle();
+        }
+        // A rejected fetch is as transient as a 5xx response. Retry when the
+        // callback is idempotent (retryTransient), or when the connection was
+        // never established so the request provably never ran.
+        const retryable = args.retryTransient || isConnectPhaseError(e);
+        if (!retryable || attempt >= CALLBACK_MAX_ATTEMPTS) {
+          throw callbackNetworkError(e, args.operationName, attempt);
+        }
+        await abortableSleep(callbackBackoffMs(attempt - 1), signal);
+        if (signal.aborted) {
+          return await neverSettle();
+        }
+        continue;
+      }
+      if (!isTransientStatus(response.status) || attempt >= maxAttempts) {
+        break;
+      }
+      await abortableSleep(callbackBackoffMs(attempt - 1), signal);
+      // The action settled while we were backing off; stop retrying a dangling
+      // call rather than holding it open (and out of the next invocation).
+      if (signal.aborted) {
+        return await neverSettle();
+      }
+    }
     const errorHandler =
       args.handleResponseErrorCode ?? defaultHandleResponseError;
-    await errorHandler(response, args.operationName);
+    // Reading the response body (here and in `response.json()` below) is tied to
+    // the same abort signal as the fetch, so a `dispose()` mid-read rejects with
+    // an `AbortError`. On a dangling call whose action already settled, never
+    // settle instead — otherwise that rejection would leak into a later,
+    // unrelated invocation just like an aborted fetch would.
+    try {
+      // errorHandler is a no-op
+      await errorHandler(response, args.operationName);
+    } catch (e) {
+      if (signal.aborted) {
+        return await neverSettle();
+      }
+      throw e;
+    }
     try {
       const body = await response.json();
       const parsedBody = args.responseValidator.parse(body);
       return parsedBody;
     } catch {
+      if (signal.aborted) {
+        return await neverSettle();
+      }
       // This probably represents an error on our side where we're returning the wrong
       // response type, and should ideally never happen. Throw a generic error when
       // it does happen though.
@@ -341,7 +538,15 @@ export class SyscallsImpl {
           });
         case "1.0/getDeploymentMetadata":
           return JSON.stringify(this.deployment);
-        case "1.0/getRequestMetadata":
+        case "1.0/getRequestMetadata": {
+          // Expose the raw auth JWT the request was authenticated with, if any.
+          // Only `Bearer` (user) auth carries a JWT; admin keys (`Convex ...`)
+          // and unauthenticated requests have no token.
+          const authToken =
+            this.authHeader !== null &&
+            this.authHeader.slice(0, 7).toLowerCase() === "bearer "
+              ? this.authHeader.slice(7).trim()
+              : null;
           return JSON.stringify({
             ip: this.executionContext.ip,
             userAgent: this.executionContext.userAgent,
@@ -351,7 +556,9 @@ export class SyscallsImpl {
             // down the call tree). It is null when the function was not
             // scheduled.
             scheduledFunctionId: this.executionContext.parentScheduledJob,
+            authToken,
           });
+        }
         case "1.0/auditLog":
           return JSON.stringify(await this.syscallAuditLog(jsonArgs));
         default:
@@ -414,6 +621,8 @@ export class SyscallsImpl {
       operationName,
       responseValidator: runFunctionReturn,
       handleResponseErrorCode,
+      // Queries are read-only, so retrying a transient failure is always safe.
+      retryTransient: true,
     });
     switch (queryResult.status) {
       case "success":
@@ -444,6 +653,14 @@ export class SyscallsImpl {
         throw new Error(text);
       }
     };
+    // Capture the identifier once, before any retry, so every retry of this
+    // mutation reuses it. The backend records the outcome atomically with the
+    // mutation, so a retry that lands after the original already committed
+    // returns the recorded result instead of running the mutation again.
+    const mutationIdentifier = {
+      sessionId: this.mutationSessionId,
+      requestId: this.nextMutationRequestId++,
+    };
     const mutationResult = await this.actionCallback({
       version: mutationArgs.version,
       body: {
@@ -451,11 +668,15 @@ export class SyscallsImpl {
         reference: mutationArgs.reference,
         functionHandle: mutationArgs.functionHandle,
         args: mutationArgs.args,
+        mutationIdentifier,
       },
       path: "/api/actions/mutation",
       operationName,
       responseValidator: runFunctionReturn,
       handleResponseErrorCode,
+      // Safe to retry because `mutationIdentifier` makes the mutation
+      // idempotent on the backend.
+      retryTransient: true,
     });
     switch (mutationResult.status) {
       case "success":
@@ -498,6 +719,8 @@ export class SyscallsImpl {
       operationName,
       responseValidator: runFunctionReturn,
       handleResponseErrorCode,
+      // Actions are not idempotent, so a retried action could run twice.
+      retryTransient: false,
     });
     switch (actionResult.status) {
       case "success":
@@ -535,6 +758,7 @@ export class SyscallsImpl {
       path: "/api/actions/vector_search",
       operationName,
       responseValidator: vectorSearchReturn,
+      retryTransient: false,
     });
   }
 
@@ -560,6 +784,7 @@ export class SyscallsImpl {
       path: "/api/actions/schedule_job",
       operationName,
       responseValidator: scheduleReturn,
+      retryTransient: false,
     });
     return jobId;
   }
@@ -579,6 +804,7 @@ export class SyscallsImpl {
       path: "/api/actions/cancel_job",
       operationName,
       responseValidator: z.any(),
+      retryTransient: false,
     });
     return null;
   }
@@ -612,6 +838,7 @@ export class SyscallsImpl {
       path: "/api/actions/storage_generate_upload_url",
       operationName,
       responseValidator: storageGenerateUploadUrlReturn,
+      retryTransient: false,
     });
     return result.url;
   }
@@ -639,6 +866,7 @@ export class SyscallsImpl {
       path: "/api/actions/storage_get_url",
       operationName,
       responseValidator: storageGetUrlReturn,
+      retryTransient: false,
     });
     return result.url;
   }
@@ -652,6 +880,7 @@ export class SyscallsImpl {
       path: "/api/actions/storage_get_metadata",
       operationName,
       responseValidator: z.any(),
+      retryTransient: false,
     });
   }
 
@@ -664,6 +893,7 @@ export class SyscallsImpl {
       path: "/api/actions/storage_delete",
       operationName,
       responseValidator: z.any(),
+      retryTransient: false,
     });
   }
 
@@ -685,6 +915,7 @@ export class SyscallsImpl {
       path: "/api/actions/audit_log",
       operationName,
       responseValidator: z.any(),
+      retryTransient: false,
     });
   }
 
@@ -713,21 +944,28 @@ export class SyscallsImpl {
     }
 
     const uploadUrl = await this._storageGenerateUploadUrl(args["version"]);
-    const response = await fetch(uploadUrl, {
-      method: "POST",
-      body: blob,
-      headers: headers,
-    });
+    const signal = this.abortController.signal;
+    // The upload (and reading its response) can still be in flight when the
+    // action settles; park it like any other dangling call rather than let its
+    // abort leak into a later invocation on a reused process.
+    return await parkIfAborted(signal, async () => {
+      const response = await fetch(uploadUrl, {
+        method: "POST",
+        body: blob,
+        headers: headers,
+        signal,
+      });
 
-    if (!response.ok) {
-      const text = await response.text();
-      throw new Error(`Error uploading file: ${text}`);
-    }
-    const respJSON = await response.json();
-    if (respJSON.storageId === undefined) {
-      throw new Error("Did not get a storageId in store blob response");
-    }
-    return respJSON.storageId;
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(`Error uploading file: ${text}`);
+      }
+      const respJSON = await response.json();
+      if (respJSON.storageId === undefined) {
+        throw new Error("Did not get a storageId in store blob response");
+      }
+      return respJSON.storageId;
+    });
   }
 
   async syscallGetBlob(args: Record<string, any>): Promise<any> {
@@ -749,8 +987,14 @@ export class SyscallsImpl {
     if (getUrl === null) {
       return null;
     }
-    const getResult = await fetch(getUrl);
-    return await getResult.blob();
+    const signal = this.abortController.signal;
+    // The download (and reading its body) can still be in flight when the
+    // action settles; park it rather than let its abort leak into a later
+    // invocation on a reused process.
+    return await parkIfAborted(signal, async () => {
+      const getResult = await fetch(getUrl, { signal });
+      return await getResult.blob();
+    });
   }
 
   async syscallCreateFunctionHandle(rawArgs: string): Promise<JSONValue> {
@@ -775,6 +1019,7 @@ export class SyscallsImpl {
       path: "/api/actions/create_function_handle",
       operationName,
       responseValidator: z.any(),
+      retryTransient: false,
     });
     return handle;
   }

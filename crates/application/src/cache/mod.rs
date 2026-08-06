@@ -17,6 +17,7 @@ use std::{
     },
 };
 
+use anyhow::Context;
 use async_broadcast::{
     broadcast,
     Receiver,
@@ -39,6 +40,7 @@ use common::{
     types::{
         AllowedVisibility,
         FunctionCaller,
+        QueryInvocation,
         TableName,
         TableStats,
         Timestamp,
@@ -58,6 +60,7 @@ use keybroker::Identity;
 use lru::LruCache;
 use metrics::{
     get_timer,
+    log_cache_hit_visibility_rejected,
     log_cache_size,
     log_drop_cache_result_too_old,
     log_perform_go,
@@ -84,7 +87,11 @@ use smallvec::{
 };
 use sync_types::types::SerializedArgs;
 use udf::{
-    validation::ValidatedPathAndArgs,
+    validation::{
+        PendingArgsPolicy,
+        ValidatedPathAndArgs,
+        VisibilityInfo,
+    },
     FunctionOutcome,
     UdfOutcome,
 };
@@ -92,6 +99,7 @@ use usage_tracking::FunctionUsageTracker;
 use value::{
     heap_size::HeapSize,
     ConvexValue,
+    PendingValue,
 };
 
 use crate::{
@@ -292,6 +300,7 @@ struct CacheResult {
     outcome: Arc<UdfOutcome>,
     original_ts: Timestamp,
     token: Token,
+    visibility_info: Option<VisibilityInfo>,
 }
 
 impl HeapSize for CacheResult {
@@ -338,6 +347,7 @@ impl<RT: Runtime> CacheManager<RT> {
         journal: Option<QueryJournal>,
         caller: FunctionCaller,
         usage_tracker: FunctionUsageTracker,
+        query_invocation: QueryInvocation,
     ) -> anyhow::Result<QueryReturn> {
         let timer = get_timer();
         let result = self
@@ -350,6 +360,7 @@ impl<RT: Runtime> CacheManager<RT> {
                 journal,
                 caller,
                 usage_tracker,
+                query_invocation,
             )
             .await;
         match &result {
@@ -377,6 +388,7 @@ impl<RT: Runtime> CacheManager<RT> {
         journal: Option<QueryJournal>,
         caller: FunctionCaller,
         usage_tracker: FunctionUsageTracker,
+        query_invocation: QueryInvocation,
     ) -> anyhow::Result<(QueryReturn, bool)> {
         let start = self.rt.monotonic_now();
         let identity_cache_key = identity.cache_key();
@@ -457,7 +469,13 @@ impl<RT: Runtime> CacheManager<RT> {
             };
             let op_type = op.to_string();
             let (result, table_stats) = match self
-                .perform_cache_op(&requested_key, &stored_key, op, usage_tracker.clone())
+                .perform_cache_op(
+                    &requested_key,
+                    &stored_key,
+                    op,
+                    usage_tracker.clone(),
+                    &identity,
+                )
                 .await?
             {
                 Some(r) => r,
@@ -491,7 +509,8 @@ impl<RT: Runtime> CacheManager<RT> {
             }
 
             // Step 5: Log some stuff and return.
-            let vars = AuditLogVars::from_context(context.clone(), &self.rt)?;
+            let vars =
+                AuditLogVars::from_context(context.clone(), identity.convex_actor_var(), &self.rt)?;
             self.audit_log_client
                 .send_logs(
                     cache_result.outcome.audit_log_lines.resolve_bodies(&vars)?,
@@ -514,16 +533,70 @@ impl<RT: Runtime> CacheManager<RT> {
                     caller,
                     usage_tracker,
                     context.clone(),
+                    query_invocation,
                 )
                 .await;
             let result = QueryReturn {
-                result: cache_result.outcome.result.clone(),
+                // A top-level query's result never contains unresolved commit
+                // timestamps.
+                result: match cache_result.outcome.result.clone() {
+                    Ok(value) => Ok(value.try_into()?),
+                    Err(e) => Err(e),
+                },
                 log_lines: cache_result.outcome.log_lines.clone(),
                 token: cache_result.token,
                 journal: cache_result.outcome.journal.clone(),
             };
             return Ok((result, is_cache_hit));
         }
+    }
+
+    fn authorize_cache_hit(
+        &self,
+        requested_key: &RequestedCacheKey,
+        identity: &Identity,
+        result: CacheResult,
+    ) -> anyhow::Result<CacheResult> {
+        // Assumes invariant: only `JsError` results lack visibility info, and those
+        // are not cached, so we fail closed rather than serve a result we cannot
+        // authorize.
+        let visibility_info = result
+            .visibility_info
+            .as_ref()
+            .context("Cached query result is missing visibility info")?;
+        let access = visibility_info.check_access(
+            requested_key.allowed_visibility,
+            identity,
+            UdfType::Query,
+            requested_key.path.clone(),
+        )?;
+        let Err(js_error) = access else {
+            return Ok(result);
+        };
+        tracing::warn!(
+            "Refusing to serve cached result for {} to a caller that may not run it: {js_error}",
+            requested_key
+                .path
+                .clone()
+                .debug_into_component_path()
+                .debug_str(),
+        );
+        log_cache_hit_visibility_rejected(identity.tag());
+        Ok(CacheResult {
+            outcome: Arc::new(UdfOutcome::from_error(
+                js_error,
+                requested_key.path.clone().debug_into_component_path(),
+                requested_key.args.clone(),
+                identity.clone().into(),
+                self.rt.clone(),
+                None,
+            )?),
+            original_ts: result.original_ts,
+            // The caller may not observe the read set of a result they aren't
+            // allowed to read, so give them nothing to subscribe to.
+            token: Token::empty(result.original_ts),
+            visibility_info: None,
+        })
     }
 
     #[fastrace::trace]
@@ -533,6 +606,7 @@ impl<RT: Runtime> CacheManager<RT> {
         key: &StoredCacheKey,
         op: CacheOp<'_>,
         usage_tracker: FunctionUsageTracker,
+        requester_identity: &Identity,
     ) -> anyhow::Result<Option<(CacheResult, BTreeMap<TableName, TableStats>)>> {
         let pause_client = self.rt.pause_client();
         pause_client.wait("perform_cache_op").await;
@@ -541,7 +615,10 @@ impl<RT: Runtime> CacheManager<RT> {
                 if result.outcome.result.is_err() {
                     panic!("Developer error: Cache contained failed execution for {key:?}")
                 }
-                (result, BTreeMap::new())
+                (
+                    self.authorize_cache_hit(requested_key, requester_identity, result)?,
+                    BTreeMap::new(),
+                )
             },
             CacheOp::Wait {
                 waiting_entry_id,
@@ -571,7 +648,10 @@ impl<RT: Runtime> CacheManager<RT> {
                 if result.outcome.result.is_err() {
                     panic!("Developer error: CacheOp::Go sent failed execution for {key:?}")
                 }
-                (result, BTreeMap::new())
+                (
+                    self.authorize_cache_hit(requested_key, requester_identity, result)?,
+                    BTreeMap::new(),
+                )
             },
             CacheOp::Go {
                 waiting_entry_id: _,
@@ -598,10 +678,11 @@ impl<RT: Runtime> CacheManager<RT> {
                     path.clone(),
                     args.clone(),
                     UdfType::Query,
+                    PendingArgsPolicy::Reject,
                 )
                 .await?;
 
-                let (mut tx, query_outcome) = match validate_result {
+                let (mut tx, query_outcome, visibility_info) = match validate_result {
                     Err(js_err) => {
                         let query_outcome = UdfOutcome::from_error(
                             js_err,
@@ -611,9 +692,9 @@ impl<RT: Runtime> CacheManager<RT> {
                             self.rt.clone(),
                             None,
                         )?;
-                        (tx, query_outcome)
+                        (tx, query_outcome, None)
                     },
-                    Ok((path_and_args, returns_validator)) => {
+                    Ok((path_and_args, returns_validator, visibility_info)) => {
                         let component = path_and_args.path().component;
                         let (mut tx, outcome) = self
                             .function_router
@@ -631,14 +712,17 @@ impl<RT: Runtime> CacheManager<RT> {
                         if let Ok(json_packed_value) = &query_outcome.result
                             && returns_validator.needs_validation()
                         {
-                            let output: ConvexValue = json_packed_value.unpack().map_err(|e| {
-                                e.wrap_error_message(|msg| {
-                                    format!(
-                                        "Function {} return value invalid: {msg}",
-                                        query_outcome.path.debug_str(),
-                                    )
-                                })
-                            })?;
+                            let output: ConvexValue = json_packed_value
+                                .unpack()
+                                .and_then(PendingValue::try_into_concrete)
+                                .map_err(|e| {
+                                    e.wrap_error_message(|msg| {
+                                        format!(
+                                            "Function {} return value invalid: {msg}",
+                                            query_outcome.path.debug_str(),
+                                        )
+                                    })
+                                })?;
                             let table_mapping = tx.table_mapping().namespace(component.into());
                             let virtual_system_mapping = tx.virtual_system_mapping();
                             let returns_validation_error = returns_validator.check_output(
@@ -650,7 +734,7 @@ impl<RT: Runtime> CacheManager<RT> {
                                 query_outcome.result = Err(js_err);
                             }
                         }
-                        (tx, query_outcome)
+                        (tx, query_outcome, Some(visibility_info))
                     },
                 };
                 let ts = tx.begin_timestamp();
@@ -660,6 +744,7 @@ impl<RT: Runtime> CacheManager<RT> {
                     outcome: Arc::new(query_outcome),
                     original_ts: *ts,
                     token,
+                    visibility_info,
                 };
                 if result.outcome.result.is_ok()
                     && requested_key

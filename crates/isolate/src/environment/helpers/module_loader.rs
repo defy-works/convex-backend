@@ -1,57 +1,8 @@
-use std::{
-    collections::HashMap,
-    sync::Arc,
-};
-
 use anyhow::anyhow;
-use common::document::ParsedDocument;
 use deno_core::ModuleSpecifier;
-use model::{
-    modules::{
-        hash_module_source,
-        module_versions::FullModuleSource,
-    },
-    source_packages::{
-        types::SourcePackage,
-        upload_download::download_package,
-    },
-};
-use storage::Storage;
 use sync_types::CanonicalizedModulePath;
-use value::sha256::Sha256Digest;
 
-use crate::{
-    isolate::CONVEX_SCHEME,
-    metrics::module_load_timer,
-};
-
-#[fastrace::trace]
-pub async fn get_modules_and_prefetch(
-    modules_storage: Arc<dyn Storage>,
-    source_package: &ParsedDocument<SourcePackage>,
-) -> anyhow::Result<HashMap<(CanonicalizedModulePath, Sha256Digest), Arc<FullModuleSource>>> {
-    let _timer = module_load_timer("package");
-    let mut result = HashMap::new();
-    let package = download_package(
-        modules_storage,
-        source_package.storage_key.clone(),
-        source_package.sha256.clone(),
-    )
-    .await?;
-    for (module_path, module_config) in package {
-        result.insert(
-            (
-                module_path,
-                hash_module_source(&module_config.source, module_config.source_map.as_ref()),
-            ),
-            Arc::new(FullModuleSource {
-                source: module_config.source,
-                source_map: module_config.source_map,
-            }),
-        );
-    }
-    Ok(result)
-}
+use crate::isolate::CONVEX_SCHEME;
 
 pub fn module_specifier_from_path(
     path: &CanonicalizedModulePath,

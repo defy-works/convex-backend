@@ -53,6 +53,11 @@ const useManagementQuery = createQueryHook(
   "management-api",
 );
 
+export const useManagementApiInfiniteQuery = createInfiniteHook(
+  managementApiClient,
+  "management-api",
+);
+
 export const useMutateManagementApi = createMutateHook(
   managementApiClient,
   "management-api",

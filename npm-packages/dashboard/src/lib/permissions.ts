@@ -121,6 +121,9 @@ export const DEPLOYMENT_OP_TO_ACTION: Record<
   ViewLogs: "deployment:logs:view",
   ViewMetrics: "deployment:metrics:view",
   ViewAuditLog: "deployment:auditLog:view",
+  ViewUsage: "deployment:usage:view",
+  ViewUsageLimits: "deployment:usageLimits:view",
+  WriteUsageLimits: "deployment:usageLimits:write",
   ViewIntegrations: "deployment:integrations:view",
   WriteIntegrations: "deployment:integrations:write",
 };
@@ -131,6 +134,8 @@ const READ_ONLY_ACTIONS: RoleStatementAction[] = [
   "deployment:functions:runInternalQueries",
   "deployment:functions:runTestQuery",
   "deployment:auditLog:view",
+  "deployment:usageLimits:view",
+  "deployment:usage:view",
   "deployment:logs:view",
   "deployment:metrics:view",
   "deployment:integrations:view",
@@ -351,6 +356,9 @@ const ACTION_RESOURCE_KIND: Record<RoleStatementAction, ResourceKind> = {
   "deployment:functions:runInternalActions": "deployment",
   "deployment:functions:runTestQuery": "deployment",
   "deployment:auditLog:view": "deployment",
+  "deployment:usageLimits:view": "deployment",
+  "deployment:usageLimits:write": "deployment",
+  "deployment:usage:view": "deployment",
   // Member
   "member:invite": "member",
   "member:cancelInvitation": "member",

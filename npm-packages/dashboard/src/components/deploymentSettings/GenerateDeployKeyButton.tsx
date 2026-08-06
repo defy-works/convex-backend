@@ -43,6 +43,7 @@ export type DeployKeyAction = NonNullable<
 type ActionGroup = {
   label: string;
   actions: { key: DeployKeyAction; description: string }[];
+  flag?: "usageLimits";
 };
 
 export const ACTION_GROUPS: ActionGroup[] = [
@@ -145,6 +146,26 @@ export const ACTION_GROUPS: ActionGroup[] = [
     ],
   },
   {
+    label: "Usage",
+    flag: "usageLimits",
+    actions: [
+      {
+        key: "deployment:usage:view",
+        description: "Allows viewing usage metrics for this deployment.",
+      },
+      {
+        key: "deployment:usageLimits:view",
+        description:
+          "Allows viewing the usage limits configured for this deployment.",
+      },
+      {
+        key: "deployment:usageLimits:write",
+        description:
+          "Allows creating, updating, and deleting usage limits for this deployment.",
+      },
+    ],
+  },
+  {
     label: "Integrations",
     actions: [
       {
@@ -222,7 +243,11 @@ export function CreateDeployKeyForm({
   const [expiration, setExpiration] = useState<TokenExpirationValue>(null);
   const [error, setError] = useState<string | null>(null);
   const { capture } = usePostHog();
-  const { scopedDeployKeys } = useLaunchDarkly();
+  const { usageLimits } = useLaunchDarkly();
+  const flags = { usageLimits };
+  const visibleActionGroups = ACTION_GROUPS.filter(
+    (group) => group.flag === undefined || flags[group.flag],
+  );
 
   return (
     <Transition show={open} appear afterLeave={onClose}>
@@ -292,10 +317,9 @@ export function CreateDeployKeyForm({
                         setIsLoading(true);
                         setError(null);
                         try {
-                          const allowedActions =
-                            scopedDeployKeys && showCustomPermissions
-                              ? Array.from(selectedActions)
-                              : undefined;
+                          const allowedActions = showCustomPermissions
+                            ? Array.from(selectedActions)
+                            : undefined;
                           const expiresAt = resolveExpirationTime(expiration);
                           const result = await getAdminKey(
                             name,
@@ -333,7 +357,7 @@ export function CreateDeployKeyForm({
                           value={expiration}
                           onChange={setExpiration}
                         />
-                        {scopedDeployKeys && showCustomPermissions && (
+                        {showCustomPermissions && (
                           <div className="mt-2 flex flex-col gap-3">
                             <p className="text-xs text-content-secondary">
                               Select the permissions this key needs.{" "}
@@ -350,7 +374,7 @@ export function CreateDeployKeyForm({
                                 size="xs"
                                 onClick={() => {
                                   const all = new Set(
-                                    ACTION_GROUPS.flatMap((g) =>
+                                    visibleActionGroups.flatMap((g) =>
                                       g.actions.map((a) => a.key),
                                     ),
                                   );
@@ -370,7 +394,7 @@ export function CreateDeployKeyForm({
                               </Button>
                             </div>
                             <div className="columns-1 gap-x-6 md:columns-2">
-                              {ACTION_GROUPS.map((group) => (
+                              {visibleActionGroups.map((group) => (
                                 <div
                                   key={group.label}
                                   className="mb-3 break-inside-avoid"
@@ -435,8 +459,7 @@ export function CreateDeployKeyForm({
                         />
                       </div>
                       <div className="flex items-center justify-end gap-2 px-6 py-4">
-                        {scopedDeployKeys &&
-                          showCustomPermissions &&
+                        {showCustomPermissions &&
                           selectedActions.size === 0 && (
                             <span className="text-xs text-content-errorSecondary">
                               Select at least one action
@@ -455,8 +478,7 @@ export function CreateDeployKeyForm({
                           disabled={
                             disabledReason !== null ||
                             name.trim() === "" ||
-                            (scopedDeployKeys &&
-                              showCustomPermissions &&
+                            (showCustomPermissions &&
                               selectedActions.size === 0)
                           }
                           loading={isLoading}

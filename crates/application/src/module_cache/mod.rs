@@ -10,15 +10,17 @@ use common::{
     },
     runtime::Runtime,
 };
-use futures::FutureExt;
-use isolate::environment::helpers::module_loader::get_modules_and_prefetch;
 use model::{
     config::module_loader::ModuleLoader,
     modules::{
+        hash_module_source,
         module_versions::FullModuleSource,
         types::ModuleMetadata,
     },
-    source_packages::types::SourcePackage,
+    source_packages::{
+        types::SourcePackage,
+        upload_download::download_package,
+    },
 };
 use storage::Storage;
 use sync_types::CanonicalizedModulePath;
@@ -30,7 +32,7 @@ mod metrics;
 pub struct ModuleCache<RT: Runtime> {
     modules_storage: Arc<dyn Storage>,
 
-    cache: AsyncLru<RT, (CanonicalizedModulePath, Sha256Digest), FullModuleSource>,
+    cache: AsyncLru<RT, (CanonicalizedModulePath, Sha256Digest), FullModuleSource, Sha256Digest>,
 }
 
 impl<RT: Runtime> ModuleCache<RT> {
@@ -61,15 +63,33 @@ impl<RT: Runtime> ModuleLoader<RT> for ModuleCache<RT> {
         let timer = metrics::module_cache_get_module_timer();
 
         let key = (module_metadata.path.clone(), module_metadata.sha256.clone());
-        let modules_storage = self.modules_storage.clone();
-        let source_package = source_package.clone();
         let result = self
             .cache
-            .get_and_prepopulate(
-                key,
-                async move { get_modules_and_prefetch(modules_storage, &source_package).await }
-                    .boxed(),
-            )
+            .get_and_prepopulate(&key, || {
+                let modules_storage = self.modules_storage.clone();
+                let source_package = source_package.clone();
+                (source_package.sha256.clone(), async move {
+                    let package = download_package(modules_storage, &source_package).await?;
+                    Ok(package
+                        .into_iter()
+                        .map(|(module_path, module_config)| {
+                            (
+                                (
+                                    module_path,
+                                    hash_module_source(
+                                        &module_config.source,
+                                        module_config.source_map.as_ref(),
+                                    ),
+                                ),
+                                Arc::new(FullModuleSource {
+                                    source: module_config.source,
+                                    source_map: module_config.source_map,
+                                }),
+                            )
+                        })
+                        .collect())
+                })
+            })
             .await?;
 
         let source_size = result.source.len();

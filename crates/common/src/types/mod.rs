@@ -28,6 +28,7 @@ mod object_key;
 mod region;
 mod search_index_metric_labels;
 mod snapshot_export;
+pub mod streaming_export;
 mod table;
 mod timestamp;
 
@@ -55,6 +56,7 @@ pub use backend_state::{
     BackendState,
     OldBackendState,
     SystemStopState,
+    UsageLimitStopState,
     UserStopState,
 };
 pub use deployments::{
@@ -77,6 +79,7 @@ pub use functions::{
     AllowedVisibility,
     FunctionCaller,
     ModuleEnvironment,
+    QueryInvocation,
     UdfIdentifier,
     UdfType,
     UdfTypeJson,

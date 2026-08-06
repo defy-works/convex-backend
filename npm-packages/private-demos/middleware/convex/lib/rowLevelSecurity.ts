@@ -319,6 +319,7 @@ class WrapReader<Ctx, DataModel extends GenericDataModel> implements Omit<
   }
 
   async get<TableName extends string>(id: GenericId<TableName>): Promise<any> {
+    // eslint-disable-next-line @convex-dev/explicit-table-ids -- old internal demo project
     const doc = await this.db.get(id);
     if (doc) {
       const tableName = this._tableName(id);
@@ -366,6 +367,8 @@ class WrapWriter<Ctx, DataModel extends GenericDataModel> implements Omit<
   db: GenericDatabaseWriter<DataModel>;
   reader: Omit<GenericDatabaseReader<DataModel>, "system">;
   rules: Rules<Ctx, DataModel>;
+  // Plain values with no access-control surface; pass them through.
+  vars: GenericDatabaseWriter<DataModel>["vars"];
 
   async modifyPredicate<T extends GenericTableInfo>(
     tableName: string,
@@ -386,6 +389,7 @@ class WrapWriter<Ctx, DataModel extends GenericDataModel> implements Omit<
     this.db = db;
     this.reader = new WrapReader(ctx, db, rules);
     this.rules = rules;
+    this.vars = db.vars;
   }
   async insert<TableName extends string>(
     table: TableName,
@@ -421,6 +425,7 @@ class WrapWriter<Ctx, DataModel extends GenericDataModel> implements Omit<
     value: Partial<any>,
   ): Promise<void> {
     await this.checkAuth(id);
+    // eslint-disable-next-line @convex-dev/explicit-table-ids -- old internal demo project
     return await this.db.patch(id, value);
   }
   async replace<TableName extends string>(
@@ -428,10 +433,12 @@ class WrapWriter<Ctx, DataModel extends GenericDataModel> implements Omit<
     value: any,
   ): Promise<void> {
     await this.checkAuth(id);
+    // eslint-disable-next-line @convex-dev/explicit-table-ids -- old internal demo project
     return await this.db.replace(id, value);
   }
   async delete(id: GenericId<string>): Promise<void> {
     await this.checkAuth(id);
+    // eslint-disable-next-line @convex-dev/explicit-table-ids -- old internal demo project
     return await this.db.delete(id);
   }
   get<TableName extends string>(id: GenericId<TableName>): Promise<any> {

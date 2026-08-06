@@ -29,6 +29,7 @@ use common::{
     },
     errors::JsError,
     execution_context::RequestMetadata,
+    knobs::FINISH_PUSH_MAX_OCC_FAILURES,
     runtime::Runtime,
     schemas::DatabaseSchema,
     types::{
@@ -46,6 +47,7 @@ use database::{
     OccRetryStats,
     Token,
     WriteSource,
+    MAX_OCC_FAILURES,
     SCHEMAS_TABLE,
 };
 use errors::{
@@ -334,6 +336,7 @@ impl<RT: Runtime> Application<RT> {
             .execute_with_occ_retries(
                 Identity::system(),
                 FunctionUsageTracker::new(),
+                MAX_OCC_FAILURES,
                 WriteSource::system("start_push"),
                 |tx| {
                     async move {
@@ -406,7 +409,8 @@ impl<RT: Runtime> Application<RT> {
                     udf_config,
                     component_def.functions.clone(),
                     component_pkg.clone(),
-                    // Component functions do not have access to environment variables.
+                    // User env vars are root-only; analyze() itself supplies
+                    // the default system env vars.
                     BTreeMap::new(),
                     BTreeMap::new(),
                 )
@@ -675,12 +679,7 @@ impl<RT: Runtime> Application<RT> {
         // in the database.
         let mut downloaded_source_packages = BTreeMap::new();
         for (definition_path, source_package) in &start_push.component_definition_packages {
-            let package = download_package(
-                self.modules_storage().clone(),
-                source_package.storage_key.clone(),
-                source_package.sha256.clone(),
-            )
-            .await?;
+            let package = download_package(self.modules_storage().clone(), source_package).await?;
             downloaded_source_packages.insert(definition_path.clone(), package);
         }
 
@@ -698,6 +697,7 @@ impl<RT: Runtime> Application<RT> {
                 identity.clone(),
                 request_metadata,
                 finish_push_write_source,
+                *FINISH_PUSH_MAX_OCC_FAILURES,
                 |tx| {
                     let start_push = &start_push;
                     let downloaded_source_packages = &downloaded_source_packages;
@@ -814,10 +814,9 @@ impl<RT: Runtime> Application<RT> {
                 {
                     e.context(ErrorMetadata::bad_request(
                         "ConcurrentPush",
-                        format!(
-                            "Are you running multiple `npx convex dev` processes in the same \
-                             directory?"
-                        ),
+                        "Are you running multiple `npx convex dev` processes in the same \
+                         directory?"
+                            .to_string(),
                     ))
                 } else {
                     e
@@ -1273,7 +1272,7 @@ impl TryFrom<ModuleHashJson> for ModuleHashConfig {
             sha256,
         }: ModuleHashJson,
     ) -> anyhow::Result<ModuleHashConfig> {
-        let sha256_bytes = hex::decode(&sha256).context("Invalid hex in sha256")?;
+        let sha256_bytes = const_hex::decode(&sha256).context("Invalid hex in sha256")?;
         let sha256_array: [u8; 32] = sha256_bytes
             .try_into()
             .ok()

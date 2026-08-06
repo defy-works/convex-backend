@@ -34,7 +34,8 @@ jobs:
           vars.BACKEND_IMAGE_NAME || 'convex-backend' }}@${{
           inputs.image_digest_x64 }}
         env:
-          ACTIONS_USER_TIMEOUT_SECS: "20"
+          V8_ACTION_USER_TIMEOUT_SECS: "20"
+          NODE_ACTION_USER_TIMEOUT_SECS: "20"
           CONVEX_CLOUD_ORIGIN: "http://127.0.0.1:3210"
           CONVEX_SITE_ORIGIN: "http://127.0.0.1:3211"
           DISABLE_BEACON: "true"
@@ -49,18 +50,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
-      - name: Cache pnpm artifacts
-        uses: runs-on/cache@bd330c5a5f6cbb837823ee25864f3c71a211c2e3 # v5.0.5
+      # Restore-only: OSS can't write this cache (cache-write role is get-convex/convex-only).
+      - name: Restore pnpm artifacts
+        uses: runs-on/cache/restore@bd330c5a5f6cbb837823ee25864f3c71a211c2e3 # v5.0.5
         env:
           AWS_REGION: ${{ vars.AWS_REGION }}
           RUNS_ON_S3_BUCKET_CACHE: ${{ vars.RUNS_ON_S3_BUCKET_CACHE }}
         with:
           path: |
-            npm-packages/common/temp/build-cache
-            npm-packages/common/temp/pnpm-store
-          key:
-            pnpm-cache-${{
-            hashFiles('npm-packages/common/config/rush/pnpm-lock.yaml') }}-2
+            ~/.local/share/pnpm/store
+            npm-packages/.turbo/cache
+          key: pnpm-cache-${{ hashFiles('npm-packages/pnpm-lock.yaml') }}-3
           restore-keys: pnpm-cache-
 
       - name: Install mise tools
@@ -74,8 +74,8 @@ jobs:
 
       - name: Build NPM Packages
         run: |
-          just rush install
-          just rush build -t test-project
+          just install-js
+          just turbo run build --filter=test-project...
 
       - name: Try pushing to the deployment
         working-directory: npm-packages/private-demos/test-project

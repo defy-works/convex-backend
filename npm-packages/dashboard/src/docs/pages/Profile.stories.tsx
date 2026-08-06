@@ -2,9 +2,8 @@ import { Meta, StoryObj } from "@storybook/nextjs";
 import { mocked, fn } from "storybook/test";
 import {
   useDeleteAccount,
-  useIdentities,
+  useMfaStatus,
   useProfileEmails,
-  useUnlinkIdentity,
   useUpdateProfileName,
 } from "api/profile";
 import {
@@ -45,8 +44,7 @@ const meta = {
     ]);
     mocked(useUpdateProfileName).mockReturnValue(fn());
     mocked(useDeleteAccount).mockReturnValue(fn());
-    mocked(useIdentities).mockReturnValue([]);
-    mocked(useUnlinkIdentity).mockReturnValue(fn());
+    mocked(useMfaStatus).mockReturnValue({ enabled: false });
     mocked(usePaginatedPersonalAccessTokens).mockReturnValue({
       data: {
         items: [

@@ -25,6 +25,7 @@ use common::{
         Runtime,
         SpawnHandle,
     },
+    types::BackendState,
 };
 use database::{
     Database,
@@ -37,6 +38,7 @@ use events::usage::{
     TableTextStorage,
     TableVectorStorage,
     UsageEvent::{
+        CurrentBackendState,
         CurrentDocumentCounts,
         CurrentFileStorage,
         CurrentTextStorage,
@@ -51,6 +53,7 @@ use itertools::{
 };
 use keybroker::Identity;
 use model::{
+    backend_state::BackendStateModel,
     exports::ExportsModel,
     file_storage::get_total_file_storage_size,
     virtual_system_mapping,
@@ -146,7 +149,7 @@ impl<RT: Runtime> UsageGaugesTrackingWorkerInner<RT> {
     // We ignore server errors and we do not recover logs on other failures.
     #[fastrace::trace]
     async fn send_usage(&mut self) -> anyhow::Result<()> {
-        if !self.database.has_table_summaries_bootstrapped() {
+        if !self.database.has_table_counts_bootstrapped() {
             tracing::warn!("Skipping usage tracking because table summaries are not bootstrapped");
             return Ok(());
         }
@@ -194,6 +197,7 @@ impl<RT: Runtime> UsageGaugesTrackingWorkerInner<RT> {
             storage_total_size,
             cloud_snapshot_total_size,
             document_counts,
+            backend_state,
         } = gauge_metrics;
 
         let (user_document_counts, system_document_counts) = document_counts
@@ -245,6 +249,11 @@ impl<RT: Runtime> UsageGaugesTrackingWorkerInner<RT> {
                 tables: user_document_counts,
                 system_tables: system_document_counts,
             },
+            CurrentBackendState {
+                system: backend_state.system.to_string(),
+                usage_limit: backend_state.usage_limit.to_string(),
+                user: backend_state.user.to_string(),
+            },
         ];
 
         self.usage_logger.record_async(events).await
@@ -259,6 +268,7 @@ pub struct GaugeMetrics {
     storage_total_size: u64,
     cloud_snapshot_total_size: u64,
     document_counts: Vec<(ComponentPath, TableName, u64)>,
+    backend_state: BackendState,
 }
 
 impl GaugeMetrics {
@@ -338,17 +348,22 @@ pub struct AggregatedStorageUsage {
     pub system_table_document_sizes: BTreeMap<String, u64>,
 }
 
+/// Gauge metrics read from `snapshot`. Every gauge except file storage is read
+/// at `snapshot`'s timestamp; the file storage total uses the
+/// `DataSyncIterator`, which picks its own recent snapshot (see
+/// [`get_total_file_storage_size`]).
 #[fastrace::trace]
 pub async fn get_gauge_metrics<RT: Runtime>(
     identity: &Identity,
-    database: &DatabaseSnapshot<RT>,
+    snapshot: &DatabaseSnapshot<RT>,
 ) -> anyhow::Result<GaugeMetrics> {
-    let document_and_index_storage = database.get_document_and_index_storage(identity)?;
-    let vector_index_storage = database.get_vector_index_storage(identity)?;
-    let text_index_storage = database.get_text_index_storage(identity)?;
-    let cloud_snapshot_total_size = fetch_cloud_snapshot_total_size(identity, database).await?;
-    let document_counts = database.get_document_counts(identity)?;
-    let storage_total_size = get_total_file_storage_size(identity, database).await?;
+    let document_and_index_storage = snapshot.get_document_and_index_storage(identity)?;
+    let vector_index_storage = snapshot.get_vector_index_storage(identity)?;
+    let text_index_storage = snapshot.get_text_index_storage(identity)?;
+    let cloud_snapshot_total_size = fetch_cloud_snapshot_total_size(identity, snapshot).await?;
+    let document_counts = snapshot.get_document_counts(identity)?;
+    let storage_total_size = get_total_file_storage_size(identity, snapshot).await?;
+    let backend_state = fetch_backend_state(identity, snapshot).await?;
 
     Ok(GaugeMetrics {
         document_and_index_storage,
@@ -357,7 +372,25 @@ pub async fn get_gauge_metrics<RT: Runtime>(
         storage_total_size,
         cloud_snapshot_total_size,
         document_counts,
+        backend_state,
     })
+}
+
+#[fastrace::trace]
+async fn fetch_backend_state<RT: Runtime>(
+    identity: &Identity,
+    database: &DatabaseSnapshot<RT>,
+) -> anyhow::Result<BackendState> {
+    let mut tx = database.begin_tx(
+        identity.clone(),
+        Arc::new(SearchNotEnabled),
+        FunctionUsageTracker::new(),
+        virtual_system_mapping().clone(),
+    )?;
+    Ok(BackendStateModel::new(&mut tx)
+        .get_backend_state()
+        .await?
+        .into_value())
 }
 
 #[fastrace::trace]

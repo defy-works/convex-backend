@@ -51,12 +51,13 @@ pub async fn info_message_for_import<RT: Runtime>(
     message_lines.extend(content_confirmation_messages);
     // Consider adding confirmation messages about bandwidth usage.
     if !message_lines.is_empty() {
-        message_lines.insert(0, format!("Import change summary:"))
+        message_lines.insert(0, "Import change summary:".to_string())
     }
-    message_lines.push(format!(
+    message_lines.push(
         "Once the import has started, it will run in the background.\nInterrupting `npx convex \
          import` will not cancel it."
-    ));
+            .to_string(),
+    );
     Ok((
         message_lines.join("\n"),
         require_manual_confirmation,
@@ -136,9 +137,8 @@ async fn messages_to_confirm_replace<RT: Runtime>(
                 } else {
                     table_name
                 };
-                let table_summary =
-                    db_snapshot.must_table_summary(component_id.into(), table_name)?;
-                anyhow::Ok(table_summary.num_values())
+                let table_count = db_snapshot.must_table_count(component_id.into(), table_name)?;
+                anyhow::Ok(table_count.num_values())
             })
             .transpose()?
             .unwrap_or(0);

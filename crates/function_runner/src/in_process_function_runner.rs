@@ -227,7 +227,7 @@ impl<RT: Runtime> FunctionRunner<RT> for InProcessFunctionRunner<RT> {
         pause_client.wait("run_function").await;
 
         let snapshot = self.database.snapshot(ts)?;
-        let table_count_snapshot = Arc::new(snapshot.table_summaries);
+        let table_count_snapshot = Arc::new(snapshot.table_counts);
         let text_index_snapshot = Arc::new(TextIndexManagerSnapshot::new(
             snapshot.index_registry,
             snapshot.text_indexes,
@@ -296,7 +296,6 @@ impl<RT: Runtime> FunctionRunner<RT> for InProcessFunctionRunner<RT> {
         udf_config: UdfConfig,
         modules: BTreeMap<CanonicalizedModulePath, ModuleConfig>,
         environment_variables: BTreeMap<EnvVarName, EnvVarValue>,
-        max_user_heap_size: usize,
     ) -> anyhow::Result<Result<BTreeMap<CanonicalizedModulePath, AnalyzedModule>, JsError>> {
         self.server
             .analyze(
@@ -304,7 +303,6 @@ impl<RT: Runtime> FunctionRunner<RT> for InProcessFunctionRunner<RT> {
                 modules,
                 environment_variables,
                 self.deployment.name.clone(),
-                max_user_heap_size,
             )
             .await
     }

@@ -4,6 +4,7 @@ use common::{
     types::{
         BackendState,
         SystemStopState,
+        UsageLimitStopState,
         UserStopState,
     },
 };
@@ -51,8 +52,9 @@ impl<'a, RT: Runtime> BackendStateModel<'a, RT> {
         SystemMetadataModel::new_global(self.tx)
             .insert(
                 &BACKEND_STATE_TABLE,
-                PersistedBackendState::New(BackendState {
+                PersistedBackendState(BackendState {
                     system: SystemStopState::None,
+                    usage_limit: UsageLimitStopState::None,
                     user: UserStopState::None,
                 })
                 .try_into()?,
@@ -71,7 +73,7 @@ impl<'a, RT: Runtime> BackendStateModel<'a, RT> {
             .unique()
             .await?
             .ok_or_else(|| anyhow::anyhow!("Backend must have a state."))?;
-        (*backend_state).clone().map(|bs| Ok(bs.to_new()))
+        (*backend_state).clone().map(|bs| Ok(bs.0))
     }
 
     pub async fn set_user_stop_state(
@@ -85,7 +87,7 @@ impl<'a, RT: Runtime> BackendStateModel<'a, RT> {
         let old = current;
         current.user = new_user_state;
         SystemMetadataModel::new_global(self.tx)
-            .replace(id, PersistedBackendState::New(current).try_into()?)
+            .replace(id, PersistedBackendState(current).try_into()?)
             .await?;
         Ok(Some(old))
     }
@@ -101,9 +103,24 @@ impl<'a, RT: Runtime> BackendStateModel<'a, RT> {
         let old = current;
         current.system = new_system_state;
         SystemMetadataModel::new_global(self.tx)
-            .replace(id, PersistedBackendState::New(current).try_into()?)
+            .replace(id, PersistedBackendState(current).try_into()?)
             .await?;
         Ok(Some(old))
     }
 
+    pub async fn set_usage_limit_stop_state(
+        &mut self,
+        new_usage_limit_state: UsageLimitStopState,
+    ) -> anyhow::Result<Option<BackendState>> {
+        let (id, mut current) = self.get_backend_state().await?.into_id_and_value();
+        if current.usage_limit == new_usage_limit_state {
+            return Ok(None);
+        }
+        let old = current;
+        current.usage_limit = new_usage_limit_state;
+        SystemMetadataModel::new_global(self.tx)
+            .replace(id, PersistedBackendState(current).try_into()?)
+            .await?;
+        Ok(Some(old))
+    }
 }

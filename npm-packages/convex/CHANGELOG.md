@@ -1,5 +1,64 @@
 # Changelog
 
+## 1.43.0
+- Added new `npx convex deployment usage` and 
+  `npx convex deployment usage-limits` CLI commands to
+  view a deployment’s current resource usage, and
+  view or edit deployment usage limits.
+- When defining hourly cron jobs, you can now omit the
+  `minuteUTC` parameter. When omitted, Convex will automatically
+  choose a stable start time within the scheduled hour,
+  avoiding concentrating jobs at the top of the hour.
+- Mutations can now reference their upcoming
+  [commit timestamp](https://docs.convex.dev/database/advanced/commit-timestamp)
+  with `ctx.db.vars.commitTs`. While the mutation is running,
+  `ctx.db.vars.commitTs` is a placeholder symbol that is
+  replaced with a Int64 value at commit time that is guaranteed
+  to strictly follow commit order, unlike the `_creationTime` system field.
+  This low-level primitive is helpful for advanced use cases such as implementing
+  efficient FIFO queues. 
+- Added a new `v.commitTs()` validator that accepts either the
+  upcoming commit timestamp placeholder, or a Int64 commit timestamp.
+- The Convex CLI is now able to find the right TypeScript compiler
+  when using side-by-side TypeScript 6 and 7 installation.
+  (This setup is used in codebases that want to use the native TypeScript 7
+  compiler but still need access to the TypeScript compiler JavaScript API.)
+- Deprecated the `typescriptCompiler` parameter in `convex.json`.
+  This parameter was only necessary when using the TypeScript Native Preview
+  (@typescript/native-preview). With TypeScript 7, Convex
+  automatically picks the right binary.
+- When a component only uses environment variables that are all optional,
+  it’s now possible to omit the `env` argument from `app.use(component, { … })`.
+- Fixed a bug where `app.use()` failed to require
+  a second argument when a component has required environment variables
+  (e.g. `app.use(component, { env: { REQUIRED_VAR: "value" } })`).
+- Fixed a bug in `usePaginatedQuery_experimental`
+  where page splits were handled incorrectly.
+
+## 1.42.3
+
+- Fixed a bug where the codegen would not sort module paths in
+  an order consistent with other platforms when running
+  on Windows. This completes a fix that was only partially
+  applied in 1.42.2.
+
+## 1.42.2
+- Mutations and actions can now read the raw authentication
+  token used in the request by accessing `authToken` in
+  `ctx.meta.getRequestMetadata()`.
+- Fixed a circular import in `convex/browser` that caused issues
+  when using the `ConvexHttpClient` in some JavaScript
+  environments.
+- Fixed a bug in `ConvexProviderWithClerk` that caused
+  the Convex client to ignore session changes in some situations.
+- Fixed a bug where the codegen would not sort module paths in
+  an order consistent with other platforms when running
+  on Windows.
+- When running `npx convex dev` outside a Convex project,
+  the CLI now returns an error message immediately instead of
+  first asking the user to select a project and then failing
+  later.
+
 ## 1.42.1
 
 - Fixed an issue where the CLI would be unable to find the `tsgo` binary in
