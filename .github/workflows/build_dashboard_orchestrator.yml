@@ -62,3 +62,21 @@ jobs:
         run: |
           just install-js
           just turbo run build --filter=dashboard-orchestrator...
+
+      # Build the release image too, without pushing it. `turbo run build`
+      # above only proves the Next build compiles; it says nothing about
+      # whether Dockerfile.dashboard-orchestrator can package the result.
+      # Those are different failure modes: the standalone output is nested
+      # under the package's workspace-relative path, so a wrong COPY/cp path
+      # compiles clean and only explodes at image-build time. Without this
+      # step that break can ONLY surface on a push to `release`, which is
+      # the publish path — the worst possible place to discover it.
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build dashboard-orchestrator image (no push)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: self-hosted/docker-build/Dockerfile.dashboard-orchestrator
+          push: false

@@ -64,7 +64,12 @@ RUN groupadd --system --gid 1001 nodejs
 RUN useradd --system --uid 1001 --gid nodejs nextjs
 COPY --from=build --chown=nextjs:nodejs /tmp/deploy/ /app/
 WORKDIR /app
-RUN cp /app/.next/standalone/server.js .
+# Since the pnpm workspace root (npm-packages/, where pnpm-lock.yaml lives) is
+# an ancestor of the package, Next infers it as outputFileTracingRoot and nests
+# the standalone output under the package's workspace-relative path — the same
+# reason Dockerfile.dashboard copies from `standalone/dashboard-self-hosted/`.
+# There is no `standalone/server.js` at the root to copy.
+RUN cp /app/.next/standalone/dashboard-orchestrator/server.js .
 USER nextjs
 EXPOSE 6793
 ENV PORT=6793
