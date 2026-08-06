@@ -28,6 +28,11 @@ jobs:
   build:
     name: Build orchestrator image
     strategy:
+      # One arch dying must not cancel the other. These builds run 20+ minutes
+      # on spot runners, so a reclaimed instance is a routine event — with
+      # fail-fast on, it throws away a healthy sibling build and doubles the
+      # work on re-run. A real code error fails both arches anyway.
+      fail-fast: false
       matrix:
         arch: [x64, arm64]
     runs-on:
