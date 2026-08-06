@@ -45,9 +45,15 @@ services:
     volumes:
       - orchestrator-data:/convex/data
       - /var/run/docker.sock:/var/run/docker.sock
-      # Custom-domain routers are rendered here and read by Traefik's file
-      # provider. Written by the orchestrator, read-only on the Traefik side.
-      - traefik-dynamic:/convex/traefik-dynamic
+      # Custom-domain routers and certificates. Two separate named volumes,
+      # mounted directly at the leaf paths, so Docker guarantees both
+      # directories exist before either container starts. With a single
+      # volume the orchestrator had to mkdir them, and Traefik — which starts
+      # concurrently — could reach its file provider first and die with
+      # "unable to read directory /dynamic/conf", permanently: it does not
+      # retry a provider that fails to start.
+      - traefik-dynamic-conf:/convex/traefik-dynamic/conf
+      - traefik-dynamic-certs:/convex/traefik-dynamic/certs
     labels:
       - "traefik.enable=true"
       # Orchestrator API on ORCHESTRATOR_HOST. Priority above the
@@ -192,9 +198,10 @@ services:
     volumes:
       - traefik-acme:/acme
       - /var/run/docker.sock:/var/run/docker.sock:ro
-      # Custom-domain routers written by the orchestrator. Read-only here:
-      # the orchestrator owns the file, Traefik only watches it.
-      - traefik-dynamic:/dynamic:ro
+      # Custom-domain routers and certificates written by the orchestrator.
+      # Read-only here: the orchestrator owns them, Traefik only reads.
+      - traefik-dynamic-conf:/dynamic/conf:ro
+      - traefik-dynamic-certs:/dynamic/certs:ro
     environment:
       # DNS provider creds — pass through whichever ones your provider
       # needs. See https://doc.traefik.io/traefik/https/acme/#providers
@@ -244,4 +251,5 @@ volumes:
   pgdata:
   orchestrator-data:
   traefik-acme:
-  traefik-dynamic:
+  traefik-dynamic-conf:
+  traefik-dynamic-certs:

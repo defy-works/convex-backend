@@ -207,9 +207,12 @@ pub fn render_config(input: RenderInput<'_>) -> String {
     let mut out = String::from("# Managed by convex-orchestrator. Do not edit by hand.\n");
 
     if routers.is_empty() {
-        // Traefik treats an empty `http:` mapping as malformed, so emit
-        // explicit empty maps when nothing is configured.
-        out.push_str("http:\n  routers: {}\n  services: {}\n");
+        // Nothing but the comment. Traefik rejects empty `routers: {}` /
+        // `services: {}` maps outright — "routers cannot be a standalone
+        // element (type map[string]*dynamic.Router)" — which killed the whole
+        // file on load, so a config that was *meant* to say "nothing
+        // configured" instead broke the provider. A comment-only document
+        // parses to an empty configuration, which is what we actually want.
     } else {
         out.push_str("http:\n  routers:\n");
         out.push_str(&routers);
@@ -431,11 +434,23 @@ mod tests {
     }
 
     #[test]
-    fn renders_valid_yaml_when_there_are_no_domains() {
+    fn emits_only_a_comment_when_there_are_no_domains() {
+        // Verified against a live Traefik: `routers: {}` / `services: {}` is
+        // rejected with "routers cannot be a standalone element", which takes
+        // the entire file down. A comment-only document is accepted and
+        // yields an empty configuration.
         let config = render(&[], &[]);
-        assert!(config.contains("routers: {}"));
-        assert!(config.contains("services: {}"));
+        assert!(!config.contains("routers"));
+        assert!(!config.contains("services"));
+        assert!(!config.contains("http:"));
         assert!(!config.contains("acme-challenge"));
+        assert!(config.starts_with("# Managed by convex-orchestrator"));
+        // Every non-empty line must be a comment, or Traefik will try to
+        // interpret it as configuration.
+        assert!(config
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .all(|l| l.trim_start().starts_with('#')));
     }
 
     #[test]
