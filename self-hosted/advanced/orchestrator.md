@@ -60,8 +60,7 @@ own infrastructure and behave the same way.
 - Default project-level environment variables.
 - Custom domains, end to end: managed entirely in the dashboard, routed via
   Traefik's file provider, with certificates the orchestrator issues itself over
-  HTTP-01 or DNS-01 (Cloudflare, DigitalOcean, Hetzner) and renews
-  automatically. See [Custom domains](#custom-domains).
+  HTTP-01 and renews automatically. See [Custom domains](#custom-domains).
 
 **Stubbed** (returns sensible empty / defaults so the dashboard renders without
 errors, but the cloud-only feature is not implemented):
@@ -285,32 +284,29 @@ finished certificates into the shared dynamic directory. The result:
 - Routers for domains added after a backend container was created still work —
   docker labels are fixed at create time, file-provider routers are not.
 
-#### Choosing a challenge
+#### Validation
 
-| Challenge           | Setup                     | Use when                                                               |
-| ------------------- | ------------------------- | ---------------------------------------------------------------------- |
-| `http-01` (default) | None                      | The normal case. Port 80 must reach Traefik.                           |
-| `dns-01`            | A DNS provider credential | You want a **wildcard** (`*.example.com`), or port 80 isn't reachable. |
+Always **HTTP-01**, which needs no credentials and nothing to configure: port 80
+must reach Traefik, which it already does.
 
-Supported DNS providers: **Cloudflare**, **DigitalOcean**, and **Hetzner**. Add
-a token under **DNS Provider Credentials** on the same page; the form fields are
-advertised by the orchestrator, so a new provider appears in the dashboard
-without a dashboard release. Tokens are encrypted with a key derived from
-`SERVICE_KEY` and are never returned by the API.
+DNS-01 is deliberately unsupported, and with it wildcard custom domains
+(`*.example.com` is rejected). It would have meant storing DNS provider API
+tokens that can edit entire zones — real liability for a capability a custom
+domain rarely needs, since the normal case is one hostname CNAME'd at you. Note
+this is separate from the wildcard cert for `*.${ROUTER_HOST}`, which Traefik
+still issues over DNS-01 using your own provider credentials.
 
 #### Adding a domain
 
 1. Create a CNAME from your domain to `${ROUTER_HOST}` (shown in the dashboard
    as the target host).
-2. For `dns-01` only: save a DNS provider credential.
-3. Add the hostname, pick the challenge, and hit **Add**.
+2. Add the hostname and hit **Add**.
 
-Issuance runs in the background — an order takes tens of seconds, and DNS
-propagation longer. The domain moves `pending` → `issuing` → `active`, or
-`failed` with the reason shown verbatim (bad token, zone not found, DNS not
-pointed here). **Retry** re-runs it. A background sweep also retries domains
-that never got a certificate, so "I added it before the CNAME propagated" heals
-itself.
+Issuance runs in the background — an order takes tens of seconds. The domain
+moves `pending` → `issuing` → `active`, or `failed` with the reason shown
+verbatim (bad token, zone not found, DNS not pointed here). **Retry** re-runs
+it. A background sweep also retries domains that never got a certificate, so "I
+added it before the CNAME propagated" heals itself.
 
 `active` means the orchestrator completed a real HTTPS request against the
 domain — not merely that issuance was requested.

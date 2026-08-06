@@ -11,23 +11,22 @@
 //! `tls.certificates`. So the orchestrator owns the ACME conversation and
 //! hands Traefik finished certificates. Consequences:
 //!
-//! - DNS credentials live in Postgres (sealed), entered in the dashboard, and
-//!   take effect on the next issuance — no restart, no SSH.
-//! - Adding a DNS provider is a code change here, not an operator-facing
-//!   configuration change.
 //! - Custom domains need *zero* static Traefik configuration beyond pointing
 //!   the file provider at a directory.
+//! - Certificates are ours to renew, on our own schedule.
 //!
-//! # Challenges
+//! # Challenge
 //!
-//! - `http-01` needs no credentials at all. Traefik routes
-//!   `/.well-known/acme-challenge/` for the domain to the orchestrator (via a
-//!   dynamic router it writes itself), which serves the token from
-//!   [`ChallengeStore`].
-//! - `dns-01` works when port 80 isn't reachable, and is the only way to get
-//!   a wildcard. It needs a provider token — see [`dns_providers`].
+//! `http-01` only, and it needs no credentials: Traefik routes
+//! `/.well-known/acme-challenge/` for the domain to the orchestrator (via a
+//! dynamic router it writes itself), which serves the token from
+//! [`ChallengeStore`].
+//!
+//! DNS-01 is deliberately unsupported. It existed only for wildcards and for
+//! hosts where port 80 is unreachable — neither applies here, since Traefik
+//! owns :80 — and it cost three DNS provider integrations plus storage of
+//! zone-editing API tokens for a capability nobody asked for.
 
-pub mod dns_providers;
 pub mod renewal;
 
 use std::{
@@ -51,11 +50,6 @@ use instant_acme::{
 use parking_lot::Mutex;
 
 use crate::{
-    acme::dns_providers::{
-        DnsProvider,
-        Provider,
-        Secrets,
-    },
     state::OrchestratorState,
     time::now_unix_ms,
 };
@@ -65,37 +59,15 @@ use crate::{
 const RENEW_AFTER_MS: i64 = 60 * 24 * 60 * 60 * 1000;
 
 /// How long to wait for the ACME server to validate a challenge before
-/// giving up. DNS propagation is the slow part.
+/// giving up.
 const VALIDATION_TIMEOUT: Duration = Duration::from_secs(180);
 const POLL_INTERVAL: Duration = Duration::from_secs(3);
 
-/// Gap between publishing a TXT record and telling the ACME server to check
-/// it. Without this the server frequently reads a stale negative answer from
-/// its resolver cache and fails the authorization outright.
-const DNS_PROPAGATION_DELAY: Duration = Duration::from_secs(15);
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ChallengeKind {
-    Http01,
-    Dns01,
-}
-
-impl ChallengeKind {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            ChallengeKind::Http01 => "http-01",
-            ChallengeKind::Dns01 => "dns-01",
-        }
-    }
-
-    pub fn parse(s: &str) -> anyhow::Result<Self> {
-        match s {
-            "http-01" => Ok(ChallengeKind::Http01),
-            "dns-01" => Ok(ChallengeKind::Dns01),
-            other => anyhow::bail!("unknown challenge type {other:?}"),
-        }
-    }
-}
+/// Only HTTP-01 is supported. DNS-01 was removed: it existed solely for
+/// wildcard domains and for hosts where port 80 is unreachable, neither of
+/// which applies here (Traefik owns :80), and it cost three DNS provider
+/// integrations plus storage of zone-editing API tokens.
+pub const CHALLENGE_TYPE: &str = "http-01";
 
 /// In-flight HTTP-01 tokens, keyed by challenge token. Populated for the
 /// duration of an issuance and served by the orchestrator's
@@ -131,8 +103,7 @@ pub struct IssuedCertificate {
 /// Loads the stored ACME account, creating and persisting one on first use.
 ///
 /// The account key is what proves to Let's Encrypt that we're the same
-/// client across renewals, so it's sealed with the same secretbox the DNS
-/// credentials use.
+/// client across renewals, so it's sealed before it touches Postgres.
 async fn account(state: &OrchestratorState) -> anyhow::Result<Account> {
     let directory = directory_url(state);
 
@@ -194,13 +165,11 @@ fn directory_url(state: &OrchestratorState) -> String {
 
 /// Runs a full ACME order for `domain` and returns the issued certificate.
 ///
-/// `dns` must be supplied for [`ChallengeKind::Dns01`]; it's ignored for
-/// HTTP-01, which needs no credentials.
+/// Validation is always HTTP-01, which needs no credentials: Traefik routes
+/// `/.well-known/acme-challenge/` for the domain back to us.
 pub async fn issue(
     state: &OrchestratorState,
     domain: &str,
-    challenge_kind: ChallengeKind,
-    dns: Option<(Provider, Secrets)>,
 ) -> anyhow::Result<IssuedCertificate> {
     let account = account(state).await?;
 
@@ -219,73 +188,36 @@ pub async fn issue(
 
     // Tracks what we published so cleanup runs even on the error paths.
     let mut http_tokens: Vec<String> = Vec::new();
-    let mut dns_records: Vec<(Box<dyn DnsProvider>, dns_providers::TxtRecord)> = Vec::new();
 
     let result = async {
-        let mut needs_dns_delay = false;
-
         for authz in &authorizations {
             if authz.status == AuthorizationStatus::Valid {
                 // Already validated from a previous order — nothing to do.
                 continue;
             }
 
-            let wanted = match challenge_kind {
-                ChallengeKind::Http01 => ChallengeType::Http01,
-                ChallengeKind::Dns01 => ChallengeType::Dns01,
-            };
             let challenge = authz
                 .challenges
                 .iter()
-                .find(|c| c.r#type == wanted)
-                .with_context(|| {
-                    format!(
-                        "the ACME server offered no {} challenge for this domain",
-                        challenge_kind.as_str()
-                    )
-                })?;
+                .find(|c| c.r#type == ChallengeType::Http01)
+                .context("the ACME server offered no http-01 challenge for this domain")?;
 
             let key_auth = order.key_authorization(challenge);
-            let Identifier::Dns(authz_domain) = &authz.identifier;
-
-            match challenge_kind {
-                ChallengeKind::Http01 => {
-                    state
-                        .challenges
-                        .insert(challenge.token.clone(), key_auth.as_str().to_string());
-                    http_tokens.push(challenge.token.clone());
-                },
-                ChallengeKind::Dns01 => {
-                    let (provider, secrets) = dns.as_ref().context(
-                        "the dns-01 challenge needs DNS provider credentials, but none were \
-                         selected",
-                    )?;
-                    let client = dns_providers::build(*provider, secrets)?;
-                    let record = client
-                        .create_txt(authz_domain, &key_auth.dns_value())
-                        .await
-                        .with_context(|| format!("publishing the DNS-01 record for {authz_domain}"))?;
-                    dns_records.push((client, record));
-                    needs_dns_delay = true;
-                },
-            }
-        }
-
-        // Give recursive resolvers a chance to see the new TXT record before
-        // the ACME server queries them.
-        if needs_dns_delay {
-            tokio::time::sleep(DNS_PROPAGATION_DELAY).await;
+            state
+                .challenges
+                .insert(challenge.token.clone(), key_auth.as_str().to_string());
+            http_tokens.push(challenge.token.clone());
         }
 
         for authz in &authorizations {
             if authz.status == AuthorizationStatus::Valid {
                 continue;
             }
-            let wanted = match challenge_kind {
-                ChallengeKind::Http01 => ChallengeType::Http01,
-                ChallengeKind::Dns01 => ChallengeType::Dns01,
-            };
-            if let Some(challenge) = authz.challenges.iter().find(|c| c.r#type == wanted) {
+            if let Some(challenge) = authz
+                .challenges
+                .iter()
+                .find(|c| c.r#type == ChallengeType::Http01)
+            {
                 let url = challenge.url.clone();
                 order
                     .set_challenge_ready(&url)
@@ -327,11 +259,6 @@ pub async fn issue(
     for token in http_tokens {
         state.challenges.remove(&token);
     }
-    for (client, record) in dns_records {
-        if let Err(e) = client.delete_txt(&record).await {
-            tracing::warn!(error = %e, "failed to clean up DNS-01 challenge record");
-        }
-    }
 
     result
 }
@@ -356,8 +283,7 @@ async fn wait_until_ready(order: &mut instant_acme::Order) -> anyhow::Result<()>
                 anyhow::ensure!(
                     tokio::time::Instant::now() < deadline,
                     "timed out waiting for the ACME server to validate this domain — check that \
-                     DNS points here (http-01) or that the provider token can edit this zone \
-                     (dns-01)"
+                     its DNS points here and that port 80 is reachable from the internet"
                 );
                 tokio::time::sleep(POLL_INTERVAL).await;
             },
@@ -384,11 +310,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn challenge_kinds_round_trip() {
-        for kind in [ChallengeKind::Http01, ChallengeKind::Dns01] {
-            assert_eq!(ChallengeKind::parse(kind.as_str()).unwrap(), kind);
-        }
-        assert!(ChallengeKind::parse("tls-alpn-01").is_err());
+    fn advertises_http_01_only() {
+        assert_eq!(CHALLENGE_TYPE, "http-01");
     }
 
     #[test]

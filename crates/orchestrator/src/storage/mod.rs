@@ -28,8 +28,6 @@ pub use self::{
     },
     acme::{
         AcmeAccountRecord,
-        DnsCredentialRecord,
-        DnsCredentialSecrets,
         StoredCertificate,
     },
     custom_domains::{

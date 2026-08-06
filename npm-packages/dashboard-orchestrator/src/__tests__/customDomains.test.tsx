@@ -8,7 +8,6 @@ const mockCreate = jest.fn();
 const mockDelete = jest.fn();
 const mockVerify = jest.fn();
 const mockRetry = jest.fn();
-const mockListCreds = jest.fn();
 
 jest.mock("../lib/config", () => ({
   orchestratorUrl: () => "http://orchestrator.test",
@@ -24,9 +23,6 @@ jest.mock("../lib/orchestratorApi", () => ({
   deleteCustomDomain: (...a: unknown[]) => mockDelete(...a),
   verifyCustomDomain: (...a: unknown[]) => mockVerify(...a),
   retryCustomDomain: (...a: unknown[]) => mockRetry(...a),
-  listDnsCredentials: (...a: unknown[]) => mockListCreds(...a),
-  createDnsCredential: jest.fn(),
-  deleteDnsCredential: jest.fn(),
 }));
 
 function renderCard() {
@@ -34,11 +30,7 @@ function renderCard() {
   // leak into the next through SWR's module-level store.
   return render(
     <SWRConfig value={{ provider: () => new Map(), dedupingInterval: 0 }}>
-      <CustomDomainsCard
-        deploymentId={7}
-        deploymentName="happy-otter-123"
-        teamId={3}
-      />
+      <CustomDomainsCard deploymentId={7} deploymentName="happy-otter-123" />
     </SWRConfig>,
   );
 }
@@ -49,15 +41,10 @@ beforeEach(() => {
   mockDelete.mockReset();
   mockVerify.mockReset();
   mockRetry.mockReset();
-  mockListCreds.mockReset();
   mockList.mockResolvedValue({
     domains: [],
     targetHost: "convex.example.com",
     routingEnabled: true,
-    providers: [{ provider: "cloudflare", fields: [] }],
-  });
-  mockListCreds.mockResolvedValue({
-    credentials: [{ id: 5, name: "cf", provider: "cloudflare", createdAt: 0 }],
     providers: [{ provider: "cloudflare", fields: [] }],
   });
 });
@@ -84,8 +71,6 @@ test("adds a domain and refreshes the list", async () => {
       "pat_test",
       7,
       "api.example.com",
-      "http-01",
-      null,
     ),
   );
   // Re-listed so the new row appears without a manual reload.
@@ -119,8 +104,6 @@ test("reports a domain as pending until a probe confirms the certificate", async
         domain: "api.example.com",
         certState: "pending",
         createdAt: 0,
-        challengeType: "http-01",
-        dnsCredentialId: null,
         lastError: null,
       },
     ],
@@ -144,8 +127,6 @@ test("shows why a check failed so the operator can fix DNS", async () => {
         domain: "api.example.com",
         certState: "pending",
         createdAt: 0,
-        challengeType: "http-01",
-        dnsCredentialId: null,
         lastError: null,
       },
     ],
@@ -173,7 +154,6 @@ test("warns when the orchestrator cannot actually route custom domains", async (
     domains: [],
     targetHost: "convex.example.com",
     routingEnabled: false,
-    providers: [],
   });
   renderCard();
 
@@ -182,41 +162,6 @@ test("warns when the orchestrator cannot actually route custom domains", async (
       screen.getByText(/Custom domain routing is not enabled/),
     ).toBeInTheDocument(),
   );
-});
-
-test("sends the dns-01 challenge with the chosen credential", async () => {
-  const user = userEvent.setup();
-  mockCreate.mockResolvedValue({});
-  renderCard();
-  await waitFor(() => expect(mockListCreds).toHaveBeenCalled());
-
-  await user.type(screen.getByLabelText("Domain"), "*.example.com");
-  await user.selectOptions(screen.getByLabelText("Challenge"), "dns-01");
-  await user.selectOptions(await screen.findByLabelText("Credential"), "5");
-  await user.click(screen.getByRole("button", { name: "Add" }));
-
-  await waitFor(() =>
-    expect(mockCreate).toHaveBeenCalledWith(
-      "http://orchestrator.test",
-      "pat_test",
-      7,
-      "*.example.com",
-      "dns-01",
-      5,
-    ),
-  );
-});
-
-test("warns that a wildcard cannot use the http-01 challenge", async () => {
-  const user = userEvent.setup();
-  renderCard();
-  await waitFor(() => expect(mockList).toHaveBeenCalled());
-
-  await user.type(screen.getByLabelText("Domain"), "*.example.com");
-
-  expect(
-    screen.getByText(/Wildcard domains can only be validated with DNS-01/),
-  ).toBeInTheDocument();
 });
 
 test("surfaces a failed issuance and offers a retry", async () => {
@@ -229,14 +174,11 @@ test("surfaces a failed issuance and offers a retry", async () => {
         domain: "api.example.com",
         certState: "failed",
         createdAt: 0,
-        challengeType: "dns-01",
-        dnsCredentialId: 5,
         lastError: "Cloudflare rejected the token",
       },
     ],
     targetHost: "convex.example.com",
     routingEnabled: true,
-    providers: [],
   });
   renderCard();
 

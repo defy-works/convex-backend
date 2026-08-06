@@ -130,19 +130,6 @@ CREATE TABLE IF NOT EXISTS custom_domains (
     created_at BIGINT NOT NULL
 );
 
--- DNS provider API credentials, used for the ACME DNS-01 challenge.
--- `secrets` is a sodium-secretbox sealed JSON blob (never returned to the
--- dashboard) so a database dump doesn't leak the operator's DNS API tokens.
-CREATE TABLE IF NOT EXISTS dns_provider_credentials (
-    id BIGSERIAL PRIMARY KEY,
-    team_id BIGINT NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
-    name TEXT NOT NULL,
-    provider TEXT NOT NULL,
-    secrets BYTEA NOT NULL,
-    created_at BIGINT NOT NULL,
-    UNIQUE (team_id, name)
-);
-
 -- One ACME account (and its private key) per directory URL. The key is
 -- sealed like DNS credentials: whoever holds it can issue certificates for
 -- any domain this orchestrator has validated.

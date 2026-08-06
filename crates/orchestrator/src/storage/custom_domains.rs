@@ -8,11 +8,6 @@ pub struct CustomDomainRecord {
     pub domain: String,
     pub cert_state: String,
     pub created_at: i64,
-    /// `http-01` or `dns-01`. Chosen per domain in the dashboard.
-    pub challenge_type: String,
-    /// DNS provider credential used for `dns-01`. `None` for `http-01`,
-    /// which needs no credentials at all.
-    pub dns_credential_id: Option<i64>,
     /// Why the last issuance attempt failed, verbatim. Only the operator can
     /// fix the usual causes (DNS not pointed here, token lacks zone access).
     pub last_error: Option<String>,
@@ -33,26 +28,16 @@ impl Storage {
         &self,
         deployment_id: i64,
         domain: &str,
-        challenge_type: &str,
-        dns_credential_id: Option<i64>,
     ) -> anyhow::Result<CustomDomainRecord> {
         let now = now_unix_ms();
         let conn = self.pool().acquire().await?;
         let row = conn
             .client()
             .query_one(
-                "INSERT INTO custom_domains
-                     (deployment_id, domain, cert_state, created_at, challenge_type,
-                      dns_credential_id)
-                 VALUES ($1, $2, 'pending', $3, $4, $5)
+                "INSERT INTO custom_domains (deployment_id, domain, cert_state, created_at)
+                 VALUES ($1, $2, 'pending', $3)
                  RETURNING id",
-                &[
-                    &deployment_id,
-                    &domain,
-                    &now,
-                    &challenge_type,
-                    &dns_credential_id,
-                ],
+                &[&deployment_id, &domain, &now],
             )
             .await?;
         Ok(CustomDomainRecord {
@@ -61,8 +46,6 @@ impl Storage {
             domain: domain.to_string(),
             cert_state: "pending".to_string(),
             created_at: now,
-            challenge_type: challenge_type.to_string(),
-            dns_credential_id,
             last_error: None,
         })
     }
@@ -93,8 +76,7 @@ impl Storage {
         let row = conn
             .client()
             .query_opt(
-                "SELECT id, deployment_id, domain, cert_state, created_at, challenge_type,
-                        dns_credential_id, last_error
+                "SELECT id, deployment_id, domain, cert_state, created_at, last_error
                  FROM custom_domains WHERE domain = $1",
                 &[&domain],
             )
@@ -105,9 +87,7 @@ impl Storage {
             domain: r.get(2),
             cert_state: r.get(3),
             created_at: r.get(4),
-            challenge_type: r.get(5),
-            dns_credential_id: r.get(6),
-            last_error: r.get(7),
+            last_error: r.get(5),
         }))
     }
 
@@ -179,8 +159,7 @@ impl Storage {
         let rows = conn
             .client()
             .query(
-                "SELECT id, deployment_id, domain, cert_state, created_at, challenge_type,
-                        dns_credential_id, last_error
+                "SELECT id, deployment_id, domain, cert_state, created_at, last_error
                  FROM custom_domains WHERE deployment_id = $1",
                 &[&deployment_id],
             )
@@ -193,9 +172,7 @@ impl Storage {
                 domain: r.get(2),
                 cert_state: r.get(3),
                 created_at: r.get(4),
-                challenge_type: r.get(5),
-                dns_credential_id: r.get(6),
-                last_error: r.get(7),
+                last_error: r.get(5),
             })
             .collect())
     }

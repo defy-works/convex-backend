@@ -68,18 +68,23 @@ pub async fn run(pool: &PgPool) -> anyhow::Result<()> {
             "#,
         )
         .await?;
-    // Custom-domain certificate management. Domains created before this
-    // migration used a Traefik-side cert resolver and carry no challenge
-    // preference, so default them to `http-01`: it needs no credentials and
-    // matches the behaviour they already had.
+    // Custom-domain certificate management. `last_error` carries the reason
+    // the last issuance attempt failed, verbatim, for the dashboard to show.
+    //
+    // The DNS-01 columns are dropped rather than added: a short-lived build
+    // shipped `challenge_type` and `dns_credential_id` (the latter with a
+    // foreign key to `dns_provider_credentials`) before DNS-01 was removed.
+    // Both drops and the table drop are idempotent, and no live domain ever
+    // used anything but http-01, so nothing is lost. Ordering matters —
+    // the column referencing the table must go before the table itself.
     conn.client()
         .batch_execute(
             r#"
             ALTER TABLE custom_domains
-              ADD COLUMN IF NOT EXISTS challenge_type TEXT NOT NULL DEFAULT 'http-01',
-              ADD COLUMN IF NOT EXISTS dns_credential_id BIGINT
-                REFERENCES dns_provider_credentials(id) ON DELETE SET NULL,
-              ADD COLUMN IF NOT EXISTS last_error TEXT;
+              ADD COLUMN IF NOT EXISTS last_error TEXT,
+              DROP COLUMN IF EXISTS challenge_type,
+              DROP COLUMN IF EXISTS dns_credential_id;
+            DROP TABLE IF EXISTS dns_provider_credentials;
             "#,
         )
         .await?;

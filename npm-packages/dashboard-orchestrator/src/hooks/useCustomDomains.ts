@@ -1,11 +1,8 @@
 import useSWR from "swr";
 import {
   createCustomDomain,
-  createDnsCredential,
   deleteCustomDomain,
-  deleteDnsCredential,
   listCustomDomains,
-  listDnsCredentials,
   retryCustomDomain,
   verifyCustomDomain,
 } from "../lib/orchestratorApi";
@@ -24,20 +21,9 @@ export function useCustomDomains(deploymentId: number | undefined) {
     { refreshInterval: 10_000 },
   );
 
-  const add = async (
-    domain: string,
-    challengeType: "http-01" | "dns-01",
-    dnsCredentialId?: number | null,
-  ) => {
+  const add = async (domain: string) => {
     if (!token || !deploymentId) return;
-    await createCustomDomain(
-      url,
-      token,
-      deploymentId,
-      domain,
-      challengeType,
-      dnsCredentialId,
-    );
+    await createCustomDomain(url, token, deploymentId, domain);
     await mutate();
   };
 
@@ -67,46 +53,11 @@ export function useCustomDomains(deploymentId: number | undefined) {
     domains: data?.domains,
     targetHost: data?.targetHost,
     routingEnabled: data?.routingEnabled ?? false,
-    providers: data?.providers ?? [],
     error,
     isLoading,
     add,
     remove,
     retry,
     verify,
-  };
-}
-
-export function useDnsCredentials(teamId: number | undefined) {
-  const token = useAccessToken();
-  const url = orchestratorUrl();
-  const { data, error, isLoading, mutate } = useSWR(
-    token && teamId ? ["dnsCredentials", teamId, token] : null,
-    () => listDnsCredentials(url, token!, teamId!),
-  );
-
-  const add = async (
-    name: string,
-    provider: string,
-    secrets: Record<string, string>,
-  ) => {
-    if (!token || !teamId) return;
-    await createDnsCredential(url, token, teamId, name, provider, secrets);
-    await mutate();
-  };
-
-  const remove = async (credentialId: number) => {
-    if (!token || !teamId) return;
-    await deleteDnsCredential(url, token, teamId, credentialId);
-    await mutate();
-  };
-
-  return {
-    credentials: data?.credentials,
-    providers: data?.providers ?? [],
-    error,
-    isLoading,
-    add,
-    remove,
   };
 }

@@ -27,7 +27,6 @@ import { useHostCapacity } from "../../../../../hooks/useHostCapacity";
 import { useKnobRegistry } from "../../../../../hooks/useKnobRegistry";
 import { useProjectSettings } from "../../../../../hooks/useProjectSettings";
 import { CustomDomainsCard } from "../../../../../components/CustomDomainsCard";
-import { DnsCredentialsCard } from "../../../../../components/DnsCredentialsCard";
 
 const SECTION_IDS = {
   projectForm: "project-form",
@@ -167,7 +166,7 @@ export default function ProjectSettingsPage() {
                   <EnvVarsSection project={project} token={token} url={url} />
                 </div>
                 <div id={SECTION_IDS.customDomains}>
-                  <CustomDomainsSection team={team} project={project} />
+                  <CustomDomainsSection project={project} />
                 </div>
                 <div id={SECTION_IDS.deleteProject}>
                   <DeleteProjectSection
@@ -800,13 +799,7 @@ function ProjectAdminsSection({
 // resolve to), but operators think about them per project — so the project
 // settings page renders one card per deployment rather than making them go
 // hunting through each deployment's settings.
-function CustomDomainsSection({
-  team,
-  project,
-}: {
-  team: Team;
-  project: Project;
-}) {
+function CustomDomainsSection({ project }: { project: Project }) {
   const token = useAccessToken();
   const url = orchestratorUrl();
   const { data: deployments } = useSWR(
@@ -842,7 +835,6 @@ function CustomDomainsSection({
           key={d.id}
           deploymentId={d.id}
           deploymentName={d.name}
-          teamId={team.id}
           heading={
             deployments.length > 1
               ? `Custom Domains — ${d.deploymentType ?? d.kind ?? d.name}`
@@ -850,9 +842,6 @@ function CustomDomainsSection({
           }
         />
       ))}
-      {/* Credentials are team-scoped and shared by every domain, so they sit
-          below the per-deployment cards rather than inside each one. */}
-      <DnsCredentialsCard teamId={team.id} />
     </div>
   );
 }

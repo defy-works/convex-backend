@@ -2828,108 +2828,6 @@
         }
       }
     },
-    "/api/dashboard/teams/{team_id}/dns_credentials/list": {
-      "get": {
-        "tags": ["dashboard"],
-        "operationId": "list_dns_creds",
-        "parameters": [
-          {
-            "name": "team_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "integer",
-              "format": "int64"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ListDnsCredentials"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/dashboard/teams/{team_id}/dns_credentials/create": {
-      "post": {
-        "tags": ["dashboard"],
-        "operationId": "create_dns_cred",
-        "parameters": [
-          {
-            "name": "team_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "integer",
-              "format": "int64"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/CreateDnsCredentialArgs"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DnsCredential"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": ""
-          }
-        }
-      }
-    },
-    "/api/dashboard/teams/{team_id}/dns_credentials/{credential_id}/delete": {
-      "post": {
-        "tags": ["dashboard"],
-        "operationId": "delete_dns_cred",
-        "parameters": [
-          {
-            "name": "team_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "integer",
-              "format": "int64"
-            }
-          },
-          {
-            "name": "credential_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "integer",
-              "format": "int64"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": ""
-          }
-        }
-      }
-    },
     "/.well-known/acme-challenge/{token}": {
       "get": {
         "tags": ["acme"],
@@ -3700,36 +3598,6 @@
         "properties": {
           "domain": {
             "type": "string"
-          },
-          "challengeType": {
-            "type": ["string", "null"],
-            "description": "Defaults to `http-01`, which needs no credentials."
-          },
-          "dnsCredentialId": {
-            "type": ["integer", "null"],
-            "format": "int64"
-          }
-        }
-      },
-      "CreateDnsCredentialArgs": {
-        "type": "object",
-        "required": ["name", "provider", "secrets"],
-        "properties": {
-          "name": {
-            "type": "string"
-          },
-          "provider": {
-            "type": "string"
-          },
-          "secrets": {
-            "type": "object",
-            "description": "Provider secrets keyed by the field `key`s advertised in\n[`DnsProviderInfo`]. Sealed before storage and never returned.",
-            "additionalProperties": {
-              "type": "string"
-            },
-            "propertyNames": {
-              "type": "string"
-            }
           }
         }
       },
@@ -3861,14 +3729,7 @@
       },
       "CustomDomain": {
         "type": "object",
-        "required": [
-          "id",
-          "deploymentId",
-          "domain",
-          "certState",
-          "createdAt",
-          "challengeType"
-        ],
+        "required": ["id", "deploymentId", "domain", "certState", "createdAt"],
         "properties": {
           "id": {
             "type": "integer",
@@ -3887,14 +3748,6 @@
           },
           "createdAt": {
             "type": "integer",
-            "format": "int64"
-          },
-          "challengeType": {
-            "type": "string",
-            "description": "`http-01` (no credentials needed) or `dns-01` (needs a DNS provider\ncredential, and is the only option for wildcards)."
-          },
-          "dnsCredentialId": {
-            "type": ["integer", "null"],
             "format": "int64"
           },
           "lastError": {
@@ -4138,57 +3991,6 @@
           }
         }
       },
-      "DnsCredential": {
-        "type": "object",
-        "required": ["id", "name", "provider", "createdAt"],
-        "properties": {
-          "id": {
-            "type": "integer",
-            "format": "int64"
-          },
-          "name": {
-            "type": "string"
-          },
-          "provider": {
-            "type": "string"
-          },
-          "createdAt": {
-            "type": "integer",
-            "format": "int64"
-          }
-        }
-      },
-      "DnsProviderField": {
-        "type": "object",
-        "required": ["key", "label", "help"],
-        "properties": {
-          "key": {
-            "type": "string"
-          },
-          "label": {
-            "type": "string"
-          },
-          "help": {
-            "type": "string"
-          }
-        }
-      },
-      "DnsProviderInfo": {
-        "type": "object",
-        "description": "A DNS provider the orchestrator can drive, plus the secret fields its\ncredential form needs. Sent to the dashboard so adding a provider doesn't\nrequire a matching dashboard change.",
-        "required": ["provider", "fields"],
-        "properties": {
-          "provider": {
-            "type": "string"
-          },
-          "fields": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/DnsProviderField"
-            }
-          }
-        }
-      },
       "EnvironmentVariable": {
         "type": "object",
         "required": ["name", "value", "deploymentTypes"],
@@ -4391,20 +4193,13 @@
       },
       "ListCustomDomains": {
         "type": "object",
-        "required": ["domains", "providers", "targetHost", "routingEnabled"],
+        "required": ["domains", "targetHost", "routingEnabled"],
         "properties": {
           "domains": {
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/CustomDomain"
             }
-          },
-          "providers": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/DnsProviderInfo"
-            },
-            "description": "Providers available for dns-01, with their credential form fields."
           },
           "targetHost": {
             "type": "string",
@@ -4436,24 +4231,6 @@
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/DeploymentRegion"
-            }
-          }
-        }
-      },
-      "ListDnsCredentials": {
-        "type": "object",
-        "required": ["credentials", "providers"],
-        "properties": {
-          "credentials": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/DnsCredential"
-            }
-          },
-          "providers": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/DnsProviderInfo"
             }
           }
         }

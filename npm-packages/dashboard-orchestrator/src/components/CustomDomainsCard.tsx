@@ -1,9 +1,7 @@
 // Custom domain management for a single deployment.
 //
-// The orchestrator issues certificates itself (Traefik's cert resolvers are
-// static config and could never be driven from here), so this card exposes
-// the choice Traefik would otherwise have baked into a restart: which ACME
-// challenge to use, and which DNS credential to use with it.
+// Deliberately just a hostname field: validation is always HTTP-01, which
+// needs no credentials, so there is nothing to configure.
 //
 // Nothing here claims a domain is live on its own — `certState` reaches
 // `active` only after the orchestrator has completed a real HTTPS request
@@ -17,19 +15,15 @@ import { Spinner } from "@ui/Spinner";
 import { ConfirmationDialog } from "@ui/ConfirmationDialog";
 import { CopyButton } from "@common/elements/CopyButton";
 import { CheckCircledIcon, TrashIcon } from "@radix-ui/react-icons";
-import { useCustomDomains, useDnsCredentials } from "../hooks/useCustomDomains";
-
-type Challenge = "http-01" | "dns-01";
+import { useCustomDomains } from "../hooks/useCustomDomains";
 
 export function CustomDomainsCard({
   deploymentId,
   deploymentName,
-  teamId,
   heading = "Custom Domains",
 }: {
   deploymentId: number | undefined;
   deploymentName?: string;
-  teamId?: number;
   heading?: string;
 }) {
   const {
@@ -43,18 +37,13 @@ export function CustomDomainsCard({
     retry,
     verify,
   } = useCustomDomains(deploymentId);
-  const { credentials } = useDnsCredentials(teamId);
 
   const [draft, setDraft] = useState("");
-  const [challenge, setChallenge] = useState<Challenge>("http-01");
-  const [credentialId, setCredentialId] = useState<string>("");
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [pendingDelete, setPendingDelete] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [probeErrors, setProbeErrors] = useState<Record<string, string>>({});
-
-  const isWildcard = draft.trim().startsWith("*.");
 
   const onAdd = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -63,11 +52,7 @@ export function CustomDomainsCard({
     setSubmitting(true);
     setFormError(null);
     try {
-      await add(
-        domain,
-        challenge,
-        challenge === "dns-01" && credentialId ? Number(credentialId) : null,
-      );
+      await add(domain);
       setDraft("");
     } catch (err) {
       setFormError((err as Error).message);
@@ -137,52 +122,11 @@ export function CustomDomainsCard({
               onChange={(e) => setDraft(e.target.value)}
             />
           </div>
-          <label className="flex flex-col gap-1 text-sm">
-            <span className="text-content-primary">Challenge</span>
-            <select
-              aria-label="Challenge"
-              className="h-9 rounded-sm border bg-background-secondary px-2 text-sm"
-              value={challenge}
-              onChange={(e) => setChallenge(e.target.value as Challenge)}
-            >
-              <option value="http-01">HTTP-01 (no setup)</option>
-              <option value="dns-01">DNS-01 (needs credential)</option>
-            </select>
-          </label>
-          {challenge === "dns-01" && (
-            <label className="flex flex-col gap-1 text-sm">
-              <span className="text-content-primary">Credential</span>
-              <select
-                aria-label="Credential"
-                className="h-9 rounded-sm border bg-background-secondary px-2 text-sm"
-                value={credentialId}
-                onChange={(e) => setCredentialId(e.target.value)}
-              >
-                <option value="">Select…</option>
-                {credentials?.map((c) => (
-                  <option key={c.id} value={String(c.id)}>
-                    {c.name} ({c.provider})
-                  </option>
-                ))}
-              </select>
-            </label>
-          )}
           <Button type="submit" disabled={submitting || !draft.trim()}>
             Add
           </Button>
         </div>
 
-        {isWildcard && challenge !== "dns-01" && (
-          <p className="text-xs text-content-warning">
-            Wildcard domains can only be validated with DNS-01 — there is no
-            single host an HTTP challenge could be served from.
-          </p>
-        )}
-        {challenge === "dns-01" && credentials?.length === 0 && (
-          <p className="text-xs text-content-warning">
-            No DNS credentials yet. Add one below to use DNS-01.
-          </p>
-        )}
         {formError && (
           <p className="text-xs text-content-error" role="alert">
             {formError}
@@ -211,9 +155,6 @@ export function CustomDomainsCard({
             >
               <div className="flex flex-wrap items-center gap-2">
                 <code className="grow truncate text-sm">{d.domain}</code>
-                <span className="text-xs text-content-secondary">
-                  {d.challengeType}
-                </span>
                 <CopyButton text={d.domain} />
                 <CertStateBadge certState={d.certState} />
                 <Button

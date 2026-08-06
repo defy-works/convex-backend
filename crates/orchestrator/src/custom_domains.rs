@@ -73,15 +73,15 @@ pub fn validate_domain(domain: &str) -> anyhow::Result<String> {
         !normalized.starts_with('-') && !normalized.starts_with('.'),
         "domain must not start with '-' or '.'"
     );
-    // A wildcard needs a DNS-01 challenge, which needs provider credentials.
-    // Allowed, but only the leading label may be `*`.
-    let body = normalized.strip_prefix("*.").unwrap_or(&normalized);
+    // Wildcards can only be validated over DNS-01, which is not supported
+    // (see `crate::acme`), so reject them here rather than letting issuance
+    // fail a minute later with something less obvious.
     anyhow::ensure!(
-        !body.contains('*'),
-        "'*' is only allowed as the leading label (e.g. *.example.com)"
+        !normalized.contains('*'),
+        "wildcard domains are not supported; add each hostname individually"
     );
 
-    for label in body.split('.') {
+    for label in normalized.split('.') {
         anyhow::ensure!(!label.is_empty(), "domain must not contain empty labels");
         anyhow::ensure!(
             label.len() <= 63,
@@ -375,6 +375,7 @@ mod tests {
             "trail-.example.com",
             "double..dot.com",
             "sub.*.example.com",
+            "*.example.com",
         ] {
             assert!(
                 validate_domain(bad).is_err(),
@@ -384,9 +385,9 @@ mod tests {
     }
 
     #[test]
-    fn accepts_a_leading_wildcard() {
-        // Wildcards are legitimate now that dns-01 is supported.
-        assert_eq!(validate_domain("*.example.com").unwrap(), "*.example.com");
+    fn rejects_wildcards() {
+        // Only DNS-01 can validate a wildcard, and that is not supported.
+        assert!(validate_domain("*.example.com").is_err());
     }
 
     #[test]

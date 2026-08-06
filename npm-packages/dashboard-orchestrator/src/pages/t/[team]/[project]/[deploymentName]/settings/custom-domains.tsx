@@ -11,7 +11,6 @@ import {
 import { useAccessToken } from "../../../../../../lib/useOrchestratorToken";
 import { orchestratorUrl } from "../../../../../../lib/config";
 import { CustomDomainsCard } from "../../../../../../components/CustomDomainsCard";
-import { DnsCredentialsCard } from "../../../../../../components/DnsCredentialsCard";
 
 // The route is keyed by deployment *name*, but the custom-domains API is
 // keyed by deployment id, so resolve team -> project -> deployment to get it.
@@ -64,16 +63,10 @@ export default function CustomDomains() {
           </p>
         </Sheet>
       ) : (
-        <div className="flex flex-col gap-6">
-          <CustomDomainsCard
-            deploymentId={deployment.id}
-            deploymentName={deployment.name}
-            teamId={team?.id}
-          />
-          {/* The domains card points here when dns-01 is selected without a
-              credential. Without this the hint would be a dead end. */}
-          <DnsCredentialsCard teamId={team?.id} />
-        </div>
+        <CustomDomainsCard
+          deploymentId={deployment.id}
+          deploymentName={deployment.name}
+        />
       )}
     </DeploymentSettingsLayout>
   );
