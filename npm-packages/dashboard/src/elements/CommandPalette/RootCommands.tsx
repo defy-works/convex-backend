@@ -61,7 +61,7 @@ export function RootCommands({
   const router = useRouter();
   const team = useCurrentTeam();
   const project = useCurrentProject();
-  const { usageLimits, commandPaletteDeleteProjects } = useLaunchDarkly();
+  const { commandPaletteDeleteProjects } = useLaunchDarkly();
   const [, setSupportFormOpen] = useSupportFormOpen();
   const { trackSelected } = usePaletteAnalytics();
 
@@ -76,9 +76,7 @@ export function RootCommands({
       : undefined;
   const deploymentNav =
     deploymentUriPrefix && project
-      ? deploymentNavigation(deploymentUriPrefix, {
-          usageLimitsEnabled: usageLimits,
-        })
+      ? deploymentNavigation(deploymentUriPrefix)
       : undefined;
   // Sections within pages are only surfaced while searching, to keep the
   // browsable (empty-search) list scannable.
@@ -191,7 +189,16 @@ export function RootCommands({
             drillIn
           />
           {!project && (
-            <SwitchProjectItem pushPage={pushPage} label="Go to Project…" />
+            <>
+              <SwitchProjectItem pushPage={pushPage} label="Go to Project…" />
+              <ActionItem
+                value="page:team-deployments"
+                onSelect={() => pushPage({ type: "teamDeployments" })}
+                Icon={CaretSortIcon}
+                label="Go to Deployment…"
+                drillIn
+              />
+            </>
           )}
           {[
             ...teamNav,

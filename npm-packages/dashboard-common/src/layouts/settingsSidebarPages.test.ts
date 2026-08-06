@@ -6,7 +6,6 @@ describe("getAllowedDeploymentSettingsPages", () => {
       getAllowedDeploymentSettingsPages({
         nents: undefined,
         showAdminKeys: true,
-        usageLimitsEnabled: true,
       }),
     ).toContain("components");
   });
@@ -16,7 +15,6 @@ describe("getAllowedDeploymentSettingsPages", () => {
       getAllowedDeploymentSettingsPages({
         nents: [],
         showAdminKeys: true,
-        usageLimitsEnabled: true,
       }),
     ).not.toContain("components");
   });
@@ -26,27 +24,27 @@ describe("getAllowedDeploymentSettingsPages", () => {
       getAllowedDeploymentSettingsPages({
         nents: [{ name: "_App" }],
         showAdminKeys: false,
-        usageLimitsEnabled: true,
       }),
     ).not.toContain("admin-keys");
   });
 
-  test("hides the Usage Limits tab when the feature flag is off", () => {
+  test("shows the Admin Keys tab when the deployment backend owns admin keys", () => {
     expect(
       getAllowedDeploymentSettingsPages({
         nents: [{ name: "_App" }],
         showAdminKeys: true,
-        usageLimitsEnabled: false,
       }),
-    ).not.toContain("usage-limits");
+    ).toContain("admin-keys");
   });
 
-  test("shows the Usage Limits tab when the feature flag is on", () => {
+  // Usage Limits used to be feature-flagged off via `usageLimitsEnabled`.
+  // Upstream removed that flag from DeploymentInfo when the feature shipped,
+  // so the page is now unconditionally available.
+  test("shows the Usage Limits tab", () => {
     expect(
       getAllowedDeploymentSettingsPages({
         nents: [{ name: "_App" }],
         showAdminKeys: true,
-        usageLimitsEnabled: true,
       }),
     ).toContain("usage-limits");
   });

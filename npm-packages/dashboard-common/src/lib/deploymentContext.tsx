@@ -21,7 +21,7 @@ export const PROVISION_PROD_PAGE_NAME = "production";
 export const PROVISION_DEV_PAGE_NAME = "development";
 
 type FallbackRender = (errorData: {
-  error: Error;
+  error: unknown;
   componentStack: string;
   eventId: string;
   resetError(): void;
@@ -330,7 +330,6 @@ export type DeploymentInfo = (
    */
   deploymentBackendOwnsAdminKeys?: boolean;
   workosIntegrationEnabled: boolean;
-  usageLimitsEnabled: boolean;
   // When enabled, the per-row copy button in the environment variables UI
   // copies the name and value in .env format instead of just the value.
   copyEnvVarNameAndValueEnabled: boolean;

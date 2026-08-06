@@ -164,11 +164,9 @@ export function SettingsSidebar({
 
 function useAllowedPages({ showAdminKeys }: { showAdminKeys: boolean }) {
   const { nents } = useNents();
-  const { usageLimitsEnabled } = useContext(DeploymentInfoContext);
 
   return getAllowedDeploymentSettingsPages({
     nents,
     showAdminKeys,
-    usageLimitsEnabled,
   });
 }

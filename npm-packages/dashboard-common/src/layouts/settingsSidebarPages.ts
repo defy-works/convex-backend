@@ -54,11 +54,9 @@ const DEPLOYMENT_SETTINGS_PAGES = Object.keys(
 export function getAllowedDeploymentSettingsPages({
   nents,
   showAdminKeys,
-  usageLimitsEnabled,
 }: {
   nents?: readonly unknown[];
   showAdminKeys: boolean;
-  usageLimitsEnabled: boolean;
 }) {
   let pages = DEPLOYMENT_SETTINGS_PAGES;
 
@@ -67,11 +65,6 @@ export function getAllowedDeploymentSettingsPages({
   }
 
   pages = pages.filter((d) => d !== "snapshots");
-
-  // Usage limits is feature-flagged; hide it from the sidebar when off.
-  if (!usageLimitsEnabled) {
-    pages = pages.filter((d) => d !== "usage-limits");
-  }
 
   // Admin Keys management is shown for backends that own that surface -
   // single-deployment self-hosted shells and orchestrator-managed deployments.
