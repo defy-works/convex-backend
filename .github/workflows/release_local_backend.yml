@@ -34,9 +34,12 @@ jobs:
       fail-fast: false
       matrix:
         arch: [x64, arm64]
+    # On-demand: this is the longest image build (~25 min) and spot
+    # reclamation killed it mid-compile on two consecutive runs, so it never
+    # reached the publish step. See the -ondemand classes in runs-on.yml.
     runs-on:
       "runs-on=${{ github.run_id }}-${{ matrix.arch }}/runner=xlarge-${{
-      matrix.arch }}"
+      matrix.arch }}-ondemand"
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
