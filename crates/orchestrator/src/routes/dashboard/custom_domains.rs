@@ -69,6 +69,7 @@ fn to_api(record: crate::storage::CustomDomainRecord) -> CustomDomain {
         domain: record.domain,
         cert_state: record.cert_state,
         created_at: record.created_at,
+        kind: record.kind,
         last_error: record.last_error,
     }
 }
@@ -116,6 +117,10 @@ pub(crate) async fn create_custom_domain(
 ) -> ApiResult<Json<CustomDomain>> {
     let domain = custom_domains::validate_domain(&args.domain)
         .map_err(|e| ApiError::BadRequest(e.to_string()))?;
+    let kind = custom_domains::validate_kind(
+        args.kind.as_deref().unwrap_or(custom_domains::KIND_API),
+    )
+    .map_err(|e| ApiError::BadRequest(e.to_string()))?;
 
     // `domain` is globally UNIQUE — two deployments can't both claim it, and
     // Traefik couldn't route it if they did. Translate the constraint
@@ -134,7 +139,7 @@ pub(crate) async fn create_custom_domain(
 
     let record = state
         .storage
-        .create_custom_domain(deployment_id, &domain)
+        .create_custom_domain(deployment_id, &domain, &kind)
         .await
         .map_err(ApiError::Internal)?;
 

@@ -99,6 +99,14 @@ struct Args {
     )]
     router_host: String,
 
+    /// Optional separate hostname for HTTP-actions traffic, e.g.
+    /// `defysite.com`. When set, site URLs become `<deployment>.<host>`
+    /// rather than `<deployment>-site.<router_host>`. Browsers must resolve
+    /// `*.<site_router_host>` to the proxy. The legacy hostname keeps
+    /// working regardless.
+    #[arg(long, env = "CONVEX_ORCHESTRATOR_SITE_ROUTER_HOST")]
+    site_router_host: Option<String>,
+
     /// Public port for the proxy as seen by browsers. Almost always equals
     /// the port portion of `--router-addr`, but split out so docker port
     /// mapping (e.g. host 9000 → container 9000) can override it.
@@ -257,6 +265,7 @@ async fn main() -> anyhow::Result<()> {
         backend_network: args.backend_network,
         backend_container_prefix: args.backend_container_prefix.clone(),
         router_host: args.router_host.clone(),
+        site_router_host: args.site_router_host.clone(),
         router_public_port: args.router_public_port,
         router_public_scheme: args.router_public_scheme.clone(),
         direct_backend_routing: args.direct_backend_routing,
@@ -306,7 +315,8 @@ async fn main() -> anyhow::Result<()> {
     let proxy_cfg = orchestrator::proxy::ProxyConfig::new(
         args.router_host.clone(),
         args.backend_container_prefix.clone(),
-    );
+    )
+    .with_site_host(args.site_router_host.clone());
     tokio::spawn(async move {
         if let Err(e) = orchestrator::proxy::serve_proxy(proxy_state, proxy_cfg, proxy_addr).await {
             tracing::error!(error = %e, "convex-orchestrator proxy exited");

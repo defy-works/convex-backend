@@ -57,6 +57,7 @@ impl OrchestratorState {
                     config.backend_container_prefix.clone(),
                     config.backend_network.clone(),
                     config.router_host.clone(),
+                    config.site_router_host.clone(),
                     config.router_public_port,
                     config.router_public_scheme.clone(),
                     config.direct_backend_routing,

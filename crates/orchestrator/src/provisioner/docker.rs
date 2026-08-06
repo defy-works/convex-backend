@@ -34,6 +34,9 @@ pub struct DockerProvisioner {
     /// Hostname suffix used in deployment URLs. e.g. `localhost` →
     /// `http://<deployment>.localhost:<router_public_port>`.
     router_host: String,
+    /// Optional separate host for HTTP-actions traffic. See
+    /// `OrchestratorConfig::site_router_host`.
+    site_router_host: Option<String>,
     /// Port the reverse proxy is exposed on from the browser's perspective.
     router_public_port: u16,
     /// `http` or `https`. Determines the scheme of the deployment URLs the
@@ -57,6 +60,7 @@ impl DockerProvisioner {
         container_prefix: String,
         network: Option<String>,
         router_host: String,
+        site_router_host: Option<String>,
         router_public_port: u16,
         router_public_scheme: String,
         direct_backend_routing: bool,
@@ -68,6 +72,7 @@ impl DockerProvisioner {
             next_port: AtomicU16::new(9100),
             network,
             router_host,
+            site_router_host,
             router_public_port,
             router_public_scheme,
             direct_backend_routing,
@@ -159,6 +164,10 @@ impl DockerProvisioner {
     /// Format a browser-facing deployment URL. Omits the port when it's
     /// the default for the scheme so URLs stay clean behind TLS.
     fn deployment_url(&self, host_prefix: &str) -> String {
+        self.url_on_host(host_prefix, &self.router_host.clone())
+    }
+
+    fn url_on_host(&self, host_prefix: &str, host: &str) -> String {
         let scheme = if self.router_public_scheme == "http" && self.router_public_port == 443 {
             "https"
         } else {
@@ -169,12 +178,27 @@ impl DockerProvisioner {
             _ => 80,
         };
         if self.router_public_port == default_port {
-            format!("{}://{}.{}", scheme, host_prefix, self.router_host)
+            format!("{}://{}.{}", scheme, host_prefix, host)
         } else {
             format!(
                 "{}://{}.{}:{}",
-                scheme, host_prefix, self.router_host, self.router_public_port
+                scheme, host_prefix, host, self.router_public_port
             )
+        }
+    }
+
+    /// Browser-facing URL for a deployment's HTTP actions.
+    ///
+    /// With `site_router_host` set this is `<name>.<site_host>`; otherwise it
+    /// keeps the legacy `<name>-site.<router_host>` form. Both hostnames are
+    /// always routed, so switching this on doesn't strand existing clients —
+    /// it only changes what new (or respawned) deployments advertise.
+    fn site_deployment_url(&self, deployment_name: &str) -> String {
+        match self.site_router_host.as_deref() {
+            Some(host) if !host.trim().is_empty() => {
+                self.url_on_host(deployment_name, host)
+            },
+            _ => self.deployment_url(&format!("{deployment_name}-site")),
         }
     }
 
@@ -200,6 +224,7 @@ impl DockerProvisioner {
                 args,
                 deployment_name,
                 &self.router_host,
+                self.site_router_host.as_deref(),
                 self.network.as_deref(),
             );
         }
@@ -215,7 +240,7 @@ impl Provisioner for DockerProvisioner {
         // routes directly to the backend container or falls back through the
         // in-orchestrator wildcard proxy.
         let url = self.deployment_url(&req.deployment_name);
-        let site_url = self.deployment_url(&format!("{}-site", req.deployment_name));
+        let site_url = self.site_deployment_url(&req.deployment_name);
 
         let secret: String = rand::rng()
             .sample_iter(&Alphanumeric)
@@ -557,6 +582,7 @@ fn push_direct_backend_routing_labels(
     args: &mut Vec<String>,
     deployment_name: &str,
     router_host: &str,
+    site_router_host: Option<&str>,
     docker_network: Option<&str>,
 ) {
     push_label(args, "traefik.enable=true");
@@ -582,12 +608,30 @@ fn push_direct_backend_routing_labels(
         &format!("{deployment_name}.{router_host}"),
         3210,
     );
+    // Legacy site hostname. Emitted unconditionally, even when a dedicated
+    // site host is configured: `CONVEX_SITE_ORIGIN` is baked into a backend
+    // container at spawn time and deployed client apps have the old hostname
+    // compiled in, so dropping this would break every app already in the
+    // wild. Costs one extra router per deployment.
     push_traefik_route(
         args,
         &format!("convex-backend-{safe_name}-site"),
         &format!("{deployment_name}-site.{router_host}"),
         3211,
     );
+
+    // Dedicated site host, when configured: `<deployment>.<site_host>`.
+    if let Some(site_host) = site_router_host
+        && !site_host.trim().is_empty()
+        && site_host != router_host
+    {
+        push_traefik_route(
+            args,
+            &format!("convex-backend-{safe_name}-site-alt"),
+            &format!("{deployment_name}.{site_host}"),
+            3211,
+        );
+    }
 }
 
 fn push_traefik_route(args: &mut Vec<String>, name: &str, host: &str, port: u16) {

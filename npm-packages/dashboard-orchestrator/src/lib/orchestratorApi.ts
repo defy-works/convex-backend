@@ -443,6 +443,7 @@ export const customDomainSchema = z.object({
   domain: z.string(),
   certState: z.string(),
   createdAt: z.number(),
+  kind: z.string(),
   lastError: z.string().nullable(),
 });
 
@@ -482,6 +483,7 @@ export async function createCustomDomain(
   token: string,
   deploymentId: number,
   domain: string,
+  kind: "api" | "site" = "api",
 ): Promise<CustomDomain> {
   const data = await request<unknown>(
     baseUrl,
@@ -489,7 +491,7 @@ export async function createCustomDomain(
     {
       method: "POST",
       token,
-      body: JSON.stringify({ domain }),
+      body: JSON.stringify({ domain, kind }),
     },
   );
   return customDomainSchema.parse(data);

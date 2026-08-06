@@ -3598,6 +3598,10 @@
         "properties": {
           "domain": {
             "type": "string"
+          },
+          "kind": {
+            "type": ["string", "null"],
+            "description": "`api` (default) or `site`. Chosen per domain so one deployment can\nfront its database and its HTTP actions on different hostnames."
           }
         }
       },
@@ -3729,7 +3733,14 @@
       },
       "CustomDomain": {
         "type": "object",
-        "required": ["id", "deploymentId", "domain", "certState", "createdAt"],
+        "required": [
+          "id",
+          "deploymentId",
+          "domain",
+          "certState",
+          "createdAt",
+          "kind"
+        ],
         "properties": {
           "id": {
             "type": "integer",
@@ -3749,6 +3760,10 @@
           "createdAt": {
             "type": "integer",
             "format": "int64"
+          },
+          "kind": {
+            "type": "string",
+            "description": "`api` — the Convex API / database — or `site` for HTTP actions."
           },
           "lastError": {
             "type": ["string", "null"],

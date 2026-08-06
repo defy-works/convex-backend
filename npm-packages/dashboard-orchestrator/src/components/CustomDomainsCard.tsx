@@ -1,7 +1,11 @@
 // Custom domain management for a single deployment.
 //
-// Deliberately just a hostname field: validation is always HTTP-01, which
-// needs no credentials, so there is nothing to configure.
+// A domain fronts one surface: the Convex API (the database, :3210) or HTTP
+// actions (:3211). They're separate hostnames so a deployment can expose
+// e.g. api.example.com and hooks.example.com independently.
+//
+// Validation is always HTTP-01, which needs no credentials, so there is
+// nothing else to configure.
 //
 // Nothing here claims a domain is live on its own — `certState` reaches
 // `active` only after the orchestrator has completed a real HTTPS request
@@ -39,6 +43,7 @@ export function CustomDomainsCard({
   } = useCustomDomains(deploymentId);
 
   const [draft, setDraft] = useState("");
+  const [kind, setKind] = useState<"api" | "site">("api");
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [pendingDelete, setPendingDelete] = useState<string | null>(null);
@@ -52,7 +57,7 @@ export function CustomDomainsCard({
     setSubmitting(true);
     setFormError(null);
     try {
-      await add(domain);
+      await add(domain, kind);
       setDraft("");
     } catch (err) {
       setFormError((err as Error).message);
@@ -122,6 +127,18 @@ export function CustomDomainsCard({
               onChange={(e) => setDraft(e.target.value)}
             />
           </div>
+          <label className="flex flex-col gap-1 text-sm">
+            <span className="text-content-primary">Points at</span>
+            <select
+              aria-label="Points at"
+              className="h-9 rounded-sm border bg-background-secondary px-2 text-sm"
+              value={kind}
+              onChange={(e) => setKind(e.target.value as "api" | "site")}
+            >
+              <option value="api">Database (Convex API)</option>
+              <option value="site">HTTP Actions (site)</option>
+            </select>
+          </label>
           <Button type="submit" disabled={submitting || !draft.trim()}>
             Add
           </Button>
@@ -155,6 +172,9 @@ export function CustomDomainsCard({
             >
               <div className="flex flex-wrap items-center gap-2">
                 <code className="grow truncate text-sm">{d.domain}</code>
+                <span className="text-xs text-content-secondary">
+                  {d.kind === "site" ? "HTTP Actions" : "Database"}
+                </span>
                 <CopyButton text={d.domain} />
                 <CertStateBadge certState={d.certState} />
                 <Button

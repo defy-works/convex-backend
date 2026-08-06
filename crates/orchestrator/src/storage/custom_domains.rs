@@ -7,6 +7,8 @@ pub struct CustomDomainRecord {
     pub deployment_id: i64,
     pub domain: String,
     pub cert_state: String,
+    /// `api` (Convex API / database, :3210) or `site` (HTTP actions, :3211).
+    pub kind: String,
     pub created_at: i64,
     /// Why the last issuance attempt failed, verbatim. Only the operator can
     /// fix the usual causes (DNS not pointed here, token lacks zone access).
@@ -21,6 +23,8 @@ pub struct CustomDomainRecord {
 pub struct CustomDomainRoute {
     pub domain: String,
     pub deployment_name: String,
+    /// `api` or `site` — decides which backend port the router targets.
+    pub kind: String,
 }
 
 impl Storage {
@@ -28,16 +32,17 @@ impl Storage {
         &self,
         deployment_id: i64,
         domain: &str,
+        kind: &str,
     ) -> anyhow::Result<CustomDomainRecord> {
         let now = now_unix_ms();
         let conn = self.pool().acquire().await?;
         let row = conn
             .client()
             .query_one(
-                "INSERT INTO custom_domains (deployment_id, domain, cert_state, created_at)
-                 VALUES ($1, $2, 'pending', $3)
+                "INSERT INTO custom_domains (deployment_id, domain, cert_state, created_at, kind)
+                 VALUES ($1, $2, 'pending', $3, $4)
                  RETURNING id",
-                &[&deployment_id, &domain, &now],
+                &[&deployment_id, &domain, &now, &kind],
             )
             .await?;
         Ok(CustomDomainRecord {
@@ -45,6 +50,7 @@ impl Storage {
             deployment_id,
             domain: domain.to_string(),
             cert_state: "pending".to_string(),
+            kind: kind.to_string(),
             created_at: now,
             last_error: None,
         })
@@ -76,7 +82,7 @@ impl Storage {
         let row = conn
             .client()
             .query_opt(
-                "SELECT id, deployment_id, domain, cert_state, created_at, last_error
+                "SELECT id, deployment_id, domain, cert_state, created_at, last_error, kind
                  FROM custom_domains WHERE domain = $1",
                 &[&domain],
             )
@@ -88,6 +94,7 @@ impl Storage {
             cert_state: r.get(3),
             created_at: r.get(4),
             last_error: r.get(5),
+            kind: r.get(6),
         }))
     }
 
@@ -114,7 +121,7 @@ impl Storage {
         let rows = conn
             .client()
             .query(
-                "SELECT cd.domain, d.name
+                "SELECT cd.domain, d.name, cd.kind
                  FROM custom_domains cd
                  JOIN deployments d ON d.id = cd.deployment_id
                  ORDER BY cd.domain",
@@ -126,6 +133,7 @@ impl Storage {
             .map(|r| CustomDomainRoute {
                 domain: r.get(0),
                 deployment_name: r.get(1),
+                kind: r.get(2),
             })
             .collect())
     }
@@ -159,7 +167,7 @@ impl Storage {
         let rows = conn
             .client()
             .query(
-                "SELECT id, deployment_id, domain, cert_state, created_at, last_error
+                "SELECT id, deployment_id, domain, cert_state, created_at, last_error, kind
                  FROM custom_domains WHERE deployment_id = $1",
                 &[&deployment_id],
             )
@@ -173,6 +181,7 @@ impl Storage {
                 cert_state: r.get(3),
                 created_at: r.get(4),
                 last_error: r.get(5),
+                kind: r.get(6),
             })
             .collect())
     }

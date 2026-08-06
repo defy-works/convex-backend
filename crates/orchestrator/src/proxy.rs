@@ -69,6 +69,10 @@ pub struct ProxyConfig {
     /// Host suffix expected in the request's Host header. Defaults to
     /// `localhost`. Must not include a leading dot — we add one.
     pub host_root: String,
+    /// Optional dedicated host for HTTP-actions traffic. When set, any
+    /// `<deployment>.<site_host>` request routes to the site port. The
+    /// legacy `<deployment>-site.<host_root>` form keeps working.
+    pub site_host_root: Option<String>,
     /// Container name prefix used when resolving the backend's DNS name.
     /// Same prefix the docker provisioner uses on `docker run --name`.
     pub container_prefix: String,
@@ -82,10 +86,16 @@ impl ProxyConfig {
     pub fn new(host_root: String, container_prefix: String) -> Self {
         Self {
             host_root,
+            site_host_root: None,
             container_prefix,
             upstream_cloud_port: 3210,
             upstream_site_port: 3211,
         }
+    }
+
+    pub fn with_site_host(mut self, site_host: Option<String>) -> Self {
+        self.site_host_root = site_host.filter(|h| !h.trim().is_empty());
+        self
     }
 }
 
@@ -155,6 +165,22 @@ fn route_for(cfg: &ProxyConfig, req: &Request<Incoming>) -> Option<RouteTarget> 
         .to_string();
     // Strip any `:port` suffix.
     let host = host.split(':').next().unwrap_or(&host).to_string();
+
+    // A dedicated site host wins: every `<deployment>.<site_host>` is HTTP
+    // actions, with no `-site` suffix to strip. Checked first so it still
+    // works when the site host is itself a subdomain of `host_root`.
+    if let Some(site_root) = cfg.site_host_root.as_deref() {
+        if let Some(sub) = host.strip_suffix(&format!(".{site_root}"))
+            && !sub.is_empty()
+        {
+            return Some(RouteTarget {
+                upstream_host: format!("{}{}", cfg.container_prefix, sub),
+                deployment_name: sub.to_string(),
+                upstream_port: cfg.upstream_site_port,
+            });
+        }
+    }
+
     let suffix = format!(".{}", cfg.host_root);
     let sub = host.strip_suffix(&suffix)?;
     if sub.is_empty() {

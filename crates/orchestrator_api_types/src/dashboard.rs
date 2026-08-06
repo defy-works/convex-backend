@@ -281,6 +281,8 @@ pub struct CustomDomain {
     /// actually succeeded, not that issuance was requested.
     pub cert_state: String,
     pub created_at: i64,
+    /// `api` — the Convex API / database — or `site` for HTTP actions.
+    pub kind: String,
     /// Verbatim reason the last issuance failed, if it did.
     pub last_error: Option<String>,
 }
@@ -289,6 +291,10 @@ pub struct CustomDomain {
 #[serde(rename_all = "camelCase")]
 pub struct CreateCustomDomainArgs {
     pub domain: String,
+    /// `api` (default) or `site`. Chosen per domain so one deployment can
+    /// front its database and its HTTP actions on different hostnames.
+    #[serde(default)]
+    pub kind: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]

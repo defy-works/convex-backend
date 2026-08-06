@@ -78,6 +78,17 @@ services:
       - "traefik.http.routers.orchestrator-router.tls.domains[0].sans=*.${ROUTER_HOST:-router-host-not-set.invalid}"
       - "traefik.http.routers.orchestrator-router.service=orchestrator-router"
       - "traefik.http.services.orchestrator-router.loadbalancer.server.port=9000"
+      # Same fallback for the optional dedicated site host. Harmless when
+      # SITE_ROUTER_HOST is unset: the rule matches the sentinel hostname,
+      # which nothing resolves to.
+      - "traefik.http.routers.orchestrator-site-router.rule=HostRegexp(`.+\\.${SITE_ROUTER_HOST:-site-host-not-set.invalid}$$`)"
+      - "traefik.http.routers.orchestrator-site-router.priority=1"
+      - "traefik.http.routers.orchestrator-site-router.entrypoints=websecure"
+      - "traefik.http.routers.orchestrator-site-router.tls.certresolver=le"
+      - "traefik.http.routers.orchestrator-site-router.tls.domains[0].main=${SITE_ROUTER_HOST:-site-host-not-set.invalid}"
+      - "traefik.http.routers.orchestrator-site-router.tls.domains[0].sans=*.${SITE_ROUTER_HOST:-site-host-not-set.invalid}"
+      - "traefik.http.routers.orchestrator-site-router.service=orchestrator-site-router"
+      - "traefik.http.services.orchestrator-site-router.loadbalancer.server.port=9000"
     environment:
       - CONVEX_ORCHESTRATOR_DATABASE_URL=${CONVEX_ORCHESTRATOR_DATABASE_URL:-postgres://${POSTGRES_USER:-orchestrator}:${POSTGRES_PASSWORD:-orchestrator}@postgres:5432/${POSTGRES_DB:-orchestrator}}
       - CONVEX_ORCHESTRATOR_PROVISION_ADDR=${CONVEX_ORCHESTRATOR_PROVISION_ADDR:-0.0.0.0:8050}
@@ -86,6 +97,14 @@ services:
       # falls back to http://localhost. Explicit PUBLIC_ORIGIN overrides.
       - CONVEX_ORCHESTRATOR_PUBLIC_ORIGIN=${PUBLIC_ORIGIN:-${DASHBOARD_HOST:+https://}${DASHBOARD_HOST:-http://localhost}}
       - CONVEX_ORCHESTRATOR_ROUTER_HOST=${ROUTER_HOST:-localhost}
+      # Optional dedicated host for HTTP actions, e.g. `defysite.com`. When
+      # set, a deployment's site URL becomes `<name>.${SITE_ROUTER_HOST}`
+      # instead of `<name>-site.${ROUTER_HOST}`. The legacy hostname keeps
+      # routing either way, so existing apps don't break; a deployment only
+      # advertises the new URL after it is next respawned. Requires
+      # `*.${SITE_ROUTER_HOST}` DNS pointing here and the wildcard cert
+      # entry on the traefik service below.
+      - CONVEX_ORCHESTRATOR_SITE_ROUTER_HOST=${SITE_ROUTER_HOST:-}
       - CONVEX_ORCHESTRATOR_ROUTER_PUBLIC_PORT=${ROUTER_PUBLIC_PORT:-${ROUTER_PORT:-9000}}
       # Scheme of the deployment URLs the orchestrator advertises.
       # Default `http` for raw-port local dev. Set to `https` (or pass

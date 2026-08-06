@@ -35,6 +35,12 @@ pub struct OrchestratorConfig {
     /// Hostname suffix used by the reverse proxy to route requests.
     /// Default `localhost`; full host header is `<deployment>.<router_host>`.
     pub router_host: String,
+    /// Optional separate host for HTTP-actions ("site") traffic. When set,
+    /// a deployment's site URL becomes `<deployment>.<site_router_host>`
+    /// instead of `<deployment>-site.<router_host>`. Unset keeps the legacy
+    /// suffix form. The legacy hostname keeps routing either way, so turning
+    /// this on never breaks an already-deployed client.
+    pub site_router_host: Option<String>,
     /// Public port the proxy is reachable on from the browser. Used to
     /// build deployment URLs of the form `<scheme>://<name>.<host>[:<port>]`.
     pub router_public_port: u16,
@@ -176,6 +182,7 @@ mod tests {
             backend_network: None,
             backend_container_prefix: "test-".into(),
             router_host: "localhost".into(),
+            site_router_host: None,
             router_public_port: 9000,
             router_public_scheme: "http".into(),
             direct_backend_routing: true,

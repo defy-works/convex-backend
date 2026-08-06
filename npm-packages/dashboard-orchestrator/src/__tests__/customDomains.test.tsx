@@ -71,6 +71,7 @@ test("adds a domain and refreshes the list", async () => {
       "pat_test",
       7,
       "api.example.com",
+      "api",
     ),
   );
   // Re-listed so the new row appears without a manual reload.
@@ -104,6 +105,7 @@ test("reports a domain as pending until a probe confirms the certificate", async
         domain: "api.example.com",
         certState: "pending",
         createdAt: 0,
+        kind: "api",
         lastError: null,
       },
     ],
@@ -127,6 +129,7 @@ test("shows why a check failed so the operator can fix DNS", async () => {
         domain: "api.example.com",
         certState: "pending",
         createdAt: 0,
+        kind: "api",
         lastError: null,
       },
     ],
@@ -174,6 +177,7 @@ test("surfaces a failed issuance and offers a retry", async () => {
         domain: "api.example.com",
         certState: "failed",
         createdAt: 0,
+        kind: "api",
         lastError: "Cloudflare rejected the token",
       },
     ],
@@ -189,4 +193,25 @@ test("surfaces a failed issuance and offers a retry", async () => {
   );
   await user.click(screen.getByRole("button", { name: "Retry" }));
   await waitFor(() => expect(mockRetry).toHaveBeenCalled());
+});
+
+test("a domain can front HTTP actions instead of the database", async () => {
+  const user = userEvent.setup();
+  mockCreate.mockResolvedValue({});
+  renderCard();
+  await waitFor(() => expect(mockList).toHaveBeenCalled());
+
+  await user.type(screen.getByLabelText("Domain"), "hooks.example.com");
+  await user.selectOptions(screen.getByLabelText("Points at"), "site");
+  await user.click(screen.getByRole("button", { name: "Add" }));
+
+  await waitFor(() =>
+    expect(mockCreate).toHaveBeenCalledWith(
+      "http://orchestrator.test",
+      "pat_test",
+      7,
+      "hooks.example.com",
+      "site",
+    ),
+  );
 });

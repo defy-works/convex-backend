@@ -141,7 +141,7 @@ impl Storage {
             .client()
             .query(
                 "SELECT cd.id, cd.deployment_id, cd.domain, cd.cert_state, cd.created_at,
-                        cd.last_error
+                        cd.last_error, cd.kind
                  FROM custom_domains cd
                  LEFT JOIN custom_domain_certs c ON c.domain = cd.domain
                  WHERE c.domain IS NULL OR c.renew_after <= $1
@@ -158,6 +158,7 @@ impl Storage {
                 cert_state: r.get(3),
                 created_at: r.get(4),
                 last_error: r.get(5),
+                kind: r.get(6),
             })
             .collect())
     }

@@ -187,7 +187,7 @@ pub fn render_config(input: RenderInput<'_>) -> String {
              \"http://{upstream}:{port}\"\n",
             key = key,
             upstream = upstream,
-            port = BACKEND_API_PORT,
+            port = port_for_kind(&route.kind),
         ));
     }
 
@@ -228,10 +228,24 @@ pub fn render_config(input: RenderInput<'_>) -> String {
     out
 }
 
-/// Port the HTTP-actions ("site") origin would use. Exposed so the dashboard
-/// copy and any future second-hostname support stay in sync with the router.
-pub const fn site_port() -> u16 {
-    BACKEND_SITE_PORT
+/// Which backend port a custom domain fronts. `site` domains carry HTTP
+/// actions (:3211); everything else is the Convex API / database (:3210).
+pub const KIND_API: &str = "api";
+pub const KIND_SITE: &str = "site";
+
+pub fn validate_kind(kind: &str) -> anyhow::Result<String> {
+    match kind {
+        KIND_API | KIND_SITE => Ok(kind.to_string()),
+        other => anyhow::bail!("unknown custom domain kind {other:?} (expected `api` or `site`)"),
+    }
+}
+
+fn port_for_kind(kind: &str) -> u16 {
+    if kind == KIND_SITE {
+        BACKEND_SITE_PORT
+    } else {
+        BACKEND_API_PORT
+    }
 }
 
 fn config_path(dir: &Path) -> PathBuf {
@@ -333,6 +347,15 @@ mod tests {
         CustomDomainRoute {
             domain: domain.to_string(),
             deployment_name: deployment.to_string(),
+            kind: KIND_API.to_string(),
+        }
+    }
+
+    fn site_route(domain: &str, deployment: &str) -> CustomDomainRoute {
+        CustomDomainRoute {
+            domain: domain.to_string(),
+            deployment_name: deployment.to_string(),
+            kind: KIND_SITE.to_string(),
         }
     }
 
@@ -396,6 +419,28 @@ mod tests {
         assert!(config.contains("convex-custom-api-example-com:"));
         assert!(config.contains("rule: \"Host(`api.example.com`)\""));
         assert!(config.contains("url: \"http://orchestrator-happy-otter-123:3210\""));
+    }
+
+    #[test]
+    fn site_domains_target_the_http_actions_port() {
+        // The whole point of `kind`: an api domain and a site domain on the
+        // same deployment must reach different ports.
+        let config = render(
+            &[
+                route("api.example.com", "otter"),
+                site_route("hooks.example.com", "otter"),
+            ],
+            &[],
+        );
+        assert!(config.contains("url: \"http://orchestrator-otter:3210\""));
+        assert!(config.contains("url: \"http://orchestrator-otter:3211\""));
+    }
+
+    #[test]
+    fn rejects_unknown_kinds() {
+        assert_eq!(validate_kind("api").unwrap(), "api");
+        assert_eq!(validate_kind("site").unwrap(), "site");
+        assert!(validate_kind("database").is_err());
     }
 
     #[test]

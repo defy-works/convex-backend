@@ -127,6 +127,9 @@ CREATE TABLE IF NOT EXISTS custom_domains (
     deployment_id BIGINT NOT NULL REFERENCES deployments(id) ON DELETE CASCADE,
     domain TEXT NOT NULL UNIQUE,
     cert_state TEXT NOT NULL DEFAULT 'pending',
+    -- Which surface the domain fronts: 'api' (the database/Convex API, port
+    -- 3210) or 'site' (HTTP actions, port 3211).
+    kind TEXT NOT NULL DEFAULT 'api',
     created_at BIGINT NOT NULL
 );
 
