@@ -13,25 +13,3 @@ runners:
     image: ubuntu24-full-arm64
     volume: 80gb:gp3
     spot: true
-  # On-demand twins for jobs long enough that spot reclamation is likely
-  # rather than unlucky. The backend image build takes ~25 minutes and was
-  # reclaimed twice in a row mid-compile ("The runner has received a shutdown
-  # signal"), so it never got far enough to publish. Losing a 25-minute build
-  # and paying to redo it costs more than the on-demand premium for one job.
-  #
-  # Deliberately NOT the default: short jobs (sync, precompile, dashboard
-  # builds) finish well inside the reclamation window and stay on spot.
-  xlarge-x64-ondemand:
-    cpu: 4
-    ram: 16
-    family: ["m7a", "m7i"]
-    image: ubuntu24-full-x64
-    volume: 80gb:gp3
-    spot: false
-  xlarge-arm64-ondemand:
-    cpu: 4
-    ram: 16
-    family: ["m7g"]
-    image: ubuntu24-full-arm64
-    volume: 80gb:gp3
-    spot: false

@@ -34,12 +34,18 @@ jobs:
       fail-fast: false
       matrix:
         arch: [x64, arm64]
-    # On-demand: this is the longest image build (~25 min) and spot
+    # `spot=false` as an inline label override rather than a named runner
+    # spec: runs-on resolves named specs from its own cached config, not from
+    # the branch being built, so a newly added class fails to resolve
+    # ("runner spec ... not found") and the job dies in seconds. Overriding a
+    # parameter on an existing, resolvable spec sidesteps that entirely.
+    #
+    # On-demand because this is the longest image build (~25 min) and spot
     # reclamation killed it mid-compile on two consecutive runs, so it never
-    # reached the publish step. See the -ondemand classes in runs-on.yml.
+    # reached the publish step.
     runs-on:
       "runs-on=${{ github.run_id }}-${{ matrix.arch }}/runner=xlarge-${{
-      matrix.arch }}-ondemand"
+      matrix.arch }}/spot=false"
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
