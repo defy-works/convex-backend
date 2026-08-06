@@ -215,15 +215,14 @@ export function OrchestratorDeploymentShell({
     // links and break the chrome).
     deploymentBackendOwnsAdminKeys: true,
     workosIntegrationEnabled: false,
-    // `logStreamTopicFiltersEnabled` used to be set here. Upstream removed it
-    // from DeploymentInfo in bb97ce4f8 ("remove launched LaunchDarkly flags")
-    // once the feature shipped, so the behaviour is now unconditional and the
-    // flag no longer exists to set.
+    // `logStreamTopicFiltersEnabled` and `usageLimitsEnabled` used to be set
+    // here. Upstream removed each from DeploymentInfo once its feature shipped
+    // (bb97ce4f8 "remove launched LaunchDarkly flags", and the Usage Limits
+    // launch), so the behaviour is now unconditional and neither flag exists
+    // to set any more.
     //
-    // Both gated off until the features ship; the orchestrator has no
-    // LaunchDarkly, so flip these to true at launch. Matches
-    // dashboard-self-hosted.
-    usageLimitsEnabled: false,
+    // Gated off until the feature ships; the orchestrator has no LaunchDarkly,
+    // so flip this to true at launch. Matches dashboard-self-hosted.
     copyEnvVarNameAndValueEnabled: false,
     connectionStateCheckIntervalMs: 2500,
   };
