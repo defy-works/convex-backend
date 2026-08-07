@@ -216,6 +216,8 @@ async fn not_found() -> impl IntoResponse {
         crate::routes::dashboard::custom_domains::delete_custom_domain,
         crate::routes::dashboard::custom_domains::verify_custom_domain,
         crate::routes::dashboard::custom_domains::retry_custom_domain,
+        crate::routes::dashboard::custom_domains::get_canonical_urls,
+        crate::routes::dashboard::custom_domains::set_canonical_urls,
         crate::routes::acme_challenge::serve_challenge,
         crate::routes::dashboard::audit_log::get_audit_log_events,
         crate::routes::dashboard::billing_stub::orb_subscription,

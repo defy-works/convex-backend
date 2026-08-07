@@ -168,23 +168,12 @@ impl DockerProvisioner {
     }
 
     fn url_on_host(&self, host_prefix: &str, host: &str) -> String {
-        let scheme = if self.router_public_scheme == "http" && self.router_public_port == 443 {
-            "https"
-        } else {
-            self.router_public_scheme.as_str()
-        };
-        let default_port = match scheme {
-            "https" => 443,
-            _ => 80,
-        };
-        if self.router_public_port == default_port {
-            format!("{}://{}.{}", scheme, host_prefix, host)
-        } else {
-            format!(
-                "{}://{}.{}:{}",
-                scheme, host_prefix, host, self.router_public_port
-            )
-        }
+        url_on_host(
+            host_prefix,
+            host,
+            &self.router_public_scheme,
+            self.router_public_port,
+        )
     }
 
     /// Browser-facing URL for a deployment's HTTP actions.
@@ -239,8 +228,18 @@ impl Provisioner for DockerProvisioner {
         // Browser-facing URLs are stable regardless of whether Traefik
         // routes directly to the backend container or falls back through the
         // in-orchestrator wildcard proxy.
-        let url = self.deployment_url(&req.deployment_name);
-        let site_url = self.site_deployment_url(&req.deployment_name);
+        // An operator-chosen canonical URL wins over the derived hostname.
+        // The derived one keeps routing either way, so switching does not
+        // strand clients already using it — it only changes what this
+        // backend advertises about itself.
+        let url = req
+            .cloud_origin_override
+            .clone()
+            .unwrap_or_else(|| self.deployment_url(&req.deployment_name));
+        let site_url = req
+            .site_origin_override
+            .clone()
+            .unwrap_or_else(|| self.site_deployment_url(&req.deployment_name));
 
         let secret: String = rand::rng()
             .sample_iter(&Alphanumeric)
@@ -567,6 +566,48 @@ impl Provisioner for DockerProvisioner {
     }
 }
 
+/// Formats a browser-facing URL, omitting the port when it's the default for
+/// the scheme so URLs stay clean behind TLS.
+pub fn url_on_host(host_prefix: &str, host: &str, scheme: &str, port: u16) -> String {
+    let scheme = if scheme == "http" && port == 443 {
+        "https"
+    } else {
+        scheme
+    };
+    let default_port = match scheme {
+        "https" => 443,
+        _ => 80,
+    };
+    if port == default_port {
+        format!("{scheme}://{host_prefix}.{host}")
+    } else {
+        format!("{scheme}://{host_prefix}.{host}:{port}")
+    }
+}
+
+/// The origins a deployment advertises when no canonical URL is set. These
+/// hostnames stay routed even when an override is in effect, so switching
+/// never strands a client that already knows the derived name.
+///
+/// Lives next to the provisioner rather than being duplicated in the
+/// dashboard routes so "what is the default?" has exactly one answer.
+pub fn default_origins(
+    deployment_name: &str,
+    router_host: &str,
+    site_router_host: Option<&str>,
+    scheme: &str,
+    port: u16,
+) -> (String, String) {
+    let cloud = url_on_host(deployment_name, router_host, scheme, port);
+    let site = match site_router_host {
+        Some(host) if !host.trim().is_empty() => {
+            url_on_host(deployment_name, host, scheme, port)
+        },
+        _ => url_on_host(&format!("{deployment_name}-site"), router_host, scheme, port),
+    };
+    (cloud, site)
+}
+
 fn push_backend_lifecycle_args(args: &mut Vec<String>) {
     args.extend([
         "--restart".into(),
@@ -745,5 +786,28 @@ mod tests {
         assert!(args.windows(2).any(|w| w == ["--restart", "unless-stopped"]));
         assert!(args.windows(2).any(|w| w == ["--stop-signal", "SIGINT"]));
         assert!(args.windows(2).any(|w| w == ["--stop-timeout", "10"]));
+    }
+
+    #[test]
+    fn default_origins_split_api_and_site_hosts() {
+        let (cloud, site) = default_origins("happy-otter", "example.com", Some("site.com"), "https", 443);
+        assert_eq!(cloud, "https://happy-otter.example.com");
+        assert_eq!(site, "https://happy-otter.site.com");
+    }
+
+    #[test]
+    fn default_origins_fall_back_to_the_legacy_site_form() {
+        // Without a dedicated site host the site URL is `<name>-site.<host>`,
+        // which is the shape deployments created before the split still use.
+        let (cloud, site) = default_origins("happy-otter", "example.com", None, "https", 443);
+        assert_eq!(cloud, "https://happy-otter.example.com");
+        assert_eq!(site, "https://happy-otter-site.example.com");
+    }
+
+    #[test]
+    fn default_origins_keep_a_non_default_port() {
+        let (cloud, site) = default_origins("dev", "localhost", None, "http", 9000);
+        assert_eq!(cloud, "http://dev.localhost:9000");
+        assert_eq!(site, "http://dev-site.localhost:9000");
     }
 }

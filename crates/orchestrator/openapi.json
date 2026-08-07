@@ -2828,6 +2828,77 @@
         }
       }
     },
+    "/api/dashboard/deployments/{deployment_id}/canonical_urls": {
+      "get": {
+        "tags": ["dashboard"],
+        "operationId": "get_canonical_urls",
+        "parameters": [
+          {
+            "name": "deployment_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CanonicalUrls"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/dashboard/deployments/{deployment_id}/canonical_urls/set": {
+      "post": {
+        "tags": ["dashboard"],
+        "operationId": "set_canonical_urls",
+        "parameters": [
+          {
+            "name": "deployment_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetCanonicalUrlsArgs"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CanonicalUrls"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": ""
+          }
+        }
+      }
+    },
     "/.well-known/acme-challenge/{token}": {
       "get": {
         "tags": ["acme"],
@@ -3557,6 +3628,44 @@
           },
           "cursor": {
             "type": ["string", "null"]
+          }
+        }
+      },
+      "CanonicalUrls": {
+        "type": "object",
+        "description": "What a deployment advertises about itself, and what the operator wants it\nto advertise. These become `CONVEX_CLOUD_ORIGIN` / `CONVEX_SITE_ORIGIN` on\nthe backend container, which is where `CONVEX_CLOUD_URL` /\n`CONVEX_SITE_URL` and every generated HTTP action or auth callback URL\ncome from.",
+        "required": [
+          "currentUrl",
+          "currentSiteUrl",
+          "defaultUrl",
+          "defaultSiteUrl",
+          "restartPending"
+        ],
+        "properties": {
+          "currentUrl": {
+            "type": "string",
+            "description": "What the *running* container was given."
+          },
+          "currentSiteUrl": {
+            "type": "string"
+          },
+          "desiredUrl": {
+            "type": ["string", "null"],
+            "description": "The operator's choice. Null means \"use the derived default\"."
+          },
+          "desiredSiteUrl": {
+            "type": ["string", "null"]
+          },
+          "defaultUrl": {
+            "type": "string",
+            "description": "The derived `<name>.<router_host>` forms. Always routed, whether or\nnot an override is in effect."
+          },
+          "defaultSiteUrl": {
+            "type": "string"
+          },
+          "restartPending": {
+            "type": "boolean",
+            "description": "True when the desired origins differ from what the running container\nhas — i.e. a restart is needed before the change takes effect."
           }
         }
       },
@@ -4898,6 +5007,18 @@
           "force": {
             "type": ["boolean", "null"],
             "description": "Legacy client hint. Host allocation can be overprovisioned, so the\norchestrator no longer requires this to exceed current host capacity."
+          }
+        }
+      },
+      "SetCanonicalUrlsArgs": {
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": ["string", "null"],
+            "description": "Null clears the override and returns the deployment to its derived\nhostname. Must otherwise be one of the deployment's attached custom\ndomains of the matching kind — an origin that isn't routed here would\nonly break the deployment."
+          },
+          "siteUrl": {
+            "type": ["string", "null"]
           }
         }
       },

@@ -57,6 +57,12 @@ pub struct DeploymentRecord {
     pub knob_overrides: serde_json::Value,
     pub desired_tier: Option<String>,
     pub desired_overrides: serde_json::Value,
+    /// Operator-chosen canonical URLs. `None` means the derived
+    /// `<name>.<router_host>` form. Only applied when the backend container is
+    /// recreated — compare against `url` / `site_url` to see if a restart is
+    /// still pending.
+    pub desired_url: Option<String>,
+    pub desired_site_url: Option<String>,
     pub storage_mode: String,
     pub pg_password: Option<String>,
     pub minio_root_user: Option<String>,
@@ -163,6 +169,9 @@ impl Storage {
             minio_root_user: n.minio_root_user.map(str::to_string),
             minio_root_password: n.minio_root_password.map(str::to_string),
             backend_instance_secret: n.backend_instance_secret.map(str::to_string),
+            // A new deployment has no custom domains yet, so nothing to override.
+            desired_url: None,
+            desired_site_url: None,
         })
     }
 
@@ -393,6 +402,45 @@ impl Storage {
     /// Snapshot the tier + resolved env into the audit columns (`tier`,
     /// `knob_overrides`). Called after a successful restart so the "running"
     /// state reflects the new container.
+    /// Records the operator's chosen canonical URLs. `None` clears the
+    /// override, putting the deployment back on the derived hostname. Takes
+    /// effect when the backend container is next recreated — the origins are
+    /// baked into its environment, so nothing changes for the running one.
+    pub async fn set_deployment_canonical_urls(
+        &self,
+        deployment_id: i64,
+        desired_url: Option<&str>,
+        desired_site_url: Option<&str>,
+    ) -> anyhow::Result<()> {
+        let conn = self.pool().acquire().await?;
+        conn.client()
+            .execute(
+                "UPDATE deployments SET desired_url = $1, desired_site_url = $2 WHERE id = $3",
+                &[&desired_url, &desired_site_url, &deployment_id],
+            )
+            .await?;
+        Ok(())
+    }
+
+    /// Snapshots the URLs the *running* container was actually given. Called
+    /// after a respawn so `url` / `site_url` keep describing reality and the
+    /// dashboard can tell whether a canonical-URL change is still pending.
+    pub async fn update_deployment_urls(
+        &self,
+        deployment_id: i64,
+        url: &str,
+        site_url: &str,
+    ) -> anyhow::Result<()> {
+        let conn = self.pool().acquire().await?;
+        conn.client()
+            .execute(
+                "UPDATE deployments SET url = $1, site_url = $2 WHERE id = $3",
+                &[&url, &site_url, &deployment_id],
+            )
+            .await?;
+        Ok(())
+    }
+
     pub async fn update_deployment_snapshot(
         &self,
         deployment_id: i64,
@@ -410,10 +458,10 @@ impl Storage {
     }
 }
 
-const SELECT_DEPLOYMENT_BY_ID: &str = "SELECT id, project_id, name, deployment_type, deployment_class, region, url, site_url, backend_pid, backend_port, creator_id, creation_time, state, preview_identifier, instance_secret, tier, knob_overrides, desired_tier, desired_overrides, storage_mode, pg_password, minio_root_user, minio_root_password, backend_instance_secret FROM deployments WHERE id = $1";
-const SELECT_DEPLOYMENT_BY_NAME: &str = "SELECT id, project_id, name, deployment_type, deployment_class, region, url, site_url, backend_pid, backend_port, creator_id, creation_time, state, preview_identifier, instance_secret, tier, knob_overrides, desired_tier, desired_overrides, storage_mode, pg_password, minio_root_user, minio_root_password, backend_instance_secret FROM deployments WHERE name = $1";
-const SELECT_DEPLOYMENTS_BY_PROJECT: &str = "SELECT id, project_id, name, deployment_type, deployment_class, region, url, site_url, backend_pid, backend_port, creator_id, creation_time, state, preview_identifier, instance_secret, tier, knob_overrides, desired_tier, desired_overrides, storage_mode, pg_password, minio_root_user, minio_root_password, backend_instance_secret FROM deployments WHERE project_id = $1 ORDER BY creation_time ASC";
-const SELECT_DEPLOYMENTS_BY_TEAM: &str = "SELECT d.id, d.project_id, d.name, d.deployment_type, d.deployment_class, d.region, d.url, d.site_url, d.backend_pid, d.backend_port, d.creator_id, d.creation_time, d.state, d.preview_identifier, d.instance_secret, d.tier, d.knob_overrides, d.desired_tier, d.desired_overrides, d.storage_mode, d.pg_password, d.minio_root_user, d.minio_root_password, d.backend_instance_secret FROM deployments d INNER JOIN projects p ON p.id = d.project_id WHERE p.team_id = $1 ORDER BY d.creation_time ASC";
+const SELECT_DEPLOYMENT_BY_ID: &str = "SELECT id, project_id, name, deployment_type, deployment_class, region, url, site_url, backend_pid, backend_port, creator_id, creation_time, state, preview_identifier, instance_secret, tier, knob_overrides, desired_tier, desired_overrides, storage_mode, pg_password, minio_root_user, minio_root_password, backend_instance_secret, desired_url, desired_site_url FROM deployments WHERE id = $1";
+const SELECT_DEPLOYMENT_BY_NAME: &str = "SELECT id, project_id, name, deployment_type, deployment_class, region, url, site_url, backend_pid, backend_port, creator_id, creation_time, state, preview_identifier, instance_secret, tier, knob_overrides, desired_tier, desired_overrides, storage_mode, pg_password, minio_root_user, minio_root_password, backend_instance_secret, desired_url, desired_site_url FROM deployments WHERE name = $1";
+const SELECT_DEPLOYMENTS_BY_PROJECT: &str = "SELECT id, project_id, name, deployment_type, deployment_class, region, url, site_url, backend_pid, backend_port, creator_id, creation_time, state, preview_identifier, instance_secret, tier, knob_overrides, desired_tier, desired_overrides, storage_mode, pg_password, minio_root_user, minio_root_password, backend_instance_secret, desired_url, desired_site_url FROM deployments WHERE project_id = $1 ORDER BY creation_time ASC";
+const SELECT_DEPLOYMENTS_BY_TEAM: &str = "SELECT d.id, d.project_id, d.name, d.deployment_type, d.deployment_class, d.region, d.url, d.site_url, d.backend_pid, d.backend_port, d.creator_id, d.creation_time, d.state, d.preview_identifier, d.instance_secret, d.tier, d.knob_overrides, d.desired_tier, d.desired_overrides, d.storage_mode, d.pg_password, d.minio_root_user, d.minio_root_password, d.backend_instance_secret, d.desired_url, d.desired_site_url FROM deployments d INNER JOIN projects p ON p.id = d.project_id WHERE p.team_id = $1 ORDER BY d.creation_time ASC";
 
 fn map_deployment(row: Row) -> DeploymentRecord {
     DeploymentRecord {
@@ -450,5 +498,7 @@ fn map_deployment(row: Row) -> DeploymentRecord {
         minio_root_user: row.get(21),
         minio_root_password: row.get(22),
         backend_instance_secret: row.get(23),
+        desired_url: row.get(24),
+        desired_site_url: row.get(25),
     }
 }

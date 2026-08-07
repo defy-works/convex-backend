@@ -475,6 +475,50 @@ export type VerifyCustomDomainResponse = z.infer<
   typeof verifyCustomDomainSchema
 >;
 
+// What a deployment advertises about itself. These become
+// CONVEX_CLOUD_ORIGIN / CONVEX_SITE_ORIGIN on the backend container, i.e.
+// what `CONVEX_SITE_URL` and every generated HTTP action / auth callback URL
+// resolve to. They are baked in at container creation, so a change only lands
+// on restart — `restartPending` says whether one is outstanding.
+export const canonicalUrlsSchema = z.object({
+  currentUrl: z.string(),
+  currentSiteUrl: z.string(),
+  desiredUrl: z.string().nullable(),
+  desiredSiteUrl: z.string().nullable(),
+  defaultUrl: z.string(),
+  defaultSiteUrl: z.string(),
+  restartPending: z.boolean(),
+});
+export type CanonicalUrls = z.infer<typeof canonicalUrlsSchema>;
+
+export async function getCanonicalUrls(
+  baseUrl: string,
+  token: string,
+  deploymentId: number,
+): Promise<CanonicalUrls> {
+  const data = await request<unknown>(
+    baseUrl,
+    `/api/dashboard/deployments/${deploymentId}/canonical_urls`,
+    { token },
+  );
+  return canonicalUrlsSchema.parse(data);
+}
+
+/** `null` clears an override, putting the deployment back on its derived host. */
+export async function setCanonicalUrls(
+  baseUrl: string,
+  token: string,
+  deploymentId: number,
+  urls: { url: string | null; siteUrl: string | null },
+): Promise<CanonicalUrls> {
+  const data = await request<unknown>(
+    baseUrl,
+    `/api/dashboard/deployments/${deploymentId}/canonical_urls/set`,
+    { method: "POST", token, body: JSON.stringify(urls) },
+  );
+  return canonicalUrlsSchema.parse(data);
+}
+
 export async function listCustomDomains(
   baseUrl: string,
   token: string,

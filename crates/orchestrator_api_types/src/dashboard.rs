@@ -325,6 +325,42 @@ pub struct CustomDomainArgs {
     pub domain: String,
 }
 
+/// What a deployment advertises about itself, and what the operator wants it
+/// to advertise. These become `CONVEX_CLOUD_ORIGIN` / `CONVEX_SITE_ORIGIN` on
+/// the backend container, which is where `CONVEX_CLOUD_URL` /
+/// `CONVEX_SITE_URL` and every generated HTTP action or auth callback URL
+/// come from.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CanonicalUrls {
+    /// What the *running* container was given.
+    pub current_url: String,
+    pub current_site_url: String,
+    /// The operator's choice. Null means "use the derived default".
+    pub desired_url: Option<String>,
+    pub desired_site_url: Option<String>,
+    /// The derived `<name>.<router_host>` forms. Always routed, whether or
+    /// not an override is in effect.
+    pub default_url: String,
+    pub default_site_url: String,
+    /// True when the desired origins differ from what the running container
+    /// has — i.e. a restart is needed before the change takes effect.
+    pub restart_pending: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SetCanonicalUrlsArgs {
+    /// Null clears the override and returns the deployment to its derived
+    /// hostname. Must otherwise be one of the deployment's attached custom
+    /// domains of the matching kind — an origin that isn't routed here would
+    /// only break the deployment.
+    #[serde(default)]
+    pub url: Option<String>,
+    #[serde(default)]
+    pub site_url: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct VerifyCustomDomainResponse {
