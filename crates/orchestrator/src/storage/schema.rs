@@ -130,6 +130,12 @@ CREATE TABLE IF NOT EXISTS custom_domains (
     -- Which surface the domain fronts: 'api' (the database/Convex API, port
     -- 3210) or 'site' (HTTP actions, port 3211).
     kind TEXT NOT NULL DEFAULT 'api',
+    -- Who terminates TLS for this hostname. 'acme' (default) means the
+    -- orchestrator issues and renews the certificate itself. 'upstream'
+    -- means something in front — Cloudflare, another proxy, a load
+    -- balancer — already terminates it, so no certificate is ever ordered
+    -- and the renewal sweep leaves the domain alone.
+    tls_mode TEXT NOT NULL DEFAULT 'acme',
     created_at BIGINT NOT NULL
 );
 

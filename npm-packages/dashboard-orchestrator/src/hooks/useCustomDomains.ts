@@ -21,9 +21,13 @@ export function useCustomDomains(deploymentId: number | undefined) {
     { refreshInterval: 10_000 },
   );
 
-  const add = async (domain: string, kind: "api" | "site") => {
+  const add = async (
+    domain: string,
+    kind: "api" | "site",
+    tlsMode: "acme" | "upstream" = "acme",
+  ) => {
     if (!token || !deploymentId) return;
-    await createCustomDomain(url, token, deploymentId, domain, kind);
+    await createCustomDomain(url, token, deploymentId, domain, kind, tlsMode);
     await mutate();
   };
 

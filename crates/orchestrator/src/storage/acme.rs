@@ -140,11 +140,16 @@ impl Storage {
         let rows = conn
             .client()
             .query(
+                // `tls_mode = 'upstream'` domains are excluded outright: they
+                // have no certificate here and are never meant to get one, so
+                // without this they match `c.domain IS NULL` on every sweep
+                // and get flipped back to `issuing` forever.
                 "SELECT cd.id, cd.deployment_id, cd.domain, cd.cert_state, cd.created_at,
-                        cd.last_error, cd.kind
+                        cd.last_error, cd.kind, cd.tls_mode
                  FROM custom_domains cd
                  LEFT JOIN custom_domain_certs c ON c.domain = cd.domain
-                 WHERE c.domain IS NULL OR c.renew_after <= $1
+                 WHERE cd.tls_mode <> 'upstream'
+                   AND (c.domain IS NULL OR c.renew_after <= $1)
                  ORDER BY cd.domain",
                 &[&now],
             )
@@ -159,6 +164,7 @@ impl Storage {
                 created_at: r.get(4),
                 last_error: r.get(5),
                 kind: r.get(6),
+                tls_mode: r.get(7),
             })
             .collect())
     }

@@ -240,6 +240,33 @@ pub fn validate_kind(kind: &str) -> anyhow::Result<String> {
     }
 }
 
+/// Who terminates TLS for a custom domain.
+///
+/// `acme` is the default: the orchestrator orders a certificate over HTTP-01
+/// and renews it. `upstream` means something in front of Traefik — Cloudflare
+/// in proxied mode, another reverse proxy, a load balancer — already presents
+/// a certificate to the browser, so ordering one here would be pointless work
+/// against the ACME rate limits.
+///
+/// An `upstream` domain still gets a Traefik router on `websecure`, served
+/// with Traefik's default certificate. That satisfies Cloudflare's `Full`
+/// mode, which does not validate the origin certificate. It does *not*
+/// satisfy `Full (strict)` — use `acme` for that. Cloudflare's `Flexible`
+/// mode (plain HTTP to the origin) is not supported either way: the `web`
+/// entrypoint carries a global http->https redirect that outranks anything
+/// declared here, so a custom-domain router on `web` would never be reached.
+pub const TLS_MODE_ACME: &str = "acme";
+pub const TLS_MODE_UPSTREAM: &str = "upstream";
+
+pub fn validate_tls_mode(mode: &str) -> anyhow::Result<String> {
+    match mode {
+        TLS_MODE_ACME | TLS_MODE_UPSTREAM => Ok(mode.to_string()),
+        other => anyhow::bail!(
+            "unknown custom domain TLS mode {other:?} (expected `acme` or `upstream`)"
+        ),
+    }
+}
+
 fn port_for_kind(kind: &str) -> u16 {
     if kind == KIND_SITE {
         BACKEND_SITE_PORT
@@ -441,6 +468,26 @@ mod tests {
         assert_eq!(validate_kind("api").unwrap(), "api");
         assert_eq!(validate_kind("site").unwrap(), "site");
         assert!(validate_kind("database").is_err());
+    }
+
+    #[test]
+    fn rejects_unknown_tls_modes() {
+        assert_eq!(validate_tls_mode("acme").unwrap(), "acme");
+        assert_eq!(validate_tls_mode("upstream").unwrap(), "upstream");
+        assert!(validate_tls_mode("cloudflare").is_err());
+        assert!(validate_tls_mode("").is_err());
+    }
+
+    #[test]
+    fn upstream_domains_still_get_a_router() {
+        // The point of `upstream` is to skip *issuance*, not routing: traffic
+        // still arrives at Traefik and has to reach the backend. Rendering is
+        // deliberately identical to `acme` — the only difference is that no
+        // certificate row ever exists, so Traefik serves its default cert,
+        // which is what Cloudflare's `Full` mode expects.
+        let rendered = render(&[route("proxied.example.com", "dep-1")], &[]);
+        assert!(rendered.contains("Host(`proxied.example.com`)"));
+        assert!(!rendered.contains("tls:\n  certificates:"));
     }
 
     #[test]

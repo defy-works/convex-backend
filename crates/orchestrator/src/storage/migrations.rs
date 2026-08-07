@@ -83,6 +83,7 @@ pub async fn run(pool: &PgPool) -> anyhow::Result<()> {
             ALTER TABLE custom_domains
               ADD COLUMN IF NOT EXISTS last_error TEXT,
               ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'api',
+              ADD COLUMN IF NOT EXISTS tls_mode TEXT NOT NULL DEFAULT 'acme',
               DROP COLUMN IF EXISTS challenge_type,
               DROP COLUMN IF EXISTS dns_credential_id;
             DROP TABLE IF EXISTS dns_provider_credentials;

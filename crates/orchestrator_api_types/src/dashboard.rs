@@ -283,6 +283,11 @@ pub struct CustomDomain {
     pub created_at: i64,
     /// `api` — the Convex API / database — or `site` for HTTP actions.
     pub kind: String,
+    /// `acme` when the orchestrator issues and renews the certificate,
+    /// `upstream` when something in front (Cloudflare, another proxy) already
+    /// terminates TLS. Upstream domains never enter issuance and are skipped
+    /// by the renewal sweep, so their `certState` reflects reachability only.
+    pub tls_mode: String,
     /// Verbatim reason the last issuance failed, if it did.
     pub last_error: Option<String>,
 }
@@ -295,6 +300,11 @@ pub struct CreateCustomDomainArgs {
     /// front its database and its HTTP actions on different hostnames.
     #[serde(default)]
     pub kind: Option<String>,
+    /// `acme` (default) or `upstream`. Pick `upstream` when the hostname is
+    /// already fronted by something that terminates TLS, so no certificate is
+    /// ordered for it.
+    #[serde(default)]
+    pub tls_mode: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]

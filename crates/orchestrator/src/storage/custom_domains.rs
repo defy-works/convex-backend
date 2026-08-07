@@ -9,6 +9,11 @@ pub struct CustomDomainRecord {
     pub cert_state: String,
     /// `api` (Convex API / database, :3210) or `site` (HTTP actions, :3211).
     pub kind: String,
+    /// `acme` — the orchestrator issues and renews the certificate — or
+    /// `upstream`, meaning something in front (Cloudflare, another proxy)
+    /// already terminates TLS. Upstream domains are never sent to ACME and
+    /// are skipped by the renewal sweep.
+    pub tls_mode: String,
     pub created_at: i64,
     /// Why the last issuance attempt failed, verbatim. Only the operator can
     /// fix the usual causes (DNS not pointed here, token lacks zone access).
@@ -33,16 +38,18 @@ impl Storage {
         deployment_id: i64,
         domain: &str,
         kind: &str,
+        tls_mode: &str,
     ) -> anyhow::Result<CustomDomainRecord> {
         let now = now_unix_ms();
         let conn = self.pool().acquire().await?;
         let row = conn
             .client()
             .query_one(
-                "INSERT INTO custom_domains (deployment_id, domain, cert_state, created_at, kind)
-                 VALUES ($1, $2, 'pending', $3, $4)
+                "INSERT INTO custom_domains
+                     (deployment_id, domain, cert_state, created_at, kind, tls_mode)
+                 VALUES ($1, $2, 'pending', $3, $4, $5)
                  RETURNING id",
-                &[&deployment_id, &domain, &now, &kind],
+                &[&deployment_id, &domain, &now, &kind, &tls_mode],
             )
             .await?;
         Ok(CustomDomainRecord {
@@ -51,6 +58,7 @@ impl Storage {
             domain: domain.to_string(),
             cert_state: "pending".to_string(),
             kind: kind.to_string(),
+            tls_mode: tls_mode.to_string(),
             created_at: now,
             last_error: None,
         })
@@ -82,7 +90,8 @@ impl Storage {
         let row = conn
             .client()
             .query_opt(
-                "SELECT id, deployment_id, domain, cert_state, created_at, last_error, kind
+                "SELECT id, deployment_id, domain, cert_state, created_at, last_error, kind,
+                        tls_mode
                  FROM custom_domains WHERE domain = $1",
                 &[&domain],
             )
@@ -95,6 +104,7 @@ impl Storage {
             created_at: r.get(4),
             last_error: r.get(5),
             kind: r.get(6),
+            tls_mode: r.get(7),
         }))
     }
 
@@ -167,7 +177,8 @@ impl Storage {
         let rows = conn
             .client()
             .query(
-                "SELECT id, deployment_id, domain, cert_state, created_at, last_error, kind
+                "SELECT id, deployment_id, domain, cert_state, created_at, last_error, kind,
+                        tls_mode
                  FROM custom_domains WHERE deployment_id = $1",
                 &[&deployment_id],
             )
@@ -182,6 +193,7 @@ impl Storage {
                 created_at: r.get(4),
                 last_error: r.get(5),
                 kind: r.get(6),
+                tls_mode: r.get(7),
             })
             .collect())
     }

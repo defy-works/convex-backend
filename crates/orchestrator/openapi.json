@@ -3602,6 +3602,10 @@
           "kind": {
             "type": ["string", "null"],
             "description": "`api` (default) or `site`. Chosen per domain so one deployment can\nfront its database and its HTTP actions on different hostnames."
+          },
+          "tlsMode": {
+            "type": ["string", "null"],
+            "description": "`acme` (default) or `upstream`. Pick `upstream` when the hostname is\nalready fronted by something that terminates TLS, so no certificate is\nordered for it."
           }
         }
       },
@@ -3739,7 +3743,8 @@
           "domain",
           "certState",
           "createdAt",
-          "kind"
+          "kind",
+          "tlsMode"
         ],
         "properties": {
           "id": {
@@ -3764,6 +3769,10 @@
           "kind": {
             "type": "string",
             "description": "`api` — the Convex API / database — or `site` for HTTP actions."
+          },
+          "tlsMode": {
+            "type": "string",
+            "description": "`acme` when the orchestrator issues and renews the certificate,\n`upstream` when something in front (Cloudflare, another proxy) already\nterminates TLS. Upstream domains never enter issuance and are skipped\nby the renewal sweep, so their `certState` reflects reachability only."
           },
           "lastError": {
             "type": ["string", "null"],
