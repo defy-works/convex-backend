@@ -258,6 +258,21 @@ pub fn validate_kind(kind: &str) -> anyhow::Result<String> {
 pub const TLS_MODE_ACME: &str = "acme";
 pub const TLS_MODE_UPSTREAM: &str = "upstream";
 
+/// The bare hostname inside an origin, e.g. `https://api.example.com:8443/x`
+/// -> `api.example.com`. Used to decide whether a canonical URL points at a
+/// given custom domain; returns the input unchanged when it is already bare.
+pub fn host_of(url: &str) -> &str {
+    url.split("://")
+        .nth(1)
+        .unwrap_or(url)
+        .split('/')
+        .next()
+        .unwrap_or(url)
+        .split(':')
+        .next()
+        .unwrap_or(url)
+}
+
 pub fn validate_tls_mode(mode: &str) -> anyhow::Result<String> {
     match mode {
         TLS_MODE_ACME | TLS_MODE_UPSTREAM => Ok(mode.to_string()),
@@ -468,6 +483,15 @@ mod tests {
         assert_eq!(validate_kind("api").unwrap(), "api");
         assert_eq!(validate_kind("site").unwrap(), "site");
         assert!(validate_kind("database").is_err());
+    }
+
+    #[test]
+    fn host_of_strips_scheme_port_and_path() {
+        assert_eq!(host_of("https://api.example.com"), "api.example.com");
+        assert_eq!(host_of("https://api.example.com/x/y"), "api.example.com");
+        assert_eq!(host_of("http://api.example.com:8443"), "api.example.com");
+        // Already bare, which is how domains are stored.
+        assert_eq!(host_of("api.example.com"), "api.example.com");
     }
 
     #[test]

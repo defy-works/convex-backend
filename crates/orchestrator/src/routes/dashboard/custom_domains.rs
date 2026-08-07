@@ -163,16 +163,7 @@ pub(crate) async fn set_canonical_urls(
         if url == default {
             return Ok(());
         }
-        let host = url
-            .split("://")
-            .nth(1)
-            .unwrap_or(url)
-            .split('/')
-            .next()
-            .unwrap_or(url)
-            .split(':')
-            .next()
-            .unwrap_or(url);
+        let host = custom_domains::host_of(url);
         if domains.iter().any(|d| d.kind == kind && d.domain == host) {
             Ok(())
         } else {
@@ -338,6 +329,38 @@ pub(crate) async fn delete_custom_domain(
         .delete_certificate(&domain)
         .await
         .map_err(ApiError::Internal)?;
+
+    // If this domain was the deployment's canonical URL, drop that too. A
+    // canonical URL naming a hostname we no longer route is worse than none:
+    // the row survives, and the next restart bakes the dead hostname into
+    // CONVEX_CLOUD_ORIGIN / CONVEX_SITE_ORIGIN. Clearing falls the deployment
+    // back to its derived hostname, which is always routed.
+    if let Some(deployment) = state
+        .storage
+        .get_deployment(deployment_id)
+        .await
+        .map_err(ApiError::Internal)?
+    {
+        let keep_url = deployment
+            .desired_url
+            .clone()
+            .filter(|u| custom_domains::host_of(u) != domain);
+        let keep_site_url = deployment
+            .desired_site_url
+            .clone()
+            .filter(|u| custom_domains::host_of(u) != domain);
+        if keep_url != deployment.desired_url || keep_site_url != deployment.desired_site_url {
+            state
+                .storage
+                .set_deployment_canonical_urls(
+                    deployment_id,
+                    keep_url.as_deref(),
+                    keep_site_url.as_deref(),
+                )
+                .await
+                .map_err(ApiError::Internal)?;
+        }
+    }
 
     // Off the request path for the same reason as `create` — the config
     // rewrite reloads the Traefik that is carrying this response. The domain

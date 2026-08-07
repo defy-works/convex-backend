@@ -91,6 +91,34 @@ test("offers attached domains of the matching surface alongside the default", as
   expect(values).not.toContain("https://api.dayqwest.app");
 });
 
+test("a canonical URL whose domain was deleted collapses to the default and can be saved", async () => {
+  // The saved canonical names a domain that no longer exists, so it is not
+  // among the options. The control has to show the default *and* agree that
+  // this differs from what's stored — otherwise Save stays greyed out and the
+  // dangling value can't be cleared from the UI.
+  mockGet.mockResolvedValue({
+    ...DEFAULTS,
+    desiredUrl: "https://deleted.dayqwest.app",
+    restartPending: true,
+  });
+  mockListDomains.mockResolvedValue({
+    domains: [],
+    targetHost: "defyhost.com",
+    routingEnabled: true,
+  });
+
+  renderCard();
+  await waitFor(() =>
+    expect(screen.getByLabelText("Database (Convex API)")).toBeInTheDocument(),
+  );
+
+  const select = screen.getByLabelText(
+    "Database (Convex API)",
+  ) as HTMLSelectElement;
+  expect(select.value).toBe("https://shiny-ibis.defyhost.com");
+  expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
+});
+
 test("saving reflects the new state without a reload", async () => {
   const user = userEvent.setup();
   mockSet.mockResolvedValue({
