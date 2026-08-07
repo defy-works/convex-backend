@@ -24,11 +24,9 @@ import { useCustomDomains } from "../hooks/useCustomDomains";
 export function CustomDomainsCard({
   deploymentId,
   deploymentName,
-  heading = "Custom Domains",
 }: {
   deploymentId: number | undefined;
   deploymentName?: string;
-  heading?: string;
 }) {
   const {
     domains,
@@ -89,7 +87,7 @@ export function CustomDomainsCard({
 
   return (
     <Sheet>
-      <h3>{heading}</h3>
+      <h3>Custom Domains</h3>
       {deploymentName && (
         <p className="mt-1 text-xs text-content-secondary">
           Deployment <code>{deploymentName}</code>

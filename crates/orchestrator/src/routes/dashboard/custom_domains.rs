@@ -1,10 +1,16 @@
 //! Custom domain management for a deployment.
 //!
 //! Every mutation re-renders the Traefik dynamic config (see
-//! `crate::custom_domains`) so routing follows the database immediately
-//! rather than at the next container restart. Issuance runs in the
-//! background: an ACME order takes tens of seconds, far too long to hold an
-//! HTTP request open.
+//! `crate::custom_domains`) so routing follows the database rather than
+//! waiting for the next container restart.
+//!
+//! That re-render, and issuance, both run in background tasks — never on the
+//! request path. Issuance because an ACME order takes tens of seconds, far
+//! too long to hold an HTTP request open; the config write because Traefik
+//! reloads when it lands, and dashboard responses travel back through that
+//! same Traefik. Doing it inline tore down the connection carrying the reply,
+//! surfacing as a browser network error on a mutation that had in fact
+//! already committed.
 
 use axum::{
     extract::{
@@ -143,10 +149,13 @@ pub(crate) async fn create_custom_domain(
         .await
         .map_err(ApiError::Internal)?;
 
-    // Route first so the ACME HTTP-01 challenge path resolves, then issue.
-    custom_domains::sync_traefik_config(&state)
-        .await
-        .map_err(ApiError::Internal)?;
+    // Routing is synced by the issuance task, *not* here. Writing the Traefik
+    // dynamic config makes Traefik reload, and this response is travelling
+    // back through that same Traefik on the `websecure` entrypoint — the
+    // reload drops the connection before the reply is flushed, so the browser
+    // sees a network error for a request that actually succeeded (the row is
+    // already committed above; a reload of the dashboard shows it). Reply
+    // first, reconfigure the proxy afterwards.
     spawn_issuance(state.clone(), domain);
 
     Ok(Json(to_api(record)))
@@ -182,9 +191,11 @@ pub(crate) async fn delete_custom_domain(
         .await
         .map_err(ApiError::Internal)?;
 
-    custom_domains::sync_traefik_config(&state)
-        .await
-        .map_err(ApiError::Internal)?;
+    // Off the request path for the same reason as `create` — the config
+    // rewrite reloads the Traefik that is carrying this response. The domain
+    // keeps routing for the few milliseconds until the task lands, which is
+    // strictly better than losing the reply to a connection reset.
+    spawn_traefik_sync(state);
 
     Ok(StatusCode::OK)
 }
@@ -241,6 +252,18 @@ pub(crate) async fn verify_custom_domain(
     }))
 }
 
+/// Re-renders the Traefik config off the request path. Used where there is no
+/// domain row left to record a failure against (deletion), so a failure can
+/// only be logged — the next successful sync rewrites the file wholesale and
+/// reconciles whatever this attempt missed.
+fn spawn_traefik_sync(state: OrchestratorState) {
+    tokio::spawn(async move {
+        if let Err(e) = custom_domains::sync_traefik_config(&state).await {
+            tracing::warn!(error = %format!("{e:#}"), "could not sync Traefik custom-domain config");
+        }
+    });
+}
+
 /// Issues (or renews) a certificate off the request path, recording the
 /// outcome — including the failure reason — on the domain row.
 pub fn spawn_issuance(state: OrchestratorState, domain: String) {
@@ -280,6 +303,13 @@ async fn issue_now(state: &OrchestratorState, domain: &str) -> anyhow::Result<()
         .get_custom_domain(domain)
         .await?
         .ok_or_else(|| anyhow::anyhow!("{domain} is no longer configured"))?;
+
+    // Route before validating: the ACME server fetches the HTTP-01 challenge
+    // over the domain itself, which only resolves once Traefik has the router
+    // for it. This used to run inline in the create handler; doing it here
+    // means `retry` also re-establishes routing rather than assuming an
+    // earlier create left the config file intact.
+    custom_domains::sync_traefik_config(state).await?;
 
     let issued = acme::issue(state, domain).await?;
 
