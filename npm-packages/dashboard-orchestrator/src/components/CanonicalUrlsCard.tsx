@@ -11,6 +11,7 @@
 // anything on its own — it saves the choice and offers the restart.
 
 import { useEffect, useState } from "react";
+import { useSWRConfig } from "swr";
 import { Button } from "@ui/Button";
 import { Sheet } from "@ui/Sheet";
 import { Spinner } from "@ui/Spinner";
@@ -28,10 +29,12 @@ export function CanonicalUrlsCard({
   deploymentId: number | undefined;
   deploymentName: string;
 }) {
-  const { canonical, error, isLoading, save } = useCanonicalUrls(deploymentId);
+  const { canonical, error, isLoading, save, refresh } =
+    useCanonicalUrls(deploymentId);
   const { domains } = useCustomDomains(deploymentId);
   const token = useAccessToken();
   const url = orchestratorUrl();
+  const { mutate: globalMutate } = useSWRConfig();
 
   const [cloud, setCloud] = useState<string | null>(null);
   const [site, setSite] = useState<string | null>(null);
@@ -97,6 +100,18 @@ export function CanonicalUrlsCard({
     setFormError(null);
     try {
       await restartDeployment(url, token, deploymentName);
+      // The restart response says nothing about canonical URLs, but it is
+      // exactly what makes the pending change live — re-read so the banner
+      // stops claiming otherwise and "currently serving" catches up.
+      await refresh();
+      // Other views render the deployment's URL from the deployments list,
+      // which the restart just changed. Drop those entries so they refetch
+      // instead of showing the old hostname until a reload.
+      await globalMutate(
+        (key) => Array.isArray(key) && key[0] === "deployments",
+        undefined,
+        { revalidate: true },
+      );
     } catch (err) {
       setFormError((err as Error).message);
       throw err;

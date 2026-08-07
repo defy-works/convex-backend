@@ -27,5 +27,14 @@ export function useCanonicalUrls(deploymentId: number | undefined) {
     await mutate(next, { revalidate: false });
   };
 
-  return { canonical: data, error, isLoading, save };
+  /**
+   * Re-read from the server. Needed after a restart: the restart is what
+   * clears `restartPending` and moves `currentUrl` onto the new value, and
+   * none of that is visible in the response to the restart call itself.
+   */
+  const refresh = async () => {
+    await mutate();
+  };
+
+  return { canonical: data, error, isLoading, save, refresh };
 }
