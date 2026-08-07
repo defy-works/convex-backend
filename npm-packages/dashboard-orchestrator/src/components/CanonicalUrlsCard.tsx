@@ -78,15 +78,29 @@ export function CanonicalUrlsCard({
       .map((d) => `https://${d.domain}`),
   ];
 
+  const cloudOptions = optionsFor("api", canonical.defaultUrl);
+  const siteOptions = optionsFor("site", canonical.defaultSiteUrl);
+
+  // A saved canonical URL can stop being selectable — deleting the custom
+  // domain it names removes it from the options. A <select> whose value isn't
+  // in its options silently displays the first one, so without collapsing to
+  // the default here the control would show "default" while the draft still
+  // held the deleted hostname: `dirty` false, Save greyed out, and no way to
+  // correct it from the UI.
+  const cloudValue =
+    cloud && cloudOptions.includes(cloud) ? cloud : canonical.defaultUrl;
+  const siteValue =
+    site && siteOptions.includes(site) ? site : canonical.defaultSiteUrl;
+
   const dirty =
-    cloud !== (canonical.desiredUrl ?? canonical.defaultUrl) ||
-    site !== (canonical.desiredSiteUrl ?? canonical.defaultSiteUrl);
+    cloudValue !== (canonical.desiredUrl ?? canonical.defaultUrl) ||
+    siteValue !== (canonical.desiredSiteUrl ?? canonical.defaultSiteUrl);
 
   const onSave = async () => {
     setSaving(true);
     setFormError(null);
     try {
-      await save({ url: cloud, siteUrl: site });
+      await save({ url: cloudValue, siteUrl: siteValue });
     } catch (err) {
       setFormError((err as Error).message);
     } finally {
@@ -145,18 +159,18 @@ export function CanonicalUrlsCard({
         <UrlPicker
           id="canonical-cloud"
           label="Database (Convex API)"
-          value={cloud ?? canonical.defaultUrl}
+          value={cloudValue}
           onChange={setCloud}
-          options={optionsFor("api", canonical.defaultUrl)}
+          options={cloudOptions}
           defaultUrl={canonical.defaultUrl}
           current={canonical.currentUrl}
         />
         <UrlPicker
           id="canonical-site"
           label="HTTP Actions"
-          value={site ?? canonical.defaultSiteUrl}
+          value={siteValue}
           onChange={setSite}
-          options={optionsFor("site", canonical.defaultSiteUrl)}
+          options={siteOptions}
           defaultUrl={canonical.defaultSiteUrl}
           current={canonical.currentSiteUrl}
         />
