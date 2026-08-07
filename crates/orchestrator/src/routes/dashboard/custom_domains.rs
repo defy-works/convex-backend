@@ -26,10 +26,12 @@ use axum::{
     Router,
 };
 use orchestrator_api_types::dashboard::{
+    CanonicalUrls,
     CreateCustomDomainArgs,
     CustomDomain,
     CustomDomainArgs,
     ListCustomDomains,
+    SetCanonicalUrlsArgs,
     VerifyCustomDomainResponse,
 };
 
@@ -66,6 +68,139 @@ pub fn router() -> Router<OrchestratorState> {
             "/deployments/{deployment_id}/custom_domains/retry",
             post(retry_custom_domain),
         )
+        .route(
+            "/deployments/{deployment_id}/canonical_urls",
+            get(get_canonical_urls),
+        )
+        .route(
+            "/deployments/{deployment_id}/canonical_urls/set",
+            post(set_canonical_urls),
+        )
+}
+
+/// Resolves a deployment's derived origins from orchestrator config.
+async fn canonical_urls_for(
+    state: &OrchestratorState,
+    deployment_id: i64,
+) -> ApiResult<CanonicalUrls> {
+    let deployment = state
+        .storage
+        .get_deployment(deployment_id)
+        .await
+        .map_err(ApiError::Internal)?
+        .ok_or_else(|| ApiError::NotFound("deployment".into()))?;
+
+    let (default_url, default_site_url) = crate::provisioner::default_origins(
+        &deployment.name,
+        &state.config.router_host,
+        state.config.site_router_host.as_deref(),
+        &state.config.router_public_scheme,
+        state.config.router_public_port,
+    );
+
+    // What the deployment *would* get if recreated right now.
+    let effective_url = deployment.desired_url.clone().unwrap_or_else(|| default_url.clone());
+    let effective_site_url = deployment
+        .desired_site_url
+        .clone()
+        .unwrap_or_else(|| default_site_url.clone());
+
+    Ok(CanonicalUrls {
+        restart_pending: effective_url != deployment.url
+            || effective_site_url != deployment.site_url,
+        current_url: deployment.url,
+        current_site_url: deployment.site_url,
+        desired_url: deployment.desired_url,
+        desired_site_url: deployment.desired_site_url,
+        default_url,
+        default_site_url,
+    })
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/dashboard/deployments/{deployment_id}/canonical_urls",
+    params(("deployment_id" = i64, Path)),
+    responses((status = 200, body = CanonicalUrls)),
+    tag = "dashboard",
+)]
+pub(crate) async fn get_canonical_urls(
+    _auth: AuthIdentity,
+    State(state): State<OrchestratorState>,
+    Path(deployment_id): Path<i64>,
+) -> ApiResult<Json<CanonicalUrls>> {
+    Ok(Json(canonical_urls_for(&state, deployment_id).await?))
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/dashboard/deployments/{deployment_id}/canonical_urls/set",
+    params(("deployment_id" = i64, Path)),
+    request_body = SetCanonicalUrlsArgs,
+    responses((status = 200, body = CanonicalUrls), (status = 400)),
+    tag = "dashboard",
+)]
+pub(crate) async fn set_canonical_urls(
+    _auth: AuthIdentity,
+    State(state): State<OrchestratorState>,
+    Path(deployment_id): Path<i64>,
+    Json(args): Json<SetCanonicalUrlsArgs>,
+) -> ApiResult<Json<CanonicalUrls>> {
+    let current = canonical_urls_for(&state, deployment_id).await?;
+    let domains = state
+        .storage
+        .list_custom_domains(deployment_id)
+        .await
+        .map_err(ApiError::Internal)?;
+
+    // Only a hostname this orchestrator actually routes to this deployment
+    // can be canonical. Anything else would hand clients a URL that resolves
+    // somewhere else, or nowhere.
+    let check = |value: &Option<String>, kind: &str, default: &str| -> Result<(), ApiError> {
+        let Some(url) = value.as_deref() else {
+            return Ok(());
+        };
+        if url == default {
+            return Ok(());
+        }
+        let host = url
+            .split("://")
+            .nth(1)
+            .unwrap_or(url)
+            .split('/')
+            .next()
+            .unwrap_or(url)
+            .split(':')
+            .next()
+            .unwrap_or(url);
+        if domains.iter().any(|d| d.kind == kind && d.domain == host) {
+            Ok(())
+        } else {
+            Err(ApiError::BadRequest(format!(
+                "{host} is not a custom domain attached to this deployment for `{kind}`"
+            )))
+        }
+    };
+    check(&args.url, custom_domains::KIND_API, &current.default_url)?;
+    check(
+        &args.site_url,
+        custom_domains::KIND_SITE,
+        &current.default_site_url,
+    )?;
+
+    // Storing the default explicitly is the same as having no override, and
+    // keeping it as NULL means the deployment follows the config if the
+    // orchestrator's router host ever changes.
+    let url = args.url.filter(|u| u != &current.default_url);
+    let site_url = args.site_url.filter(|u| u != &current.default_site_url);
+
+    state
+        .storage
+        .set_deployment_canonical_urls(deployment_id, url.as_deref(), site_url.as_deref())
+        .await
+        .map_err(ApiError::Internal)?;
+
+    Ok(Json(canonical_urls_for(&state, deployment_id).await?))
 }
 
 fn to_api(record: crate::storage::CustomDomainRecord) -> CustomDomain {

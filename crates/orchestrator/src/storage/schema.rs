@@ -68,6 +68,14 @@ CREATE TABLE IF NOT EXISTS deployments (
     knob_overrides JSONB NOT NULL DEFAULT '{}'::jsonb,
     desired_tier TEXT,
     desired_overrides JSONB NOT NULL DEFAULT '{}'::jsonb,
+    -- Canonical URLs the operator wants this deployment to advertise, used
+    -- for CONVEX_CLOUD_ORIGIN / CONVEX_SITE_ORIGIN instead of the derived
+    -- `<name>.<router_host>` forms. NULL means "use the derived default".
+    -- Like `desired_tier`, these only take effect when the backend container
+    -- is recreated, because the origins are baked into its environment;
+    -- `url` / `site_url` above are what the running container actually has.
+    desired_url TEXT,
+    desired_site_url TEXT,
     storage_mode TEXT NOT NULL DEFAULT 'volume-sqlite' CHECK (storage_mode IN ('volume-sqlite','sidecar')),
     pg_password TEXT,
     minio_root_user TEXT,

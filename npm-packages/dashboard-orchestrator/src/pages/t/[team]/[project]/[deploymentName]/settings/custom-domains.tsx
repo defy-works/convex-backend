@@ -11,6 +11,7 @@ import {
 import { useAccessToken } from "../../../../../../lib/useOrchestratorToken";
 import { orchestratorUrl } from "../../../../../../lib/config";
 import { CustomDomainsCard } from "../../../../../../components/CustomDomainsCard";
+import { CanonicalUrlsCard } from "../../../../../../components/CanonicalUrlsCard";
 
 // The route is keyed by deployment *name*, but the custom-domains API is
 // keyed by deployment id, so resolve team -> project -> deployment to get it.
@@ -63,10 +64,16 @@ export default function CustomDomains() {
           </p>
         </Sheet>
       ) : (
-        <CustomDomainsCard
-          deploymentId={deployment.id}
-          deploymentName={deployment.name}
-        />
+        <div className="flex flex-col gap-6">
+          <CustomDomainsCard
+            deploymentId={deployment.id}
+            deploymentName={deployment.name}
+          />
+          <CanonicalUrlsCard
+            deploymentId={deployment.id}
+            deploymentName={deployment.name}
+          />
+        </div>
       )}
     </DeploymentSettingsLayout>
   );

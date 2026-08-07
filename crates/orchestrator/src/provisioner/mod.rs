@@ -9,7 +9,10 @@ mod process;
 pub mod sidecar;
 pub mod tiers;
 
-pub use docker::DockerProvisioner;
+pub use docker::{
+    default_origins,
+    DockerProvisioner,
+};
 pub use external::ExternalProvisioner;
 pub use process::ProcessProvisioner;
 
@@ -79,6 +82,16 @@ pub struct ProvisionRequest {
     /// backend container connects to the same already-running pg/minio
     /// sidecars with the same credentials.
     pub sidecar_credentials: Option<SidecarCredentials>,
+    /// Canonical origins to advertise instead of the derived
+    /// `<name>.<router_host>` forms. `None` keeps the derived default.
+    ///
+    /// These become `CONVEX_CLOUD_ORIGIN` / `CONVEX_SITE_ORIGIN`, which is
+    /// what a backend reports as `CONVEX_CLOUD_URL` / `CONVEX_SITE_URL` and
+    /// what it builds HTTP action and auth callback URLs from. Set by the
+    /// restart flow from the deployment's stored overrides; a brand-new
+    /// deployment has no custom domain yet, so it passes `None`.
+    pub cloud_origin_override: Option<String>,
+    pub site_origin_override: Option<String>,
 }
 
 #[derive(Debug, Clone)]

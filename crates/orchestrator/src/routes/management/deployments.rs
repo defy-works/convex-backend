@@ -167,6 +167,8 @@ pub(crate) async fn create_deployment(
             backend_infrastructure,
             existing_instance_secret: None,
             sidecar_credentials: None,
+            cloud_origin_override: None,
+            site_origin_override: None,
         })
         .await
         .map_err(ApiError::Internal)?;
@@ -804,6 +806,10 @@ pub(crate) async fn restart_deployment(
             // write both back via `update_deployment_secrets` below.
             existing_instance_secret: deployment.backend_instance_secret.clone(),
             sidecar_credentials,
+            // Recreating the container is the only moment these can change,
+            // so this is where a pending canonical-URL choice gets applied.
+            cloud_origin_override: deployment.desired_url.clone(),
+            site_origin_override: deployment.desired_site_url.clone(),
         })
         .await
         .map_err(ApiError::Internal)?;
@@ -841,6 +847,15 @@ pub(crate) async fn restart_deployment(
     state
         .storage
         .update_deployment_snapshot(deployment.id, &effective_tier, &snapshot_overrides)
+        .await
+        .map_err(ApiError::Internal)?;
+
+    // Record the origins the new container actually got. Without this the row
+    // keeps advertising the old hostname after a canonical-URL change, and
+    // "restart pending" (desired vs current) would never clear.
+    state
+        .storage
+        .update_deployment_urls(deployment.id, &result.url, &result.site_url)
         .await
         .map_err(ApiError::Internal)?;
 

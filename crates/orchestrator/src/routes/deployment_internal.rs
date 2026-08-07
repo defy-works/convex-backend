@@ -326,6 +326,8 @@ pub(crate) async fn create_project(
                 backend_infrastructure,
                 existing_instance_secret: None,
                 sidecar_credentials: None,
+                cloud_origin_override: None,
+                site_origin_override: None,
             })
             .await
             .map_err(ApiError::Internal)?;
@@ -603,6 +605,8 @@ pub(crate) async fn provision_and_authorize(
             backend_infrastructure,
             existing_instance_secret: None,
             sidecar_credentials: None,
+            cloud_origin_override: None,
+            site_origin_override: None,
         })
         .await
         .map_err(ApiError::Internal)?;
@@ -733,6 +737,8 @@ pub(crate) async fn claim_preview_deployment(
                     backend_infrastructure,
                     existing_instance_secret: None,
                     sidecar_credentials: None,
+                    cloud_origin_override: None,
+                    site_origin_override: None,
                 })
                 .await
                 .map_err(ApiError::Internal)?;

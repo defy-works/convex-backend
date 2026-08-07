@@ -68,6 +68,17 @@ pub async fn run(pool: &PgPool) -> anyhow::Result<()> {
             "#,
         )
         .await?;
+    // Operator-chosen canonical URLs. NULL keeps the derived
+    // `<name>.<router_host>` behaviour, so existing deployments are untouched.
+    conn.client()
+        .batch_execute(
+            r#"
+            ALTER TABLE deployments
+              ADD COLUMN IF NOT EXISTS desired_url TEXT,
+              ADD COLUMN IF NOT EXISTS desired_site_url TEXT;
+            "#,
+        )
+        .await?;
     // Custom-domain certificate management. `last_error` carries the reason
     // the last issuance attempt failed, verbatim, for the dashboard to show.
     //
