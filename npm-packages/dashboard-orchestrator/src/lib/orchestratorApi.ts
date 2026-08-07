@@ -101,8 +101,14 @@ async function request<T>(
     }
     throw new OrchestratorApiError(res.status, message, code);
   }
-  if (res.status === 204) return undefined as T;
-  return (await res.json()) as T;
+  // Not every success carries a body: delete answers 200 and retry answers
+  // 202, both empty. `res.json()` throws on an empty body, and callers await
+  // this before revalidating their SWR cache — so a throw here is what leaves
+  // a removed domain on screen until the operator reloads the page. Read the
+  // body as text and only parse when there is something to parse.
+  const text = await res.text();
+  if (!text) return undefined as T;
+  return JSON.parse(text) as T;
 }
 
 // ---------- Public API ----------
