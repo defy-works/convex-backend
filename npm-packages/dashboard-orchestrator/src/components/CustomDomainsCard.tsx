@@ -7,9 +7,16 @@
 // Validation is always HTTP-01, which needs no credentials, so there is
 // nothing else to configure.
 //
+// A domain can instead be marked `tlsMode: "upstream"`, meaning something in
+// front of this orchestrator already terminates TLS. Those domains are routed
+// but never sent to ACME, and the renewal sweep skips them — otherwise they
+// have no certificate row, so every sweep would find them "due" and flip them
+// back to `issuing` forever.
+//
 // Nothing here claims a domain is live on its own — `certState` reaches
 // `active` only after the orchestrator has completed a real HTTPS request
-// against the domain.
+// against the domain. For an upstream domain that request is answered by
+// whatever fronts it, so `active` means reachable, not "we serve its cert".
 
 import { useState } from "react";
 import { Button } from "@ui/Button";
@@ -42,6 +49,7 @@ export function CustomDomainsCard({
 
   const [draft, setDraft] = useState("");
   const [kind, setKind] = useState<"api" | "site">("api");
+  const [tlsMode, setTlsMode] = useState<"acme" | "upstream">("acme");
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [pendingDelete, setPendingDelete] = useState<string | null>(null);
@@ -55,7 +63,7 @@ export function CustomDomainsCard({
     setSubmitting(true);
     setFormError(null);
     try {
-      await add(domain, kind);
+      await add(domain, kind, tlsMode);
       setDraft("");
     } catch (err) {
       setFormError((err as Error).message);
@@ -110,8 +118,10 @@ export function CustomDomainsCard({
         <code className="rounded-sm bg-background-tertiary px-1 text-xs">
           {targetHost || "your orchestrator host"}
         </code>
-        , then add the hostname below. The certificate is issued and renewed
-        automatically — no Traefik restart, and nothing to edit on the server.
+        , then add the hostname below. Routing takes effect without a Traefik
+        restart, and there is nothing to edit on the server. Certificates are
+        issued and renewed automatically unless the hostname is set to terminate
+        TLS upstream.
       </p>
 
       <form onSubmit={onAdd} className="mt-4 flex flex-col gap-3">
@@ -137,10 +147,36 @@ export function CustomDomainsCard({
               <option value="site">HTTP Actions (site)</option>
             </select>
           </label>
+          <label className="flex flex-col gap-1 text-sm">
+            <span className="text-content-primary">TLS</span>
+            <select
+              aria-label="TLS"
+              className="h-9 rounded-sm border bg-background-secondary px-2 text-sm"
+              value={tlsMode}
+              onChange={(e) =>
+                setTlsMode(e.target.value as "acme" | "upstream")
+              }
+            >
+              <option value="acme">Issue a certificate</option>
+              <option value="upstream">Terminated upstream</option>
+            </select>
+          </label>
           <Button type="submit" disabled={submitting || !draft.trim()}>
             Add
           </Button>
         </div>
+
+        {tlsMode === "upstream" && (
+          <p className="max-w-prose text-xs text-content-secondary">
+            No certificate is issued or renewed for this hostname — whatever
+            sits in front of it (Cloudflare in proxied mode, another reverse
+            proxy) is expected to present one. Works with Cloudflare&apos;s{" "}
+            <span className="font-semibold">Full</span> SSL mode, which does not
+            check the origin certificate. Use{" "}
+            <span className="font-semibold">Issue a certificate</span> for{" "}
+            <span className="font-semibold">Full (strict)</span>.
+          </p>
+        )}
 
         {formError && (
           <p className="text-xs text-content-error" role="alert">
@@ -173,6 +209,14 @@ export function CustomDomainsCard({
                 <span className="text-xs text-content-secondary">
                   {d.kind === "site" ? "HTTP Actions" : "Database"}
                 </span>
+                {d.tlsMode === "upstream" && (
+                  <span
+                    className="rounded-sm bg-background-tertiary px-1.5 py-0.5 text-[10px] text-content-secondary uppercase"
+                    title="TLS is terminated in front of this orchestrator; no certificate is issued or renewed here."
+                  >
+                    TLS upstream
+                  </span>
+                )}
                 <CopyButton text={d.domain} />
                 <CertStateBadge certState={d.certState} />
                 <Button
@@ -183,7 +227,7 @@ export function CustomDomainsCard({
                 >
                   {busy === d.domain ? "Checking…" : "Check"}
                 </Button>
-                {d.certState === "failed" && (
+                {d.certState === "failed" && d.tlsMode !== "upstream" && (
                   <Button
                     size="xs"
                     variant="neutral"

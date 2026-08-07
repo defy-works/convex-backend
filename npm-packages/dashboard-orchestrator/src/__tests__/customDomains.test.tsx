@@ -72,10 +72,62 @@ test("adds a domain and refreshes the list", async () => {
       7,
       "api.example.com",
       "api",
+      // Issuing a certificate is the default; upstream is opt-in.
+      "acme",
     ),
   );
   // Re-listed so the new row appears without a manual reload.
   await waitFor(() => expect(mockList).toHaveBeenCalledTimes(2));
+});
+
+test("can add a domain whose TLS is terminated upstream", async () => {
+  const user = userEvent.setup();
+  mockCreate.mockResolvedValue({});
+  renderCard();
+  await waitFor(() => expect(mockList).toHaveBeenCalled());
+
+  await user.type(screen.getByLabelText("Domain"), "proxied.example.com");
+  await user.selectOptions(screen.getByLabelText("TLS"), "upstream");
+  await user.click(screen.getByRole("button", { name: "Add" }));
+
+  await waitFor(() =>
+    expect(mockCreate).toHaveBeenCalledWith(
+      "http://orchestrator.test",
+      "pat_test",
+      7,
+      "proxied.example.com",
+      "api",
+      "upstream",
+    ),
+  );
+});
+
+test("does not offer to retry issuance for an upstream domain", async () => {
+  // There is no certificate to re-issue, and the orchestrator rejects the
+  // call outright — offering the button would only produce an error.
+  mockList.mockResolvedValue({
+    domains: [
+      {
+        id: 1,
+        deploymentId: 7,
+        domain: "proxied.example.com",
+        certState: "failed",
+        createdAt: 0,
+        kind: "api",
+        tlsMode: "upstream",
+        lastError: "something went wrong earlier",
+      },
+    ],
+    targetHost: "convex.example.com",
+    routingEnabled: true,
+  });
+  renderCard();
+
+  await waitFor(() =>
+    expect(screen.getByText("proxied.example.com")).toBeInTheDocument(),
+  );
+  expect(screen.getByText("TLS upstream")).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
 });
 
 test("surfaces the server's rejection instead of silently failing", async () => {
@@ -212,6 +264,7 @@ test("a domain can front HTTP actions instead of the database", async () => {
       7,
       "hooks.example.com",
       "site",
+      "acme",
     ),
   );
 });

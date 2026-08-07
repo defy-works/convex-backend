@@ -76,6 +76,7 @@ fn to_api(record: crate::storage::CustomDomainRecord) -> CustomDomain {
         cert_state: record.cert_state,
         created_at: record.created_at,
         kind: record.kind,
+        tls_mode: record.tls_mode,
         last_error: record.last_error,
     }
 }
@@ -127,6 +128,12 @@ pub(crate) async fn create_custom_domain(
         args.kind.as_deref().unwrap_or(custom_domains::KIND_API),
     )
     .map_err(|e| ApiError::BadRequest(e.to_string()))?;
+    let tls_mode = custom_domains::validate_tls_mode(
+        args.tls_mode
+            .as_deref()
+            .unwrap_or(custom_domains::TLS_MODE_ACME),
+    )
+    .map_err(|e| ApiError::BadRequest(e.to_string()))?;
 
     // `domain` is globally UNIQUE — two deployments can't both claim it, and
     // Traefik couldn't route it if they did. Translate the constraint
@@ -145,18 +152,24 @@ pub(crate) async fn create_custom_domain(
 
     let record = state
         .storage
-        .create_custom_domain(deployment_id, &domain, &kind)
+        .create_custom_domain(deployment_id, &domain, &kind, &tls_mode)
         .await
         .map_err(ApiError::Internal)?;
 
-    // Routing is synced by the issuance task, *not* here. Writing the Traefik
+    // Routing is synced off the request path either way. Writing the Traefik
     // dynamic config makes Traefik reload, and this response is travelling
     // back through that same Traefik on the `websecure` entrypoint — the
     // reload drops the connection before the reply is flushed, so the browser
     // sees a network error for a request that actually succeeded (the row is
     // already committed above; a reload of the dashboard shows it). Reply
     // first, reconfigure the proxy afterwards.
-    spawn_issuance(state.clone(), domain);
+    if tls_mode == custom_domains::TLS_MODE_UPSTREAM {
+        // Nothing to issue — the certificate lives in front of us. The domain
+        // still needs its router, so sync without entering issuance.
+        spawn_traefik_sync(state.clone());
+    } else {
+        spawn_issuance(state.clone(), domain);
+    }
 
     Ok(Json(to_api(record)))
 }
@@ -216,6 +229,22 @@ pub(crate) async fn retry_custom_domain(
 ) -> ApiResult<StatusCode> {
     let domain = custom_domains::validate_domain(&args.domain)
         .map_err(|e| ApiError::BadRequest(e.to_string()))?;
+
+    // Retrying issuance for a domain whose TLS is terminated upstream would
+    // order a certificate that is never served, and burn ACME rate limit
+    // doing it. Say so rather than silently doing nothing.
+    let record = state
+        .storage
+        .get_custom_domain(&domain)
+        .await
+        .map_err(ApiError::Internal)?
+        .ok_or_else(|| ApiError::BadRequest(format!("{domain} is not configured")))?;
+    if record.tls_mode == custom_domains::TLS_MODE_UPSTREAM {
+        return Err(ApiError::BadRequest(format!(
+            "{domain} terminates TLS upstream, so there is no certificate to issue"
+        )));
+    }
+
     spawn_issuance(state, domain);
     Ok(StatusCode::ACCEPTED)
 }
@@ -298,11 +327,19 @@ pub fn spawn_issuance(state: OrchestratorState, domain: String) {
 }
 
 async fn issue_now(state: &OrchestratorState, domain: &str) -> anyhow::Result<()> {
-    state
+    let record = state
         .storage
         .get_custom_domain(domain)
         .await?
         .ok_or_else(|| anyhow::anyhow!("{domain} is no longer configured"))?;
+
+    // Last line of defence. The sweep filters these out in SQL and the retry
+    // handler rejects them, but issuing for an upstream-terminated domain is
+    // wasted ACME quota whichever path got here.
+    anyhow::ensure!(
+        record.tls_mode != custom_domains::TLS_MODE_UPSTREAM,
+        "{domain} terminates TLS upstream; not ordering a certificate"
+    );
 
     // Route before validating: the ACME server fetches the HTTP-01 challenge
     // over the domain itself, which only resolves once Traefik has the router

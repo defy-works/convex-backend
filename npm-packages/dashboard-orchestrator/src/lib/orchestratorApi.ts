@@ -444,6 +444,10 @@ export const customDomainSchema = z.object({
   certState: z.string(),
   createdAt: z.number(),
   kind: z.string(),
+  // "acme" (we issue and renew) or "upstream" (something in front already
+  // terminates TLS). Defaulted so a dashboard newer than the orchestrator
+  // still parses rows written before the column existed.
+  tlsMode: z.string().default("acme"),
   lastError: z.string().nullable(),
 });
 
@@ -484,6 +488,7 @@ export async function createCustomDomain(
   deploymentId: number,
   domain: string,
   kind: "api" | "site" = "api",
+  tlsMode: "acme" | "upstream" = "acme",
 ): Promise<CustomDomain> {
   const data = await request<unknown>(
     baseUrl,
@@ -491,7 +496,7 @@ export async function createCustomDomain(
     {
       method: "POST",
       token,
-      body: JSON.stringify({ domain, kind }),
+      body: JSON.stringify({ domain, kind, tlsMode }),
     },
   );
   return customDomainSchema.parse(data);
