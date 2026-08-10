@@ -12951,8 +12951,3 @@ dependencies = [
  "cc",
  "pkg-config",
 ]
-
-[[patch.unused]]
-name = "shuttle"
-version = "0.9.1"
-source = "git+https://github.com/awslabs/shuttle#cd57cf9d04c3056eb82a6fd7bd272d264b5c290c"
