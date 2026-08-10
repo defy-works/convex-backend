@@ -3040,6 +3040,37 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "da692b8d1080ea3045efaab14434d40468c3d8657e42abddfffca87b428f4c1b"
 
 [[package]]
+name = "defmt"
+version = "1.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e2953bfe4f93bbd20cc71198842756f77d161884c99ebbabc41d80231ded88d1"
+dependencies = [
+ "bitflags 1.3.2",
+ "defmt-macros",
+]
+
+[[package]]
+name = "defmt-macros"
+version = "1.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bad9c72e7ca2137e0dc3813245a0d282fd6daad32fd800af018306a9169b5fe8"
+dependencies = [
+ "defmt-parser",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.118",
+]
+
+[[package]]
+name = "defmt-parser"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "10d60334b3b2e7c9d91ef8150abfb6fa4c1c39ebbcf4a81c2e346aad939fee3e"
+dependencies = [
+ "thiserror 2.0.17",
+]
+
+[[package]]
 name = "deno_core"
 version = "0.402.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5184,7 +5215,7 @@ dependencies = [
  "parking_lot",
  "rand 0.9.4",
  "runtime",
- "shuttle",
+ "shuttle 0.9.0",
  "shuttle-dashmap",
  "shuttle-parking_lot",
  "tracing",
@@ -5490,6 +5521,59 @@ dependencies = [
  "tikv-jemalloc-ctl",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "jiff"
+version = "0.2.35"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "668b7183bd07af9a4885f5c35b0cc5c83c4607a913c16b7e17291832910d2dcc"
+dependencies = [
+ "defmt",
+ "jiff-core",
+ "jiff-static",
+ "jiff-tzdb-platform",
+ "log",
+ "portable-atomic",
+ "portable-atomic-util",
+ "serde_core",
+ "windows-link 0.2.1",
+]
+
+[[package]]
+name = "jiff-core"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7feca88439efe53da3754500c1851dedf3cb36c524dd5cf8225cc0794de95d09"
+dependencies = [
+ "defmt",
+]
+
+[[package]]
+name = "jiff-static"
+version = "0.2.35"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3a69dcb3a21cfb32ce1cd056169337ca284af0766dd766e7878819b251a49204"
+dependencies = [
+ "jiff-core",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.118",
+]
+
+[[package]]
+name = "jiff-tzdb"
+version = "0.1.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "142bd39932ad231f10513df9ab62661fead8719872150b7ad02a2df79f4e141e"
+
+[[package]]
+name = "jiff-tzdb-platform"
+version = "0.1.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "875a5a69ac2bab1a891711cf5eccbec1ce0341ea805560dcd90b7a2e925132e8"
+dependencies = [
+ "jiff-tzdb",
 ]
 
 [[package]]
@@ -6384,7 +6468,7 @@ dependencies = [
  "event-listener",
  "futures-util",
  "portable-atomic",
- "shuttle",
+ "shuttle 0.9.0",
  "shuttle-parking_lot",
  "smallvec",
  "tagptr",
@@ -7105,6 +7189,12 @@ dependencies = [
 
 [[package]]
 name = "owo-colors"
+version = "3.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c1b04fb49957986fdce4d6ee7a65027d55d4b6d2265e5848bbb507b58ccfdb6f"
+
+[[package]]
+name = "owo-colors"
 version = "4.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d211803b9b6b570f68772237e415a029d5a50c65d382910b879fb19d3271f94d"
@@ -7495,6 +7585,15 @@ name = "portable-atomic"
 version = "1.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "350e9b48cbc6b0e028b0473b114454c6316e57336ee184ceab6e53f72c178b3e"
+
+[[package]]
+name = "portable-atomic-util"
+version = "0.2.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c2a106d1259c23fac8e543272398ae0e3c0b8d33c88ed73d0cc71b0f1d902618"
+dependencies = [
+ "portable-atomic",
+]
 
 [[package]]
 name = "postgres"
@@ -9275,9 +9374,9 @@ dependencies = [
 
 [[package]]
 name = "serde_with"
-version = "3.21.0"
+version = "3.22.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "76a5c54c7310e7b8b9577c286d7e399ddd876c3e12b3ed917a8aabc4b96e9e8c"
+checksum = "ee78f1fbe43ac4a0e47aadb3dbd357b69eb0d3793e948624cd03dd2750ab1c0a"
 dependencies = [
  "base64 0.22.1",
  "bs58",
@@ -9285,6 +9384,7 @@ dependencies = [
  "hex",
  "indexmap 1.9.3",
  "indexmap 2.11.4",
+ "jiff",
  "schemars 0.9.0",
  "schemars 1.1.0",
  "serde_core",
@@ -9295,9 +9395,9 @@ dependencies = [
 
 [[package]]
 name = "serde_with_macros"
-version = "3.21.0"
+version = "3.22.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "84d57bc0c8b9a17920c178daa6bb924850d54a9c97ab45194bb8c17ad66bb660"
+checksum = "8705578779c2b6bd90d84d66eb2e206b708b1a4d7b9f17641b293545bf1c7e46"
 dependencies = [
  "darling 0.23.0",
  "proc-macro2",
@@ -9402,29 +9502,9 @@ dependencies = [
 
 [[package]]
 name = "shuttle"
-version = "0.9.1"
-source = "git+https://github.com/awslabs/shuttle#1d48fea107777cb75eac9d1b931022c5b01deeec"
-dependencies = [
- "bitvec",
- "cfg-if",
- "const-siphasher",
- "corosensei",
- "hex",
- "owo-colors",
- "rand 0.8.6",
- "rand_core 0.6.4",
- "rand_pcg",
- "scoped-tls",
- "shuttle-core",
- "shuttle-schedulers",
- "shuttle-std",
- "tracing",
-]
-
-[[package]]
-name = "shuttle-core"
-version = "0.1.0"
-source = "git+https://github.com/awslabs/shuttle#1d48fea107777cb75eac9d1b931022c5b01deeec"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5bd61f7740e01181c94642c211391c8f6b6877fa0df7a904aace62bf38221d7e"
 dependencies = [
  "assoc",
  "bitvec",
@@ -9432,12 +9512,33 @@ dependencies = [
  "const-siphasher",
  "corosensei",
  "hex",
- "owo-colors",
+ "owo-colors 3.5.0",
  "rand 0.8.6",
  "rand_core 0.6.4",
  "rand_pcg",
  "scoped-tls",
  "smallvec",
+ "tracing",
+]
+
+[[package]]
+name = "shuttle"
+version = "0.9.2"
+source = "git+https://github.com/awslabs/shuttle#d90ddeed8fe690e70db0a69ce64610ac7121ab61"
+dependencies = [
+ "bitvec",
+ "cfg-if",
+ "const-siphasher",
+ "corosensei",
+ "hex",
+ "owo-colors 4.3.0",
+ "rand 0.8.6",
+ "rand_core 0.6.4",
+ "rand_pcg",
+ "scoped-tls",
+ "shuttle-engine",
+ "shuttle-schedulers",
+ "shuttle-std",
  "tracing",
 ]
 
@@ -9457,13 +9558,33 @@ version = "0.1.0"
 source = "git+https://github.com/awslabs/shuttle#09098b59fb43bdd08099d33f9e390ba2172325de"
 dependencies = [
  "deterministic_collections",
- "shuttle",
+ "shuttle 0.9.2",
+]
+
+[[package]]
+name = "shuttle-engine"
+version = "0.1.0"
+source = "git+https://github.com/awslabs/shuttle#d90ddeed8fe690e70db0a69ce64610ac7121ab61"
+dependencies = [
+ "assoc",
+ "bitvec",
+ "cfg-if",
+ "const-siphasher",
+ "corosensei",
+ "hex",
+ "owo-colors 4.3.0",
+ "rand 0.8.6",
+ "rand_core 0.6.4",
+ "rand_pcg",
+ "scoped-tls",
+ "smallvec",
+ "tracing",
 ]
 
 [[package]]
 name = "shuttle-parking_lot"
 version = "0.12.5"
-source = "git+https://github.com/awslabs/shuttle#1d48fea107777cb75eac9d1b931022c5b01deeec"
+source = "git+https://github.com/awslabs/shuttle#d90ddeed8fe690e70db0a69ce64610ac7121ab61"
 dependencies = [
  "cfg-if",
  "parking_lot",
@@ -9473,21 +9594,21 @@ dependencies = [
 [[package]]
 name = "shuttle-parking_lot-impl"
 version = "0.1.1"
-source = "git+https://github.com/awslabs/shuttle#1d48fea107777cb75eac9d1b931022c5b01deeec"
+source = "git+https://github.com/awslabs/shuttle#d90ddeed8fe690e70db0a69ce64610ac7121ab61"
 dependencies = [
  "lock_api",
- "shuttle",
+ "shuttle 0.9.2",
  "tracing",
 ]
 
 [[package]]
 name = "shuttle-schedulers"
 version = "0.1.0"
-source = "git+https://github.com/awslabs/shuttle#1d48fea107777cb75eac9d1b931022c5b01deeec"
+source = "git+https://github.com/awslabs/shuttle#d90ddeed8fe690e70db0a69ce64610ac7121ab61"
 dependencies = [
  "rand 0.8.6",
  "rand_pcg",
- "shuttle-core",
+ "shuttle-engine",
  "smallvec",
  "tracing",
 ]
@@ -9495,11 +9616,11 @@ dependencies = [
 [[package]]
 name = "shuttle-std"
 version = "0.1.0"
-source = "git+https://github.com/awslabs/shuttle#1d48fea107777cb75eac9d1b931022c5b01deeec"
+source = "git+https://github.com/awslabs/shuttle#d90ddeed8fe690e70db0a69ce64610ac7121ab61"
 dependencies = [
  "assoc",
- "owo-colors",
- "shuttle-core",
+ "owo-colors 4.3.0",
+ "shuttle-engine",
  "smallvec",
  "tracing",
 ]
@@ -12830,3 +12951,8 @@ dependencies = [
  "cc",
  "pkg-config",
 ]
+
+[[patch.unused]]
+name = "shuttle"
+version = "0.9.1"
+source = "git+https://github.com/awslabs/shuttle#cd57cf9d04c3056eb82a6fd7bd272d264b5c290c"
