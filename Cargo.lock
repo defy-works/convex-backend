@@ -3840,7 +3840,7 @@ dependencies = [
 
 [[package]]
 name = "fivetran_source"
-version = "2.0.1"
+version = "2.0.2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -9524,7 +9524,7 @@ dependencies = [
 [[package]]
 name = "shuttle"
 version = "0.9.2"
-source = "git+https://github.com/awslabs/shuttle#49f9e1e5b452ee1e60cc6782c21160cb194671c6"
+source = "git+https://github.com/awslabs/shuttle#5b95d87f69c09b2b13387cd178fd622b210ca90e"
 dependencies = [
  "bitvec",
  "cfg-if",
@@ -9564,7 +9564,7 @@ dependencies = [
 [[package]]
 name = "shuttle-engine"
 version = "0.1.0"
-source = "git+https://github.com/awslabs/shuttle#49f9e1e5b452ee1e60cc6782c21160cb194671c6"
+source = "git+https://github.com/awslabs/shuttle#5b95d87f69c09b2b13387cd178fd622b210ca90e"
 dependencies = [
  "assoc",
  "bitvec",
@@ -9584,7 +9584,7 @@ dependencies = [
 [[package]]
 name = "shuttle-parking_lot"
 version = "0.12.5"
-source = "git+https://github.com/awslabs/shuttle#49f9e1e5b452ee1e60cc6782c21160cb194671c6"
+source = "git+https://github.com/awslabs/shuttle#5b95d87f69c09b2b13387cd178fd622b210ca90e"
 dependencies = [
  "cfg-if",
  "parking_lot",
@@ -9594,7 +9594,7 @@ dependencies = [
 [[package]]
 name = "shuttle-parking_lot-impl"
 version = "0.1.1"
-source = "git+https://github.com/awslabs/shuttle#49f9e1e5b452ee1e60cc6782c21160cb194671c6"
+source = "git+https://github.com/awslabs/shuttle#5b95d87f69c09b2b13387cd178fd622b210ca90e"
 dependencies = [
  "lock_api",
  "shuttle 0.9.2",
@@ -9604,7 +9604,7 @@ dependencies = [
 [[package]]
 name = "shuttle-schedulers"
 version = "0.1.0"
-source = "git+https://github.com/awslabs/shuttle#49f9e1e5b452ee1e60cc6782c21160cb194671c6"
+source = "git+https://github.com/awslabs/shuttle#5b95d87f69c09b2b13387cd178fd622b210ca90e"
 dependencies = [
  "rand 0.8.6",
  "rand_pcg",
@@ -9616,7 +9616,7 @@ dependencies = [
 [[package]]
 name = "shuttle-std"
 version = "0.1.0"
-source = "git+https://github.com/awslabs/shuttle#49f9e1e5b452ee1e60cc6782c21160cb194671c6"
+source = "git+https://github.com/awslabs/shuttle#5b95d87f69c09b2b13387cd178fd622b210ca90e"
 dependencies = [
  "assoc",
  "owo-colors 4.3.0",
@@ -12953,3 +12953,8 @@ dependencies = [
  "cc",
  "pkg-config",
 ]
+
+[[patch.unused]]
+name = "shuttle"
+version = "0.9.1"
+source = "git+https://github.com/awslabs/shuttle#cd57cf9d04c3056eb82a6fd7bd272d264b5c290c"
