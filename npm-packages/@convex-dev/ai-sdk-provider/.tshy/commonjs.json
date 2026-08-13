@@ -2,16 +2,16 @@
   "extends": "./build.json",
   "include": [
     "../src/**/*.ts",
-    "../src/**/*.mts",
+    "../src/**/*.cts",
     "../src/**/*.tsx",
     "../src/**/*.json"
   ],
   "exclude": [
     "../src/**/*.test.ts",
-    "../src/test/fixtures/**",
+    "../src/**/*.mts",
     "../src/package.json"
   ],
   "compilerOptions": {
-    "outDir": "../.tshy-build/esm"
+    "outDir": "../.tshy-build/commonjs"
   }
 }

@@ -294,6 +294,7 @@ impl<RT: Runtime> ActionEnvironment<RT> {
             convex_origin_override: convex_origin_override.clone(),
             http_action_route: http_action_route.clone(),
             deployment,
+            ai_gateway_token: Arc::new(tokio::sync::OnceCell::new()),
         };
         let (pending_task_sender, pending_task_receiver) = spsc::unbounded_channel();
         let running_tasks = rt.spawn("task_executor", task_executor.go(pending_task_receiver));
@@ -1345,6 +1346,8 @@ impl<RT: Runtime> ActionEnvironment<RT> {
 }
 
 impl<RT: Runtime> IsolateEnvironment<RT> for ActionEnvironment<RT> {
+    type AsyncResolver = v8::Global<v8::PromiseResolver>;
+
     fn trace(&mut self, level: LogLevel, messages: Vec<String>) -> anyhow::Result<()> {
         // - 1 to reserve for the [ERROR] log line
 
