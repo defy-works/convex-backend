@@ -221,6 +221,10 @@ use crate::{
         ScheduledJobArgsTable,
         SCHEDULED_JOBS_ARGS_TABLE,
     },
+    scheduler_cursor::{
+        SchedulerCursorTable,
+        SCHEDULER_CURSOR_TABLE,
+    },
     usage_limits::{
         UsageLimitsTable,
         USAGE_LIMITS_INDEX_BY_SELECTOR,
@@ -253,6 +257,7 @@ pub mod migrations;
 pub mod modules;
 pub mod periodic_backup;
 pub mod scheduled_jobs;
+pub mod scheduler_cursor;
 pub mod session_requests;
 pub mod snapshot_imports;
 pub mod source_packages;
@@ -265,6 +270,31 @@ pub mod usage_limits;
 /// import/export more likely to work nicely.
 #[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Debug, strum::EnumIter)]
 enum DefaultTableNumber {
+    // ---- Fork-only system tables ----
+    // These are FIRST, before upstream's sequence, on purpose. Upstream appends
+    // new tables to the end of the list and rewrites the "Next Number - N -
+    // user" trailer at the bottom on every single addition. Anything the fork
+    // parks next to that trailer therefore conflicts on every upstream table
+    // addition — it did, hourly, until these moved up here. The top of the enum
+    // is the one spot upstream never touches, so keep fork entries here.
+    //
+    // Numbers are in a reserved high range, far above upstream's sequence, so
+    // upstream can keep appending indefinitely without colliding with ours (a
+    // collision is a hard build error: E0081). Keep upstream's numbering
+    // untouched — renumbering an upstream table makes this fork's on-disk
+    // layout diverge from every other Convex deployment.
+    //
+    // Changing a value here only affects tables created from now on;
+    // `Transaction::table_number_for_system_table` consults the default solely
+    // at creation time, so existing deployments keep the numbers they have.
+    //
+    // Must stay within [1, 9487]: TableNumber = 512 + this value, and system
+    // tables must land in [513, 10000).
+    // Next Fork Number - 1002 - mingu
+    AdminKeys = 1000,
+    PeriodicBackupConfig = 1001,
+
+    // ---- Upstream's sequence: keep last, and do not insert fork entries ----
     Tables = 1,
     Index = 2,
     Exports = 4,
@@ -299,26 +329,10 @@ enum DefaultTableNumber {
     AuditLogConfig = 39,
     UsageLimits = 40,
     DataSyncProgress = 41,
+    SchedulerCursor = 42,
     // Keep this number and your user name up to date. The number makes it easy to know
     // what to use next. The username on the same line detects merge conflicts
-    // Next Number - 42 - nipunn
-
-    // ---- Fork-only system tables ----
-    // Deliberately in a reserved high range, far above upstream's sequence
-    // above, so upstream can keep appending table numbers indefinitely without
-    // colliding with ours (a collision is a hard build error: E0081). Keep
-    // upstream's numbering untouched — renumbering an upstream table makes this
-    // fork's on-disk layout diverge from every other Convex deployment.
-    //
-    // Changing a value here only affects tables created from now on;
-    // `Transaction::table_number_for_system_table` consults the default solely
-    // at creation time, so existing deployments keep the numbers they have.
-    //
-    // Must stay within [1, 9487]: TableNumber = 512 + this value, and system
-    // tables must land in [513, 10000).
-    // Next Fork Number - 1002 - mingu
-    AdminKeys = 1000,
-    PeriodicBackupConfig = 1001,
+    // Next Number - 43 - ayush
 }
 
 impl From<DefaultTableNumber> for TableNumber {
@@ -332,6 +346,13 @@ impl From<DefaultTableNumber> for TableNumber {
 impl From<DefaultTableNumber> for &'static dyn ErasedSystemTable {
     fn from(value: DefaultTableNumber) -> Self {
         match value {
+            // Fork-only arms first, for the same reason the fork-only variants
+            // lead `DefaultTableNumber`: upstream only ever appends to the end
+            // of this list, so anything the fork leaves down there is in the
+            // path of every upstream table addition.
+            DefaultTableNumber::AdminKeys => &AdminKeysTable,
+            DefaultTableNumber::PeriodicBackupConfig => &PeriodicBackupConfigTable,
+
             DefaultTableNumber::Tables => &TablesTable,
             DefaultTableNumber::Index => &IndexTable,
             DefaultTableNumber::Exports => &ExportsTable,
@@ -364,10 +385,9 @@ impl From<DefaultTableNumber> for &'static dyn ErasedSystemTable {
             DefaultTableNumber::SchemaValidationProgress => &SchemaValidationProgressTable,
             DefaultTableNumber::ScheduledJobArgs => &ScheduledJobArgsTable,
             DefaultTableNumber::AuditLogConfig => &AuditLogConfigTable,
-            DefaultTableNumber::AdminKeys => &AdminKeysTable,
-            DefaultTableNumber::PeriodicBackupConfig => &PeriodicBackupConfigTable,
             DefaultTableNumber::UsageLimits => &UsageLimitsTable,
             DefaultTableNumber::DataSyncProgress => &DataSyncProgressTable,
+            DefaultTableNumber::SchedulerCursor => &SchedulerCursorTable,
         }
     }
 }
@@ -623,6 +643,7 @@ pub fn component_system_tables() -> Vec<&'static dyn ErasedSystemTable> {
         &FileStorageTable,
         &ScheduledJobsTable,
         &ScheduledJobArgsTable,
+        &SchedulerCursorTable,
         &CronJobsTable,
         &CronJobLogsTable,
         &CronNextRunTable,
@@ -642,6 +663,7 @@ static APP_TABLES_TO_LOAD_IN_MEMORY: LazyLock<BTreeSet<TableName>> = LazyLock::n
         CRON_JOBS_TABLE.clone(),
         CRON_NEXT_RUN_TABLE.clone(),
         BACKEND_STATE_TABLE.clone(),
+        SCHEDULER_CURSOR_TABLE.clone(),
         CANONICAL_URLS_TABLE.clone(),
         BACKEND_INFO_TABLE.clone(),
         AWS_LAMBDA_VERSIONS_TABLE.clone(),
@@ -699,6 +721,7 @@ pub static FIRST_SEEN_TABLE: LazyLock<BTreeMap<TableName, DatabaseVersion>> = La
         AUDIT_LOG_CONFIG_TABLE.clone() => 124,
         USAGE_LIMITS_TABLE.clone() => 126,
         DATA_SYNC_PROGRESS_TABLE.clone() => 127,
+        SCHEDULER_CURSOR_TABLE.clone() => 129,
     }
 });
 

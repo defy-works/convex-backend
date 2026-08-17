@@ -50,7 +50,10 @@ use file_storage::TransactionalFileStorage;
 use futures::FutureExt;
 use indexing::index_reader::IndexReader;
 use isolate::{
-    client::EnvironmentData,
+    client::{
+        EnvironmentData,
+        IsolateWorker,
+    },
     IsolateClient,
 };
 use keybroker::{
@@ -222,26 +225,22 @@ pub async fn validate_run_function_result(
 }
 
 impl<RT: Runtime, S: StorageForDeployment<RT>> FunctionRunnerCore<RT, S> {
-    pub fn new(rt: RT, storage: S, max_percent_per_client: usize) -> anyhow::Result<Self> {
-        Self::_new(
-            rt,
-            storage,
-            max_percent_per_client,
-            *FUNRUN_MAX_ISOLATE_WORKERS,
-        )
-    }
-
-    fn _new(
+    pub fn new<W: IsolateWorker<RT>>(
         rt: RT,
         storage: S,
         max_percent_per_client: usize,
-        max_isolate_workers: usize,
+        isolate_worker: W,
     ) -> anyhow::Result<Self> {
+        // Fork-local: upstream reads `MAX_ISOLATE_WORKERS` (default 300). We
+        // read `FUNRUN_MAX_ISOLATE_WORKERS` (default 128, floored at 1), the
+        // knob the orchestrator sets per deployment tier — see
+        // `orchestrator::provisioner::tiers` and `knob_registry::exposure`.
+        let max_isolate_workers = *FUNRUN_MAX_ISOLATE_WORKERS;
         let isolate_client = IsolateClient::new(
             rt.clone(),
             max_percent_per_client,
             max_isolate_workers,
-            None,
+            isolate_worker,
         )?;
         let index_cache = InMemoryIndexCache::new(rt.clone());
         let module_cache = ModuleCache::new(rt.clone());
@@ -255,10 +254,6 @@ impl<RT: Runtime, S: StorageForDeployment<RT>> FunctionRunnerCore<RT, S> {
             code_cache,
             isolate_client,
         })
-    }
-
-    pub fn concurrency_limiter(&self) -> &isolate::ConcurrencyLimiter {
-        self.isolate_client.concurrency_limiter()
     }
 
     pub fn active_isolate_workers(&self) -> usize {

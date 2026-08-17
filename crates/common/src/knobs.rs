@@ -166,6 +166,12 @@ pub static APP_METRICS_SEED_STARTUP_JITTER: LazyLock<Duration> = LazyLock::new(|
 pub static KILL_APP_METRICS_SEED_WORKER: LazyLock<bool> =
     LazyLock::new(|| env_config("KILL_APP_METRICS_SEED_WORKER", false));
 
+/// Minimum spacing between a deployment's deploy reports to big brain. Deploys
+/// landing within this window of the previous report coalesce into a single
+/// request carrying the newest deploy time.
+pub static DEPLOY_REPORT_MIN_INTERVAL: LazyLock<Duration> =
+    LazyLock::new(|| Duration::from_secs(env_config("DEPLOY_REPORT_MIN_INTERVAL_SECS", 2)));
+
 /// Databricks query id (UUID) for the conductor app-metrics seed query, which
 /// takes a comma-separated `instance_names` parameter and returns rolled up
 /// usage data. Defaults to the the empty string, which means the worker will be
@@ -387,7 +393,7 @@ pub static COMMITTER_MAX_CONCURRENT_WRITE_BATCHES: LazyLock<usize> =
 /// How many persistence writes must be in flight, counting the one about to
 /// start, before the committer combines commits into batches.
 pub static COMMITTER_BATCH_WRITE_THRESHOLD: LazyLock<usize> =
-    LazyLock::new(|| env_config("COMMITTER_BATCH_WRITE_THRESHOLD", 8));
+    LazyLock::new(|| env_config("COMMITTER_BATCH_WRITE_THRESHOLD", 3));
 
 /// How many pre-validation batches the committer keeps in flight at once.
 pub static COMMITTER_MAX_CONCURRENT_PRE_VALIDATIONS: LazyLock<usize> =
@@ -1246,14 +1252,19 @@ pub static DATABASE_USE_PREPARED_STATEMENTS: LazyLock<bool> =
 pub static ARCHIVE_FETCH_TIMEOUT_SECONDS: LazyLock<Duration> =
     LazyLock::new(|| Duration::from_secs(env_config("ARCHIVE_FETCH_TIMEOUT_SECONDS", 150)));
 
-/// The total number of modules across all versions that will be held in memory
-/// at once.
-pub static MODULE_CACHE_MAX_SIZE_BYTES: LazyLock<u64> =
-    LazyLock::new(|| env_config("MODULE_CACHE_MAX_SIZE_BYTES", 100_000_000));
+/// The total size of source maps, across all deployments and module versions,
+/// that will be held in memory at once.
+pub static SOURCE_MAP_CACHE_MAX_SIZE_BYTES: LazyLock<u64> =
+    LazyLock::new(|| env_config("SOURCE_MAP_CACHE_MAX_SIZE_BYTES", 100_000_000));
 
-/// The maximum number of concurrent module fetches we'll allow.
-pub static MODULE_CACHE_MAX_CONCURRENCY: LazyLock<usize> =
-    LazyLock::new(|| env_config("MODULE_CACHE_MAX_CONCURRENCY", 10));
+/// The maximum number of concurrent source package fetches we'll allow when
+/// filling the source map cache.
+pub static SOURCE_MAP_CACHE_MAX_CONCURRENCY: LazyLock<usize> =
+    LazyLock::new(|| env_config("SOURCE_MAP_CACHE_MAX_CONCURRENCY", 200));
+
+/// The maximum number of queued source map cache requests.
+pub static SOURCE_MAP_CACHE_QUEUE_SIZE: LazyLock<usize> =
+    LazyLock::new(|| env_config("SOURCE_MAP_CACHE_QUEUE_SIZE", 400));
 
 /// The maximum size of the in memory index cache in Funrun in bytes.
 pub static FUNRUN_INDEX_CACHE_SIZE: LazyLock<u64> =
@@ -1453,11 +1464,14 @@ pub static BACKEND_USAGE_FIREHOSE_NAME: LazyLock<Option<String>> = LazyLock::new
     }
 });
 
-/// The kinesis firehose name for AI gateway usage rows, which carry
-/// `message: "ai_usage"`. Leave it empty and the gateway emits nothing. That is
-/// the default everywhere until we have a stream to point it at.
-pub static LLM_GATEWAY_USAGE_FIREHOSE: LazyLock<Option<String>> = LazyLock::new(|| {
-    let result = env_config("LLM_GATEWAY_USAGE_FIREHOSE", "".to_string());
+/// Firehose stream for AI gateway usage rows, landing at
+/// `s3://cvx-data-lake-prod/ai_usage/`. Its own stream, not the backend usage
+/// one, so AI ingest lag can't stall usage metering. Empty turns emit off.
+pub static AI_GATEWAY_USAGE_FIREHOSE: LazyLock<Option<String>> = LazyLock::new(|| {
+    let result = env_config(
+        "AI_GATEWAY_USAGE_FIREHOSE",
+        prod_override("", "cvx-firehose-ai_usage-prod").to_string(),
+    );
     if !result.is_empty() {
         Some(result)
     } else {
@@ -1685,7 +1699,7 @@ pub static REQUEST_TRACE_SAMPLE_CONFIG: LazyLock<SamplingConfig> = LazyLock::new
         "REQUEST_TRACE_SAMPLE_CONFIG",
         prod_override(
             SamplingConfig::default(),
-            r#"{"defaultFraction":0.00001,"routeOverrides":[{"routeRegexp":"/api/push_config","fraction":0.1}, {"routeRegexp":"conductor/load-instance","fraction":0.01}, {"routeRegexp":"usage_tracking_worker/send_usage","fraction":0.01}]}"#
+            r#"{"defaultFraction":0.00001,"routeOverrides":[{"routeRegexp":"/api/push_config","fraction":0.1}, {"routeRegexp":"conductor/load-instance","fraction":0.01}, {"routeRegexp":"usage_tracking_worker/send_usage","fraction":0.01}, {"routeRegexp":"commit","fraction":0.01}]}"#
                 .parse()
                 .unwrap(),
         ),
@@ -1795,7 +1809,7 @@ pub static STORAGE_MAX_INTERMEDIATE_PART_SIZE: LazyLock<usize> =
 /// Minimum number of milliseconds a commit needs to take to send traces to
 /// honeycomb.
 pub static COMMIT_TRACE_THRESHOLD: LazyLock<Duration> =
-    LazyLock::new(|| Duration::from_millis(env_config("COMMIT_TRACE_THRESHOLD", 500)));
+    LazyLock::new(|| Duration::from_millis(env_config("COMMIT_TRACE_THRESHOLD", 200)));
 
 /// How many instances a Conductor will try to simultaneously load (on startup,
 /// or when it discovers new instances) Going too high means that the Conductor

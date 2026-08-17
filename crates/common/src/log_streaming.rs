@@ -30,12 +30,73 @@ use crate::{
         UnixTimestamp,
     },
     types::{
+        FunctionCaller,
         ModuleEnvironment,
+        QueryInvocation,
         UdfType,
         UdfTypeJson,
     },
     RequestMetadata,
 };
+
+/// Why a function was executed.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum FunctionRunReason {
+    /// First execution of a query a client subscribed to.
+    InitialSubscription,
+    /// The query's subscription was no longer valid, so the query re-ran.
+    DataChange,
+    /// The client's auth identity changed, which reruns every query in the
+    /// client's query set.
+    IdentityChange,
+    /// A mutation or action invoked by a client over the WebSocket sync
+    /// protocol.
+    WebSocket,
+    /// Invoked via the HTTP API (e.g. `ConvexHttpClient`).
+    HttpApi,
+    /// An HTTP action serving an incoming request to a route in `http.ts`.
+    HttpEndpoint,
+    /// Invoked from a cron job.
+    Cron,
+    /// Invoked from a scheduled function.
+    Scheduler,
+    /// Invoked from an action via `ctx.runQuery`, `ctx.runMutation`, or
+    /// `ctx.runAction`.
+    Action,
+    /// Invoked by the dashboard function tester.
+    Tester,
+}
+
+impl FunctionRunReason {
+    /// `query_invocation` is `Some` exactly for queries, and distinguishes a
+    /// first run from a rerun of an existing subscription.
+    pub fn new(caller: &FunctionCaller, query_invocation: Option<QueryInvocation>) -> Self {
+        let caller_reason = match caller {
+            FunctionCaller::SyncWorker(_) => Self::WebSocket,
+            FunctionCaller::HttpApi(_) => Self::HttpApi,
+            FunctionCaller::HttpEndpoint => Self::HttpEndpoint,
+            FunctionCaller::Tester(_) => Self::Tester,
+            FunctionCaller::Cron => Self::Cron,
+            FunctionCaller::Scheduler { .. } => Self::Scheduler,
+            FunctionCaller::Action { .. } => Self::Action,
+        };
+        match query_invocation {
+            None => caller_reason,
+            Some(QueryInvocation::Invalidated) => Self::DataChange,
+            Some(QueryInvocation::IdentityChange) => Self::IdentityChange,
+            // Every caller other than a sync worker runs a query once rather
+            // than holding a subscription to it.
+            Some(QueryInvocation::Fresh) => {
+                if caller_reason == Self::WebSocket {
+                    Self::InitialSubscription
+                } else {
+                    caller_reason
+                }
+            },
+        }
+    }
+}
 
 /// Public worker for the LogManager.
 #[async_trait]
@@ -67,6 +128,7 @@ pub struct AggregatedFunctionUsageStats {
     pub database_io_read_bytes: u64,
     pub database_io_write_bytes: u64,
     pub database_read_documents: u64,
+    pub database_write_documents: u64,
     pub storage_read_bytes: u64,
     pub storage_write_bytes: u64,
     pub vector_index_read_bytes: u64,
@@ -77,6 +139,7 @@ pub struct AggregatedFunctionUsageStats {
     pub vector_index_write_query_bytes: u64,
     pub network_egress_bytes: u64,
     pub memory_used_mb: u64,
+    pub args_bytes: Option<u64>,
     pub return_bytes: Option<u64>,
     pub audit_log_egress_bytes: u64,
 }
@@ -113,6 +176,7 @@ pub struct UsageStatsJson {
     pub database_io_read_bytes: u64,
     pub database_io_write_bytes: u64,
     pub database_read_documents: u64,
+    pub database_write_documents: u64,
     pub storage_read_bytes: u64,
     pub storage_write_bytes: u64,
     pub vector_index_read_bytes: u64,
@@ -166,6 +230,7 @@ pub enum StructuredLogEvent {
         occ_info: Option<OccInfo>,
         will_retry: bool,
         scheduler_info: Option<SchedulerInfo>,
+        run_reason: FunctionRunReason,
     },
     /// Topic for exceptions. These happen when a UDF raises an exception from
     /// JS
@@ -403,6 +468,7 @@ impl LogEvent {
                     occ_info: _,
                     will_retry: _,
                     scheduler_info: _,
+                    run_reason: _,
                 } => {
                     let (reason, status) = match error {
                         Some(err) => (Some(err.to_string()), "failure"),
@@ -571,6 +637,7 @@ impl LogEvent {
                     occ_info,
                     will_retry,
                     scheduler_info,
+                    run_reason,
                 } => {
                     let function_source = source.to_json_map();
                     let (status, error_message) = match error {
@@ -584,6 +651,7 @@ impl LogEvent {
                         database_io_read_bytes: u64,
                         database_io_write_bytes: u64,
                         database_read_documents: u64,
+                        database_write_documents: u64,
                         file_storage_read_bytes: u64,
                         file_storage_write_bytes: u64,
                         vector_storage_read_bytes: u64,
@@ -596,6 +664,8 @@ impl LogEvent {
                         memory_used_mb: u64,
                         action_memory_used_mb: Option<u64>,
                         audit_log_egress_bytes: u64,
+                        function_args_bytes: Option<u64>,
+                        function_returns_bytes: Option<u64>,
                     }
                     let action_memory_used_mb = if source.udf_type == UdfType::Action
                         || source.udf_type == UdfType::HttpAction
@@ -616,12 +686,14 @@ impl LogEvent {
                         "occ_info": occ_info,
                         "will_retry": will_retry,
                         "scheduler_info": scheduler_info,
+                        "run_reason": run_reason,
                         "usage": Usage {
                             database_read_bytes: usage_stats.database_read_bytes,
                             database_write_bytes: usage_stats.database_write_bytes,
                             database_io_read_bytes: usage_stats.database_io_read_bytes,
                             database_io_write_bytes: usage_stats.database_io_write_bytes,
                             database_read_documents: usage_stats.database_read_documents,
+                            database_write_documents: usage_stats.database_write_documents,
                             file_storage_read_bytes: usage_stats.storage_read_bytes,
                             file_storage_write_bytes: usage_stats.storage_write_bytes,
                             vector_storage_read_bytes: usage_stats.vector_index_read_bytes,
@@ -635,6 +707,8 @@ impl LogEvent {
                             memory_used_mb: usage_stats.memory_used_mb,
                             action_memory_used_mb,
                             audit_log_egress_bytes: usage_stats.audit_log_egress_bytes,
+                            function_args_bytes: usage_stats.args_bytes,
+                            function_returns_bytes: usage_stats.return_bytes,
                         }
                     })
                 },

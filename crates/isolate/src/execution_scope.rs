@@ -48,6 +48,7 @@ use crate::{
     context_local_state::GetContextSlot,
     environment::{
         ModuleCodeCacheResult,
+        SyscallProvider,
         V8IsolateEnvironment,
     },
     helpers::{
@@ -304,6 +305,7 @@ impl<'a, 's: 'a, 'i: 'a, RT: Runtime, E: V8IsolateEnvironment<RT>>
         timeout: &mut Timeout<RT>,
     ) -> anyhow::Result<Result<v8::Local<'s, v8::Module>, JsError>> {
         let timer = metrics::eval_user_module_timer(udf_type, is_dynamic);
+        let registered_before = self.module_map().registered();
         let module = match self.eval_module(name, timeout).await {
             Ok(id) => id,
             Err(e) => {
@@ -325,6 +327,8 @@ impl<'a, 's: 'a, 'i: 'a, RT: Runtime, E: V8IsolateEnvironment<RT>>
             },
         };
         timer.finish();
+        let registered = self.module_map().registered() - registered_before;
+        metrics::log_modules_registered(udf_type, is_dynamic, registered);
         Ok(Ok(module))
     }
 
@@ -539,6 +543,7 @@ impl<'a, 's: 'a, 'i: 'a, RT: Runtime, E: V8IsolateEnvironment<RT>>
         let state = self.state_mut()?;
         let result = state
             .environment
+            .syscall_provider()
             .lookup_source(module_path, timeout)
             .await?
             .ok_or_else(|| ModuleNotFoundError::new(module_path))?;
@@ -678,7 +683,10 @@ impl<'a, 's: 'a, 'i: 'a, RT: Runtime, E: V8IsolateEnvironment<RT>>
         })?;
 
         let state = self.state_mut()?;
-        let result = state.environment.syscall(&op_name[..], args_v)?;
+        let result = state
+            .environment
+            .syscall_provider()
+            .syscall(&op_name[..], args_v)?;
 
         let value_s = serde_json::to_string(&result)?;
         let value_v8 = v8::String::new(self, &value_s[..])

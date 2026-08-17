@@ -138,6 +138,7 @@
           "function",
           "execution_time_ms",
           "status",
+          "run_reason",
           "usage"
         ],
         "properties": {
@@ -275,6 +276,22 @@
               }
             ]
           },
+          "run_reason": {
+            "type": "string",
+            "description": "Why a function was executed.",
+            "enum": [
+              "initialSubscription",
+              "dataChange",
+              "identityChange",
+              "webSocket",
+              "httpApi",
+              "httpEndpoint",
+              "cron",
+              "scheduler",
+              "action",
+              "tester"
+            ]
+          },
           "usage": {
             "type": "object",
             "required": [
@@ -283,6 +300,7 @@
               "database_io_read_bytes",
               "database_io_write_bytes",
               "database_read_documents",
+              "database_write_documents",
               "file_storage_read_bytes",
               "file_storage_write_bytes",
               "vector_storage_read_bytes",
@@ -316,6 +334,11 @@
                 "minimum": 0
               },
               "database_read_documents": {
+                "type": "integer",
+                "format": "int64",
+                "minimum": 0
+              },
+              "database_write_documents": {
                 "type": "integer",
                 "format": "int64",
                 "minimum": 0
@@ -375,6 +398,22 @@
               },
               "audit_log_egress_bytes": {
                 "type": "integer",
+                "format": "int64",
+                "minimum": 0
+              },
+              "function_args_bytes": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int64",
+                "minimum": 0
+              },
+              "function_returns_bytes": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
                 "format": "int64",
                 "minimum": 0
               }
