@@ -272,7 +272,7 @@ pub async fn _document_deltas(
     post,
     path = "/data/sync",
     tag = "Data Sync",
-    tags = ["beta"],
+    tags = ["pro"],
     request_body = DataSyncArgs,
     responses((status = 200, body = DataSyncResponse)),
     security(
@@ -319,7 +319,7 @@ pub struct ListActiveSyncsArgs {
     get,
     path = "/data/list_active_syncs",
     tag = "Data Sync",
-    tags = ["beta"],
+    tags = ["pro"],
     params(ListActiveSyncsArgs),
     responses((status = 200, body = ListActiveSyncsResponse)),
     security(

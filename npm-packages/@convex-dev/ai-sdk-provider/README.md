@@ -24,7 +24,6 @@ export const chat = action({
 
 `getServiceToken("ai-gateway")` mints a short-lived deployment JWT on first use
 in an action and reuses it for later calls, so `convexGateway(...)` is fine to
-call more than once. The provider always talks to
-`https://ai-gateway.convex.dev/v1` and does not accept a custom URL or API key.
+call more than once. The provider takes no API key.
 
 Requires Convex 1.43 or later, AI SDK 7, and Node.js 22 or later.
