@@ -156,6 +156,31 @@ find_open_sync_pr() {
     --jq '.[0].number // empty' 2>/dev/null || true
 }
 
+# Identifies *what is stuck*, not *that something is stuck*: the upstream commit
+# we failed to merge, the target commit we failed to merge it into, and the
+# reason. Embedded as an HTML comment in every hand-off body so a later run can
+# recognise its own previous report.
+sync_state_marker() {
+  local reason="$1"
+  printf '<!-- sync-state %s %s %s -->' \
+    "$(git rev-parse "upstream/${UPSTREAM_BRANCH}")" \
+    "$(git rev-parse HEAD)" \
+    "$(printf '%s' "${reason}" | git hash-object --stdin)"
+}
+
+# True when the open PR's most recent hand-off already reports this exact state.
+# The sync runs hourly and a parked conflict is normally days of work away, so
+# without this every run appends an identical comment — PR #14 collected 81 of
+# them before anyone looked, which buries the one comment that did contain new
+# information (the conflict set grows as upstream moves). Re-reporting resumes
+# automatically as soon as either side advances, because the marker changes.
+already_reported() {
+  local pr="$1" marker="$2"
+  gh api "repos/${GITHUB_REPOSITORY}/issues/${pr}/comments" \
+    --paginate -X GET -f per_page=100 --jq '.[].body' 2>/dev/null \
+    | grep -qF "${marker}"
+}
+
 bail_to_pr() {
   local reason="$1"
   git push --force origin \
@@ -168,6 +193,9 @@ bail_to_pr() {
   # This is the artifact that guarantees a stuck sync is never silent.
   announce_failure "$reason"
 
+  local marker
+  marker="$(sync_state_marker "$reason")"
+
   local body="${reason}
 
 To resolve locally:
@@ -179,7 +207,9 @@ git merge origin/${sync_branch}
 git push origin ${TARGET_BRANCH}
 \`\`\`
 
-[Workflow run](${run_url})"
+[Workflow run](${run_url})
+
+${marker}"
 
   # REST (`gh api`), never `gh pr create`/`gh pr list`/`gh pr comment`. Those
   # go through GraphQL, and GitHub refuses the `createPullRequest` mutation for
@@ -190,6 +220,15 @@ git push origin ${TARGET_BRANCH}
   local existing_pr
   existing_pr="$(find_open_sync_pr)"
   if [ -n "${existing_pr}" ]; then
+    # Unchanged state on an already-open hand-off: the alarm is already raised
+    # and the PR is the tracking artifact. Stay quiet and still exit 1 — the
+    # sync really is broken and the run must stay red — but do not add another
+    # copy of a comment that is already there.
+    if already_reported "${existing_pr}" "${marker}"; then
+      echo "Sync into ${TARGET_BRANCH} is still blocked on the same state; \
+already reported on PR #${existing_pr}. Not re-commenting." >&2
+      exit 1
+    fi
     gh api "repos/${GITHUB_REPOSITORY}/issues/${existing_pr}/comments" \
       -X POST -f "body=${body}" --silent && { exit 1; }
   else

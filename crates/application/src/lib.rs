@@ -428,7 +428,17 @@ use crate::{
     },
 };
 
+// ---- Fork-only modules ----
+// Their own group, ahead of upstream's list, rather than merged into it
+// alphabetically. Upstream adds modules to that list constantly, and a fork
+// entry sitting between two upstream entries conflicts the moment upstream
+// adds a neighbour that sorts next to it — `admin_keys_cache` against
+// upstream's new `ai_gateway_jwt` is exactly how the hourly sync got stuck.
+// Anchored to the `};` above, which upstream does not move.
 pub mod admin_keys_cache;
+pub mod periodic_backup;
+
+// ---- Upstream's module list ----
 pub mod ai_gateway_jwt;
 pub mod airbyte_import;
 pub mod api;
@@ -445,7 +455,6 @@ pub mod function_log;
 pub mod log_streaming;
 pub mod log_visibility;
 mod metrics;
-pub mod periodic_backup;
 pub mod redaction;
 pub mod scheduled_jobs;
 mod schema_worker;

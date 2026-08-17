@@ -270,6 +270,31 @@ pub mod usage_limits;
 /// import/export more likely to work nicely.
 #[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Debug, strum::EnumIter)]
 enum DefaultTableNumber {
+    // ---- Fork-only system tables ----
+    // These are FIRST, before upstream's sequence, on purpose. Upstream appends
+    // new tables to the end of the list and rewrites the "Next Number - N -
+    // user" trailer at the bottom on every single addition. Anything the fork
+    // parks next to that trailer therefore conflicts on every upstream table
+    // addition — it did, hourly, until these moved up here. The top of the enum
+    // is the one spot upstream never touches, so keep fork entries here.
+    //
+    // Numbers are in a reserved high range, far above upstream's sequence, so
+    // upstream can keep appending indefinitely without colliding with ours (a
+    // collision is a hard build error: E0081). Keep upstream's numbering
+    // untouched — renumbering an upstream table makes this fork's on-disk
+    // layout diverge from every other Convex deployment.
+    //
+    // Changing a value here only affects tables created from now on;
+    // `Transaction::table_number_for_system_table` consults the default solely
+    // at creation time, so existing deployments keep the numbers they have.
+    //
+    // Must stay within [1, 9487]: TableNumber = 512 + this value, and system
+    // tables must land in [513, 10000).
+    // Next Fork Number - 1002 - mingu
+    AdminKeys = 1000,
+    PeriodicBackupConfig = 1001,
+
+    // ---- Upstream's sequence: keep last, and do not insert fork entries ----
     Tables = 1,
     Index = 2,
     Exports = 4,
@@ -308,23 +333,6 @@ enum DefaultTableNumber {
     // Keep this number and your user name up to date. The number makes it easy to know
     // what to use next. The username on the same line detects merge conflicts
     // Next Number - 43 - ayush
-
-    // ---- Fork-only system tables ----
-    // Deliberately in a reserved high range, far above upstream's sequence
-    // above, so upstream can keep appending table numbers indefinitely without
-    // colliding with ours (a collision is a hard build error: E0081). Keep
-    // upstream's numbering untouched — renumbering an upstream table makes this
-    // fork's on-disk layout diverge from every other Convex deployment.
-    //
-    // Changing a value here only affects tables created from now on;
-    // `Transaction::table_number_for_system_table` consults the default solely
-    // at creation time, so existing deployments keep the numbers they have.
-    //
-    // Must stay within [1, 9487]: TableNumber = 512 + this value, and system
-    // tables must land in [513, 10000).
-    // Next Fork Number - 1002 - mingu
-    AdminKeys = 1000,
-    PeriodicBackupConfig = 1001,
 }
 
 impl From<DefaultTableNumber> for TableNumber {
@@ -338,6 +346,13 @@ impl From<DefaultTableNumber> for TableNumber {
 impl From<DefaultTableNumber> for &'static dyn ErasedSystemTable {
     fn from(value: DefaultTableNumber) -> Self {
         match value {
+            // Fork-only arms first, for the same reason the fork-only variants
+            // lead `DefaultTableNumber`: upstream only ever appends to the end
+            // of this list, so anything the fork leaves down there is in the
+            // path of every upstream table addition.
+            DefaultTableNumber::AdminKeys => &AdminKeysTable,
+            DefaultTableNumber::PeriodicBackupConfig => &PeriodicBackupConfigTable,
+
             DefaultTableNumber::Tables => &TablesTable,
             DefaultTableNumber::Index => &IndexTable,
             DefaultTableNumber::Exports => &ExportsTable,
@@ -370,8 +385,6 @@ impl From<DefaultTableNumber> for &'static dyn ErasedSystemTable {
             DefaultTableNumber::SchemaValidationProgress => &SchemaValidationProgressTable,
             DefaultTableNumber::ScheduledJobArgs => &ScheduledJobArgsTable,
             DefaultTableNumber::AuditLogConfig => &AuditLogConfigTable,
-            DefaultTableNumber::AdminKeys => &AdminKeysTable,
-            DefaultTableNumber::PeriodicBackupConfig => &PeriodicBackupConfigTable,
             DefaultTableNumber::UsageLimits => &UsageLimitsTable,
             DefaultTableNumber::DataSyncProgress => &DataSyncProgressTable,
             DefaultTableNumber::SchedulerCursor => &SchedulerCursorTable,
