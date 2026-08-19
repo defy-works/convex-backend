@@ -14,6 +14,7 @@ pub mod ids;
 pub mod knob_registry;
 pub mod provisioner;
 pub mod proxy;
+pub mod reconcile;
 pub mod router;
 pub mod routes;
 pub mod secrets;

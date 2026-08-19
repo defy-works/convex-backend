@@ -297,6 +297,14 @@ async fn main() -> anyhow::Result<()> {
     // propagated yet).
     orchestrator::acme::renewal::spawn(state.clone());
 
+    // Bring tenant backends that are supposed to be running back up. Spawned
+    // containers use `--restart unless-stopped`, which does not cover a
+    // container an operator stopped explicitly, so without this a
+    // `docker compose down` / host halt leaves every deployment dark until
+    // somebody restarts it by hand. Runs in the background: a slow or broken
+    // tenant must not delay the API from accepting requests.
+    orchestrator::reconcile::spawn(state.clone());
+
     let app = orchestrator::router::build_router(state.clone());
 
     let listener = tokio::net::TcpListener::bind(&args.provision_addr)
