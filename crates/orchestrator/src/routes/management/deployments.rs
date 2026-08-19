@@ -823,25 +823,44 @@ pub(crate) async fn restart_deployment(
     let snapshot_overrides =
         serde_json::to_value(&overrides).map_err(|e| ApiError::Internal(e.into()))?;
 
-    // For LEGACY rows (where backend_instance_secret was NULL), the
-    // provisioner minted a fresh INSTANCE_SECRET — the previously-stored
-    // admin key no longer decrypts with it, so we must persist the new
-    // pair. For NORMAL rows we already had the secret stored; the backend
-    // reused it and `generate_admin_key.sh` minted yet-another valid admin
-    // key, but the originally-stored one still works — overwriting it
-    // every restart would rotate the dashboard's ephemeral admin key
-    // every time, which is unhelpful churn.
-    if deployment.backend_instance_secret.is_none() {
-        state
-            .storage
-            .update_deployment_secrets(
-                deployment.id,
-                &result.instance_secret,
-                &result.backend_instance_secret,
-            )
-            .await
-            .map_err(ApiError::Internal)?;
+    // Always persist the pair the container actually has.
+    //
+    // `result.instance_secret` is read back out of the running container by
+    // `generate_admin_key.sh`, so it is authoritative by construction. This
+    // used to be skipped whenever `backend_instance_secret` was already set,
+    // on the reasoning that the backend reused that secret and so the
+    // previously-stored admin key still decrypts. That holds only while the
+    // two columns agree. If they ever diverge — a half-failed restart that
+    // started the container but died before the DB write, a row whose
+    // instance_secret predates the backend_instance_secret column, a
+    // container recreated out of band — the stored key is permanently dead
+    // and the guard skips the repair *forever*, so no number of restarts
+    // fixes it. The dashboard then holds a correctly-shaped but undecryptable
+    // key, the backend answers BadAdminKey, and every _system query comes back
+    // as "Operation query not permitted".
+    //
+    // Writing unconditionally makes restart the repair path. Admin keys embed
+    // an issue timestamp and are encrypted, so each call yields a different
+    // string, but every key minted under the same INSTANCE_SECRET stays valid
+    // — validation decrypts rather than compares. So the cost of the extra
+    // write is a new `_admin_keys` row per restart, which is a far better
+    // trade than an unrecoverable dashboard.
+    if deployment.instance_secret != result.instance_secret {
+        tracing::info!(
+            deployment = %deployment_name,
+            had_backend_instance_secret = deployment.backend_instance_secret.is_some(),
+            "restart: refreshing the stored admin key to match the running container"
+        );
     }
+    state
+        .storage
+        .update_deployment_secrets(
+            deployment.id,
+            &result.instance_secret,
+            &result.backend_instance_secret,
+        )
+        .await
+        .map_err(ApiError::Internal)?;
 
     // Snapshot the new tier + merged overrides into the audit columns.
     state
