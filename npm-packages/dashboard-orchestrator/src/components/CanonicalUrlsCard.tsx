@@ -21,6 +21,7 @@ import { useCustomDomains } from "../hooks/useCustomDomains";
 import { useAccessToken } from "../lib/useOrchestratorToken";
 import { orchestratorUrl } from "../lib/config";
 import { restartDeployment } from "../lib/orchestratorApi";
+import { invalidateAfterRestart } from "../lib/restartCaches";
 
 export function CanonicalUrlsCard({
   deploymentId,
@@ -118,14 +119,11 @@ export function CanonicalUrlsCard({
       // exactly what makes the pending change live — re-read so the banner
       // stops claiming otherwise and "currently serving" catches up.
       await refresh();
-      // Other views render the deployment's URL from the deployments list,
-      // which the restart just changed. Drop those entries so they refetch
-      // instead of showing the old hostname until a reload.
-      await globalMutate(
-        (key) => Array.isArray(key) && key[0] === "deployments",
-        undefined,
-        { revalidate: true },
-      );
+      // Other views render the deployment's URL and admin key from caches the
+      // restart just invalidated. Drop those so they refetch instead of
+      // showing the old hostname — or using a now-dead admin key — until a
+      // reload.
+      await invalidateAfterRestart(globalMutate);
     } catch (err) {
       setFormError((err as Error).message);
       throw err;
