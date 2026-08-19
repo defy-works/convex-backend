@@ -1,0 +1,31 @@
+name: Dockerfile Checks
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+on:
+  workflow_dispatch:
+  # Reusable so the release workflow can gate its image builds on this.
+  workflow_call:
+  push:
+    # `release` is covered by the gating job in release_self_hosted_images.yml,
+    # so listing it here would just run this twice per release.
+    branches: [enhanced]
+  pull_request:
+    branches: ["**"]
+
+jobs:
+  check:
+    name: Dockerfile Checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+        with:
+          python-version: "3.13"
+
+      - run: scripts/check_dockerfile_js_toolchain.py
