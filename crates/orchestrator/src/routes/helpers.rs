@@ -11,13 +11,120 @@ use orchestrator_api_types::management::{
 };
 
 use crate::{
+    auth::identity::AuthIdentity,
+    errors::{
+        ApiError,
+        ApiResult,
+    },
     state::OrchestratorState,
     storage::{
+        AccessToken,
         DeploymentRecord,
         ProjectRecord,
         TeamRecord,
     },
 };
+
+/// Resolve the caller to a member and confirm they belong to `team_id`.
+///
+/// Every route that reads or mutates team-owned state has to do this. Several
+/// token routes took `_auth: AuthIdentity` and threw it away, which authenticated
+/// the caller but never authorized them — any valid token in the system could
+/// read or revoke another team's tokens.
+pub async fn require_team_member(
+    state: &OrchestratorState,
+    auth: &AuthIdentity,
+    team_id: i64,
+) -> ApiResult<i64> {
+    let member_id = auth.require_member()?;
+    if state
+        .storage
+        .get_team_role(team_id, member_id)
+        .await
+        .map_err(ApiError::Internal)?
+        .is_none()
+    {
+        return Err(ApiError::Forbidden);
+    }
+    Ok(member_id)
+}
+
+/// Same, but for a project: resolves the project's owning team first.
+pub async fn require_project_member(
+    state: &OrchestratorState,
+    auth: &AuthIdentity,
+    project_id: i64,
+) -> ApiResult<i64> {
+    let project = state
+        .storage
+        .get_project(project_id)
+        .await
+        .map_err(ApiError::Internal)?
+        .ok_or_else(|| ApiError::NotFound(format!("project {project_id}")))?;
+    require_team_member(state, auth, project.team_id).await
+}
+
+/// The team that ultimately owns an access token, whichever scope it carries.
+/// `None` means the token is bound to nothing team-shaped (a bare personal
+/// token), so ownership is decided by `member_id` alone.
+async fn owning_team_of_token(
+    state: &OrchestratorState,
+    token: &AccessToken,
+) -> ApiResult<Option<i64>> {
+    if let Some(team_id) = token.team_id {
+        return Ok(Some(team_id));
+    }
+    let project_id = match (token.project_id, token.deployment_id) {
+        (Some(project_id), _) => Some(project_id),
+        (None, Some(deployment_id)) => state
+            .storage
+            .get_deployment(deployment_id)
+            .await
+            .map_err(ApiError::Internal)?
+            .map(|d| d.project_id),
+        (None, None) => None,
+    };
+    let Some(project_id) = project_id else {
+        return Ok(None);
+    };
+    Ok(state
+        .storage
+        .get_project(project_id)
+        .await
+        .map_err(ApiError::Internal)?
+        .map(|p| p.team_id))
+}
+
+/// Authorize revoking one access token.
+///
+/// A caller may revoke their own tokens, and tokens owned by a team they belong
+/// to (deploy keys are team infrastructure, so a teammate revoking one is
+/// legitimate). Anything else is someone else's credential.
+pub async fn require_can_revoke_token(
+    state: &OrchestratorState,
+    auth: &AuthIdentity,
+    public_id: &str,
+) -> ApiResult<()> {
+    let member_id = auth.require_member()?;
+    let token = state
+        .storage
+        .get_access_token_by_public_id(public_id)
+        .await
+        .map_err(ApiError::Internal)?
+        .ok_or_else(|| ApiError::NotFound("access token".into()))?;
+
+    if token.member_id == Some(member_id) {
+        return Ok(());
+    }
+    match owning_team_of_token(state, &token).await? {
+        Some(team_id) => {
+            require_team_member(state, auth, team_id).await?;
+            Ok(())
+        },
+        // Not ours and not attached to any team we could belong to.
+        None => Err(ApiError::Forbidden),
+    }
+}
 
 /// Soft-delete a project AND tear down every backend container that
 /// belongs to it. Called from each delete-project route (dashboard,

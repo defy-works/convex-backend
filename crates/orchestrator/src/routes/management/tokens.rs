@@ -142,14 +142,20 @@ pub(crate) async fn create_personal_access_token(
     responses(
         (status = 200, description = "token revoked"),
         (status = 401),
+        (status = 403, description = "token belongs to another member"),
+        (status = 404, description = "no such token"),
     ),
     tag = "tokens",
 )]
 pub(crate) async fn delete_personal_access_token(
-    _auth: AuthIdentity,
+    auth: AuthIdentity,
     axum::extract::State(state): axum::extract::State<OrchestratorState>,
     Json(args): Json<DeletePersonalAccessTokenArgs>,
 ) -> ApiResult<StatusCode> {
+    // Without this the identity was authenticated but never authorized, so any
+    // valid token could revoke any other token in the system by public id —
+    // including another member's PAT or a deployment's admin key.
+    crate::routes::helpers::require_can_revoke_token(&state, &auth, &args.id).await?;
     state
         .storage
         .revoke_access_token(&args.id)

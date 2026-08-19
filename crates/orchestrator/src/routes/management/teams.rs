@@ -171,24 +171,29 @@ pub(crate) async fn invite_member(
     params(("team_id" = i64, Path)),
     responses(
         (status = 201, body = CreateTeamAccessTokenResponse),
+        (status = 401, description = "missing or invalid bearer token"),
+        (status = 403, description = "caller is not a member of this team"),
         (status = 404, description = "team not found"),
     ),
     tag = "teams",
 )]
 pub(crate) async fn create_team_access_token(
+    auth: AuthIdentity,
     State(state): State<OrchestratorState>,
     Path(team_id): Path<i64>,
 ) -> ApiResult<(StatusCode, Json<CreateTeamAccessTokenResponse>)> {
-    // Open endpoint by design (matches BigBrain) — used during initial team
-    // bootstrap. Caller proves authority by knowing the team_id; for self-
-    // hosted we additionally verify the caller is logged in as a member of
-    // the team.
+    // This mints a token with team-wide authority, so the caller has to be a
+    // member of that team. It used to take no identity at all: `team_id` is a
+    // sequential BIGSERIAL, so anyone who could reach the API could mint a
+    // working team token by guessing a small integer. The comment here claimed
+    // membership was verified "for self-hosted"; it never was.
     let team = state
         .storage
         .get_team(team_id)
         .await
         .map_err(ApiError::Internal)?
         .ok_or_else(|| ApiError::NotFound(format!("team {team_id}")))?;
+    crate::routes::helpers::require_team_member(&state, &auth, team.id).await?;
     let public_id = random_id();
     let secret = mint_token_secret(&public_id);
     let pat = encode_pat(&secret);

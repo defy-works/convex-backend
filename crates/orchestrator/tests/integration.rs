@@ -611,6 +611,240 @@ async fn non_members_cannot_list_team_invite_codes() {
     assert_eq!(resp, StatusCode::FORBIDDEN);
 }
 
+// ---------------------------------------------------------------------------
+// Authorization on the access-token routes.
+//
+// These routes used to take `_auth: AuthIdentity` and discard it, which
+// authenticated the caller but never authorized them. `create_team_access_token`
+// took no identity at all — and `team_id` is a sequential BIGSERIAL, so anyone
+// who could reach the API could mint a team-wide token by guessing a small
+// integer.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+#[ignore = "needs TEST_ORCHESTRATOR_DATABASE_URL"]
+async fn minting_a_team_access_token_requires_membership() {
+    use axum::http::StatusCode;
+    use orchestrator::config::RegistrationMode;
+
+    let database_url = std::env::var("TEST_ORCHESTRATOR_DATABASE_URL")
+        .expect("TEST_ORCHESTRATOR_DATABASE_URL not set (this test is `#[ignore]` by default)");
+    reset_public_schema(&database_url).await;
+
+    let state = test_state(
+        database_url,
+        RegistrationMode::Open,
+        vec!["owner@example.com".into()],
+        "service-key",
+    )
+    .await;
+    let app = orchestrator::router::build_router(state.clone());
+
+    let owner = exchange_session(&app, "owner@example.com", None).await;
+    assert_eq!(owner.0, StatusCode::OK);
+    let owner_token = owner
+        .1
+        .get("accessToken")
+        .and_then(|v| v.as_str())
+        .expect("owner exchange returns accessToken")
+        .to_string();
+    let owner_member = state
+        .storage
+        .get_member_by_email("owner@example.com")
+        .await
+        .expect("load owner")
+        .expect("owner member exists");
+    let team = state
+        .storage
+        .create_team("Private Team", "private-team", Some(owner_member.id))
+        .await
+        .expect("create private team");
+
+    let uri = format!("/v1/teams/{}/create_access_token", team.id);
+
+    // No credentials at all: this was the open door.
+    assert_eq!(
+        post_without_auth(&app, &uri, serde_json::json!({})).await,
+        StatusCode::UNAUTHORIZED,
+        "an unauthenticated caller must not be able to mint a team access token"
+    );
+
+    // Authenticated, but not a member of this team.
+    let outsider = exchange_session(&app, "outsider@example.com", None).await;
+    assert_eq!(outsider.0, StatusCode::OK);
+    let outsider_token = outsider
+        .1
+        .get("accessToken")
+        .and_then(|v| v.as_str())
+        .expect("outsider exchange returns accessToken")
+        .to_string();
+    assert_eq!(
+        post_with_bearer(&app, &uri, &outsider_token, serde_json::json!({})).await,
+        StatusCode::FORBIDDEN,
+        "a non-member must not be able to mint a team access token"
+    );
+
+    // A real member still can — guards against over-tightening.
+    assert_eq!(
+        post_with_bearer(&app, &uri, &owner_token, serde_json::json!({})).await,
+        StatusCode::CREATED,
+        "a team member must still be able to mint a team access token"
+    );
+}
+
+#[tokio::test]
+#[ignore = "needs TEST_ORCHESTRATOR_DATABASE_URL"]
+async fn a_member_cannot_revoke_another_members_personal_access_token() {
+    use axum::http::StatusCode;
+    use orchestrator::config::RegistrationMode;
+
+    let database_url = std::env::var("TEST_ORCHESTRATOR_DATABASE_URL")
+        .expect("TEST_ORCHESTRATOR_DATABASE_URL not set (this test is `#[ignore]` by default)");
+    reset_public_schema(&database_url).await;
+
+    let state = test_state(
+        database_url,
+        RegistrationMode::Open,
+        vec!["alice@example.com".into()],
+        "service-key",
+    )
+    .await;
+    let app = orchestrator::router::build_router(state.clone());
+
+    let alice = exchange_session(&app, "alice@example.com", None).await;
+    assert_eq!(alice.0, StatusCode::OK);
+    let alice_token = alice
+        .1
+        .get("accessToken")
+        .and_then(|v| v.as_str())
+        .expect("alice accessToken")
+        .to_string();
+
+    // Alice mints a PAT of her own.
+    let created = post_with_bearer_json(
+        &app,
+        "/v1/create_personal_access_token",
+        &alice_token,
+        serde_json::json!({ "name": "alice-ci" }),
+    )
+    .await;
+    assert_eq!(created.0, StatusCode::OK);
+    let pat_id = created
+        .1
+        .get("id")
+        .and_then(|v| v.as_str())
+        .expect("create returns the token's public id")
+        .to_string();
+
+    // Bob is a legitimate, signed-in user — just not the owner of that token.
+    let bob = exchange_session(&app, "bob@example.com", None).await;
+    assert_eq!(bob.0, StatusCode::OK);
+    let bob_token = bob
+        .1
+        .get("accessToken")
+        .and_then(|v| v.as_str())
+        .expect("bob accessToken")
+        .to_string();
+
+    assert_eq!(
+        post_with_bearer(
+            &app,
+            "/v1/delete_personal_access_token",
+            &bob_token,
+            serde_json::json!({ "id": pat_id }),
+        )
+        .await,
+        StatusCode::FORBIDDEN,
+        "Bob must not be able to revoke Alice's personal access token"
+    );
+
+    // And it really is still live, not merely reported as forbidden.
+    let still_there = state
+        .storage
+        .get_access_token_by_public_id(&pat_id)
+        .await
+        .expect("load token")
+        .expect("token row exists");
+    assert!(
+        still_there.revoked_time.is_none(),
+        "the rejected revoke must not have taken effect"
+    );
+
+    // Alice can revoke her own.
+    assert_eq!(
+        post_with_bearer(
+            &app,
+            "/v1/delete_personal_access_token",
+            &alice_token,
+            serde_json::json!({ "id": pat_id }),
+        )
+        .await,
+        StatusCode::OK,
+        "the owner must still be able to revoke their own token"
+    );
+    let revoked = state
+        .storage
+        .get_access_token_by_public_id(&pat_id)
+        .await
+        .expect("load token")
+        .expect("token row exists");
+    assert!(revoked.revoked_time.is_some(), "own revoke must take effect");
+}
+
+#[tokio::test]
+#[ignore = "needs TEST_ORCHESTRATOR_DATABASE_URL"]
+async fn non_members_cannot_list_another_teams_access_tokens() {
+    use axum::http::StatusCode;
+    use orchestrator::config::RegistrationMode;
+
+    let database_url = std::env::var("TEST_ORCHESTRATOR_DATABASE_URL")
+        .expect("TEST_ORCHESTRATOR_DATABASE_URL not set (this test is `#[ignore]` by default)");
+    reset_public_schema(&database_url).await;
+
+    let state = test_state(
+        database_url,
+        RegistrationMode::Open,
+        vec!["owner@example.com".into()],
+        "service-key",
+    )
+    .await;
+    let app = orchestrator::router::build_router(state.clone());
+
+    let owner = exchange_session(&app, "owner@example.com", None).await;
+    assert_eq!(owner.0, StatusCode::OK);
+    let owner_member = state
+        .storage
+        .get_member_by_email("owner@example.com")
+        .await
+        .expect("load owner")
+        .expect("owner member exists");
+    let team = state
+        .storage
+        .create_team("Private Team", "private-team", Some(owner_member.id))
+        .await
+        .expect("create private team");
+
+    let outsider = exchange_session(&app, "outsider@example.com", None).await;
+    assert_eq!(outsider.0, StatusCode::OK);
+    let outsider_token = outsider
+        .1
+        .get("accessToken")
+        .and_then(|v| v.as_str())
+        .expect("outsider accessToken")
+        .to_string();
+
+    assert_eq!(
+        get_with_bearer(
+            &app,
+            &format!("/api/dashboard/teams/{}/access_tokens", team.id),
+            &outsider_token,
+        )
+        .await,
+        StatusCode::FORBIDDEN,
+        "a non-member must not be able to enumerate a team's access tokens"
+    );
+}
+
 #[cfg(test)]
 fn uuid_like() -> String {
     use std::time::SystemTime;
@@ -738,6 +972,72 @@ async fn post_with_bearer(
         )
         .await
         .expect("send authenticated POST")
+        .status()
+}
+
+/// Like `post_with_bearer`, but returns the parsed body too — needed when a
+/// later assertion has to reference the id the route just minted.
+#[cfg(test)]
+async fn post_with_bearer_json(
+    app: &axum::Router,
+    uri: &str,
+    token: &str,
+    body: serde_json::Value,
+) -> (axum::http::StatusCode, serde_json::Value) {
+    use axum::{
+        body::Body,
+        http::{
+            header::AUTHORIZATION,
+            Request,
+        },
+    };
+    use http_body_util::BodyExt;
+    use tower::ServiceExt;
+
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(uri)
+                .header(AUTHORIZATION, format!("Bearer {token}"))
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .expect("send authenticated POST");
+    let status = resp.status();
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let json = serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
+    (status, json)
+}
+
+/// A request with no `Authorization` header at all, for asserting that a route
+/// actually requires credentials.
+#[cfg(test)]
+async fn post_without_auth(
+    app: &axum::Router,
+    uri: &str,
+    body: serde_json::Value,
+) -> axum::http::StatusCode {
+    use axum::{
+        body::Body,
+        http::Request,
+    };
+    use tower::ServiceExt;
+
+    app.clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(uri)
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .expect("send unauthenticated POST")
         .status()
 }
 

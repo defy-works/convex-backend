@@ -107,6 +107,23 @@ impl Storage {
         })
     }
 
+    /// Look a token up by its public id — the value the dashboard sends when
+    /// revoking. Used by the authorization checks on the revoke routes, which
+    /// need the row's owner before deciding whether the caller may touch it.
+    /// Returns revoked rows too, so revoking twice is idempotent rather than a
+    /// confusing 404.
+    pub async fn get_access_token_by_public_id(
+        &self,
+        public_id: &str,
+    ) -> anyhow::Result<Option<AccessToken>> {
+        let conn = self.pool().acquire().await?;
+        let row = conn
+            .client()
+            .query_opt(SELECT_TOKEN_BY_PUBLIC_ID, &[&public_id])
+            .await?;
+        Ok(row.map(map_token))
+    }
+
     pub async fn get_access_token_by_hash(
         &self,
         secret_hash: &str,
@@ -194,6 +211,7 @@ impl Storage {
 // SELECT_TOKEN_BY_HASH intentionally returns revoked tokens too — the auth
 // path still needs to recognize them so it can return a clean 401 instead of
 // silently treating a revoked key as unknown.
+const SELECT_TOKEN_BY_PUBLIC_ID: &str = "SELECT id, public_id, kind, member_id, team_id, project_id, deployment_id, name, secret_hash, secret_suffix, creation_time, expiry, revoked_time FROM access_tokens WHERE public_id = $1";
 const SELECT_TOKEN_BY_HASH: &str = "SELECT id, public_id, kind, member_id, team_id, project_id, deployment_id, name, secret_hash, secret_suffix, creation_time, expiry, revoked_time FROM access_tokens WHERE secret_hash = $1";
 // All "list" queries hide revoked rows so the dashboard's deploy-key UI
 // reflects current state. Without this, hitting Revoke just sets
