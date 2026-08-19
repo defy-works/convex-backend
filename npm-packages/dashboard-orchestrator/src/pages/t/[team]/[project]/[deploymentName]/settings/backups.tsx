@@ -1,4 +1,5 @@
 import { DeploymentSettingsLayout } from "@common/layouts/DeploymentSettingsLayout";
+import { RestoreFromZipDropzone } from "@common/features/settings/components/RestoreFromZipDropzone";
 import { DeploymentInfoContext } from "@common/lib/deploymentContext";
 import { joinUrlPath } from "@common/lib/helpers/joinUrlPath";
 import udfs from "@common/udfs";
@@ -458,113 +459,6 @@ function statusLabel(state: NonNullable<ExportRow>["state"]): string {
     default:
       return state;
   }
-}
-
-function RestoreFromZipDropzone({
-  deploymentUrl,
-  adminKey,
-}: {
-  deploymentUrl: string;
-  adminKey: string;
-}) {
-  const [dragOver, setDragOver] = useState(false);
-  const [uploading, setUploading] = useState(false);
-  const [uploadError, setUploadError] = useState<string | null>(null);
-  const [uploadProgress, setUploadProgress] = useState(0);
-  const inputId = useId();
-
-  const upload = async (file: File) => {
-    if (!file.name.toLowerCase().endsWith(".zip")) {
-      setUploadError("Choose a .zip file produced by `npx convex export`.");
-      return;
-    }
-    setUploadError(null);
-    setUploading(true);
-    setUploadProgress(0);
-    try {
-      const url = joinUrlPath(
-        deploymentUrl,
-        "/api/import?tableName=&format=zip&mode=replaceAll",
-      ).toString();
-      // We use XMLHttpRequest instead of fetch so we can show upload progress
-      // — fetch streams aren't widely supported for upload progress yet.
-      await new Promise<void>((resolve, reject) => {
-        const xhr = new XMLHttpRequest();
-        xhr.open("POST", url);
-        xhr.setRequestHeader("Authorization", `Convex ${adminKey}`);
-        xhr.setRequestHeader("Convex-Client", "dashboard-0.0.0");
-        xhr.upload.onprogress = (ev) => {
-          if (ev.lengthComputable) {
-            setUploadProgress(Math.round((ev.loaded / ev.total) * 100));
-          }
-        };
-        xhr.onerror = () => reject(new Error("network error"));
-        xhr.onload = () => {
-          if (xhr.status >= 200 && xhr.status < 300) {
-            resolve();
-          } else {
-            reject(new Error(`HTTP ${xhr.status}: ${xhr.responseText}`));
-          }
-        };
-        xhr.send(file);
-      });
-      // Once the upload completes the deployment kicks off the import; the
-      // RestoreStatusBanner (in the larger Backups page) picks it up. Reset
-      // local state.
-      setUploadProgress(0);
-    } catch (err) {
-      setUploadError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setUploading(false);
-    }
-  };
-
-  return (
-    <label
-      htmlFor={inputId}
-      onDragOver={(e) => {
-        e.preventDefault();
-        setDragOver(true);
-      }}
-      onDragLeave={() => setDragOver(false)}
-      onDrop={async (e) => {
-        e.preventDefault();
-        setDragOver(false);
-        const file = e.dataTransfer.files?.[0];
-        if (file) await upload(file);
-      }}
-      className={`flex w-full cursor-pointer flex-col items-center gap-1 rounded-md border border-dashed p-3 text-center text-xs text-content-secondary transition-colors ${
-        dragOver ? "border-content-primary bg-background-tertiary" : ""
-      }`}
-    >
-      <span>
-        <strong className="text-content-primary">
-          Restore from local backup
-        </strong>
-      </span>
-      <span>Drop a .zip here or click to browse</span>
-      {uploading && (
-        <span className="mt-1 font-medium text-content-primary">
-          Uploading… {uploadProgress}%
-        </span>
-      )}
-      {uploadError && (
-        <span className="mt-1 text-content-error">{uploadError}</span>
-      )}
-      <input
-        id={inputId}
-        type="file"
-        accept=".zip,application/zip"
-        className="sr-only"
-        disabled={uploading}
-        onChange={async (e) => {
-          const file = e.target.files?.[0];
-          if (file) await upload(file);
-          e.target.value = "";
-        }}
-      />
-    </label>
-  );
 }
 
 function BackupsEmptyState() {

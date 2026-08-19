@@ -79,10 +79,34 @@ mod tests {
         );
     }
 
+    /// The curated overlay is hand-written while `KNOWN_KNOBS` is scraped from
+    /// `crates/common/src/knobs.rs` at build time, so an upstream rename
+    /// silently turns a curated row into a control bound to an env var the
+    /// backend no longer reads. That is how `ACTIONS_USER_TIMEOUT_SECS`
+    /// (upstream split it into V8_/NODE_ variants) sat dead in the dialog.
+    /// Fail the build instead.
+    #[test]
+    fn every_curated_and_tier_tuned_knob_exists() {
+        let mut dead: Vec<&str> = exposure::CURATED
+            .iter()
+            .map(|(var, _)| *var)
+            .chain(exposure::TIER_TUNED.iter().copied())
+            .filter(|var| find(var).is_none())
+            .collect();
+        dead.sort_unstable();
+        assert_eq!(
+            dead,
+            Vec::<&str>::new(),
+            "these knobs are referenced by exposure.rs but no longer exist in \
+             crates/common/src/knobs.rs"
+        );
+    }
+
     #[test]
     fn well_known_knobs_present() {
         for var in [
-            "ACTIONS_USER_TIMEOUT_SECS",
+            "V8_ACTION_USER_TIMEOUT_SECS",
+            "NODE_ACTION_USER_TIMEOUT_SECS",
             "DOCUMENT_RETENTION_DELAY",
             "MAX_TRANSACTION_WINDOW_SECONDS",
             "TRANSACTION_MAX_NUM_USER_WRITES",

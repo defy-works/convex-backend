@@ -1,15 +1,17 @@
-import useSWR from "swr";
+import useSWR, { useSWRConfig } from "swr";
 import {
   getDeploymentSettings,
   patchDeploymentSettings,
   restartDeployment,
 } from "../lib/orchestratorApi";
+import { invalidateAfterRestart } from "../lib/restartCaches";
 import { useAccessToken } from "../lib/useOrchestratorToken";
 import { orchestratorUrl } from "../lib/config";
 
 export function useDeploymentSettings(deploymentName: string | undefined) {
   const token = useAccessToken();
   const url = orchestratorUrl();
+  const { mutate: globalMutate } = useSWRConfig();
   const { data, error, mutate } = useSWR(
     token && deploymentName
       ? ["deploymentSettings", deploymentName, token]
@@ -34,6 +36,7 @@ export function useDeploymentSettings(deploymentName: string | undefined) {
     if (!token || !deploymentName) return;
     await restartDeployment(url, token, deploymentName, force);
     await mutate();
+    await invalidateAfterRestart(globalMutate);
   };
   return { settings: data, error, save, restart };
 }

@@ -220,6 +220,15 @@ impl Storage {
         Ok(rows.into_iter().map(map_deployment).collect())
     }
 
+    /// Every deployment row, across all teams and projects. Used by the
+    /// boot-time reconciler, which has no team or project to scope by — it
+    /// answers "what is supposed to be running on this host?".
+    pub async fn list_all_deployments(&self) -> anyhow::Result<Vec<DeploymentRecord>> {
+        let conn = self.pool().acquire().await?;
+        let rows = conn.client().query(SELECT_ALL_DEPLOYMENTS, &[]).await?;
+        Ok(rows.into_iter().map(map_deployment).collect())
+    }
+
     pub async fn list_deployments_for_team(
         &self,
         team_id: i64,
@@ -461,6 +470,7 @@ impl Storage {
 const SELECT_DEPLOYMENT_BY_ID: &str = "SELECT id, project_id, name, deployment_type, deployment_class, region, url, site_url, backend_pid, backend_port, creator_id, creation_time, state, preview_identifier, instance_secret, tier, knob_overrides, desired_tier, desired_overrides, storage_mode, pg_password, minio_root_user, minio_root_password, backend_instance_secret, desired_url, desired_site_url FROM deployments WHERE id = $1";
 const SELECT_DEPLOYMENT_BY_NAME: &str = "SELECT id, project_id, name, deployment_type, deployment_class, region, url, site_url, backend_pid, backend_port, creator_id, creation_time, state, preview_identifier, instance_secret, tier, knob_overrides, desired_tier, desired_overrides, storage_mode, pg_password, minio_root_user, minio_root_password, backend_instance_secret, desired_url, desired_site_url FROM deployments WHERE name = $1";
 const SELECT_DEPLOYMENTS_BY_PROJECT: &str = "SELECT id, project_id, name, deployment_type, deployment_class, region, url, site_url, backend_pid, backend_port, creator_id, creation_time, state, preview_identifier, instance_secret, tier, knob_overrides, desired_tier, desired_overrides, storage_mode, pg_password, minio_root_user, minio_root_password, backend_instance_secret, desired_url, desired_site_url FROM deployments WHERE project_id = $1 ORDER BY creation_time ASC";
+const SELECT_ALL_DEPLOYMENTS: &str = "SELECT id, project_id, name, deployment_type, deployment_class, region, url, site_url, backend_pid, backend_port, creator_id, creation_time, state, preview_identifier, instance_secret, tier, knob_overrides, desired_tier, desired_overrides, storage_mode, pg_password, minio_root_user, minio_root_password, backend_instance_secret, desired_url, desired_site_url FROM deployments ORDER BY creation_time ASC";
 const SELECT_DEPLOYMENTS_BY_TEAM: &str = "SELECT d.id, d.project_id, d.name, d.deployment_type, d.deployment_class, d.region, d.url, d.site_url, d.backend_pid, d.backend_port, d.creator_id, d.creation_time, d.state, d.preview_identifier, d.instance_secret, d.tier, d.knob_overrides, d.desired_tier, d.desired_overrides, d.storage_mode, d.pg_password, d.minio_root_user, d.minio_root_password, d.backend_instance_secret, d.desired_url, d.desired_site_url FROM deployments d INNER JOIN projects p ON p.id = d.project_id WHERE p.team_id = $1 ORDER BY d.creation_time ASC";
 
 fn map_deployment(row: Row) -> DeploymentRecord {

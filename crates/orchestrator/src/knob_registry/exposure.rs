@@ -13,7 +13,11 @@ pub enum Exposure {
 /// Curated knobs surfaced in the main dialog with friendly names + descriptions.
 /// Order here is the order rows render.
 pub const CURATED: &[(&str, &str)] = &[
-    ("ACTIONS_USER_TIMEOUT_SECS", "Action timeout"),
+    // Upstream splits the action timeout by runtime; there is no single
+    // `ACTIONS_USER_TIMEOUT_SECS`. Both are surfaced so the curated dialog
+    // covers V8 and Node actions.
+    ("V8_ACTION_USER_TIMEOUT_SECS", "Action timeout (V8)"),
+    ("NODE_ACTION_USER_TIMEOUT_SECS", "Action timeout (Node)"),
     ("DOCUMENT_RETENTION_DELAY", "Document retention"),
     ("MAX_TRANSACTION_WINDOW_SECONDS", "Transaction window"),
     ("TRANSACTION_MAX_NUM_USER_WRITES", "Max writes per txn"),
@@ -76,7 +80,7 @@ mod tests {
 
     #[test]
     fn classification_buckets() {
-        assert_eq!(classify("ACTIONS_USER_TIMEOUT_SECS"), Exposure::Curated);
+        assert_eq!(classify("V8_ACTION_USER_TIMEOUT_SECS"), Exposure::Curated);
         assert_eq!(classify("UDF_CACHE_MAX_SIZE"), Exposure::TierTuned);
         assert_eq!(
             classify("APPLICATION_MAX_CONCURRENT_MUTATIONS"),
@@ -94,8 +98,8 @@ mod tests {
     #[test]
     fn curated_display_names() {
         assert_eq!(
-            curated_display_name("ACTIONS_USER_TIMEOUT_SECS"),
-            Some("Action timeout"),
+            curated_display_name("V8_ACTION_USER_TIMEOUT_SECS"),
+            Some("Action timeout (V8)"),
         );
         assert_eq!(curated_display_name("NOT_CURATED"), None);
     }

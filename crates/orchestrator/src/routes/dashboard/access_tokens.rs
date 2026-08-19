@@ -51,14 +51,18 @@ pub(crate) struct DeleteArgs {
     get,
     path = "/api/dashboard/teams/{team_id}/access_tokens",
     params(("team_id" = i64, Path)),
-    responses((status = 200, body = Vec<AccessTokenResponse>)),
+    responses(
+        (status = 200, body = Vec<AccessTokenResponse>),
+        (status = 403, description = "caller is not a member of this team"),
+    ),
     tag = "dashboard",
 )]
 pub(crate) async fn list_team_tokens(
-    _auth: AuthIdentity,
+    auth: AuthIdentity,
     State(state): State<OrchestratorState>,
     Path(team_id): Path<i64>,
 ) -> ApiResult<Json<Vec<AccessTokenResponse>>> {
+    crate::routes::helpers::require_team_member(&state, &auth, team_id).await?;
     let tokens = state
         .storage
         .list_access_tokens_by_team(team_id)
@@ -82,14 +86,18 @@ pub(crate) async fn list_team_tokens(
     get,
     path = "/api/dashboard/projects/{project_id}/access_tokens",
     params(("project_id" = i64, Path)),
-    responses((status = 200, body = Vec<AccessTokenResponse>)),
+    responses(
+        (status = 200, body = Vec<AccessTokenResponse>),
+        (status = 403, description = "caller is not a member of the owning team"),
+    ),
     tag = "dashboard",
 )]
 pub(crate) async fn list_project_tokens(
-    _auth: AuthIdentity,
+    auth: AuthIdentity,
     State(state): State<OrchestratorState>,
     Path(project_id): Path<i64>,
 ) -> ApiResult<Json<Vec<AccessTokenResponse>>> {
+    crate::routes::helpers::require_project_member(&state, &auth, project_id).await?;
     let tokens = state
         .storage
         .list_access_tokens_by_project(project_id)
@@ -113,11 +121,15 @@ pub(crate) async fn list_project_tokens(
     get,
     path = "/api/dashboard/instances/{deployment_name}/access_tokens",
     params(("deployment_name" = String, Path)),
-    responses((status = 200, body = Vec<AccessTokenResponse>), (status = 404)),
+    responses(
+        (status = 200, body = Vec<AccessTokenResponse>),
+        (status = 403, description = "caller is not a member of the owning team"),
+        (status = 404),
+    ),
     tag = "dashboard",
 )]
 pub(crate) async fn list_deployment_tokens(
-    _auth: AuthIdentity,
+    auth: AuthIdentity,
     State(state): State<OrchestratorState>,
     Path(deployment_name): Path<String>,
 ) -> ApiResult<Json<Vec<AccessTokenResponse>>> {
@@ -127,6 +139,7 @@ pub(crate) async fn list_deployment_tokens(
         .await
         .map_err(ApiError::Internal)?
         .ok_or_else(|| ApiError::NotFound("deployment".into()))?;
+    crate::routes::helpers::require_project_member(&state, &auth, d.project_id).await?;
     let tokens = state
         .storage
         .list_access_tokens_by_deployment(d.id)
@@ -150,14 +163,19 @@ pub(crate) async fn list_deployment_tokens(
     post,
     path = "/api/dashboard/teams/delete_access_token",
     request_body = DeleteArgs,
-    responses((status = 200)),
+    responses(
+        (status = 200),
+        (status = 403, description = "token belongs to another member"),
+        (status = 404, description = "no such token"),
+    ),
     tag = "dashboard",
 )]
 pub(crate) async fn delete_access_token(
-    _auth: AuthIdentity,
+    auth: AuthIdentity,
     State(state): State<OrchestratorState>,
     Json(args): Json<DeleteArgs>,
 ) -> ApiResult<StatusCode> {
+    crate::routes::helpers::require_can_revoke_token(&state, &auth, &args.id).await?;
     state
         .storage
         .revoke_access_token(&args.id)

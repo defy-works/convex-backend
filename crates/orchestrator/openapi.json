@@ -82,6 +82,12 @@
           },
           "401": {
             "description": ""
+          },
+          "403": {
+            "description": "token belongs to another member"
+          },
+          "404": {
+            "description": "no such token"
           }
         }
       }
@@ -233,6 +239,12 @@
                 }
               }
             }
+          },
+          "401": {
+            "description": "missing or invalid bearer token"
+          },
+          "403": {
+            "description": "caller is not a member of this team"
           },
           "404": {
             "description": "team not found"
@@ -2502,6 +2514,9 @@
                 }
               }
             }
+          },
+          "403": {
+            "description": "caller is not a member of this team"
           }
         }
       }
@@ -2534,6 +2549,9 @@
                 }
               }
             }
+          },
+          "403": {
+            "description": "caller is not a member of the owning team"
           }
         }
       }
@@ -2566,6 +2584,9 @@
               }
             }
           },
+          "403": {
+            "description": "caller is not a member of the owning team"
+          },
           "404": {
             "description": ""
           }
@@ -2589,6 +2610,12 @@
         "responses": {
           "200": {
             "description": ""
+          },
+          "403": {
+            "description": "token belongs to another member"
+          },
+          "404": {
+            "description": "no such token"
           }
         }
       }

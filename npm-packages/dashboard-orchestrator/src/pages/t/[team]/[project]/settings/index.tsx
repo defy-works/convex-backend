@@ -16,6 +16,7 @@ import {
   restartDeployment,
   Team,
 } from "../../../../../lib/orchestratorApi";
+import { invalidateAfterRestart } from "../../../../../lib/restartCaches";
 import { useAccessToken } from "../../../../../lib/useOrchestratorToken";
 import { orchestratorUrl } from "../../../../../lib/config";
 import {
@@ -792,6 +793,7 @@ function ProjectAdminsSection({
 function BackendSection({ team, project }: { team: Team; project: Project }) {
   const token = useAccessToken();
   const url = orchestratorUrl();
+  const { mutate: globalMutate } = useSWRConfig();
   const { settings, save } = useProjectSettings(project.id);
   const { data: capacity } = useHostCapacity();
   const { data: registry } = useKnobRegistry();
@@ -871,6 +873,7 @@ function BackendSection({ team, project }: { team: Team; project: Project }) {
         await restartDeployment(url, token, deployment.name);
       }
       await mutateDeployments();
+      await invalidateAfterRestart(globalMutate);
       setRestartMessage(
         `Restart requested for ${deployments.length} deployment${
           deployments.length === 1 ? "" : "s"
