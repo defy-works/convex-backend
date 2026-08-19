@@ -8,17 +8,16 @@ import { Modal } from "@ui/Modal";
 import { ConfirmationDialog } from "@ui/ConfirmationDialog";
 import { CopyButton } from "@common/elements/CopyButton";
 import { TeamSettingsLayout } from "../../../../components/TeamSettingsLayout";
-import { listTeams, Team } from "../../../../lib/orchestratorApi";
+import {
+  createPersonalAccessToken,
+  deletePersonalAccessToken,
+  listPersonalAccessTokens,
+  listTeams,
+  PersonalAccessToken,
+  Team,
+} from "../../../../lib/orchestratorApi";
 import { useAccessToken } from "../../../../lib/useOrchestratorToken";
 import { orchestratorUrl } from "../../../../lib/config";
-
-type AccessToken = {
-  id: string;
-  kind: string;
-  name: string;
-  creationTime: number;
-  keySuffix: string;
-};
 
 export default function AccessTokensPage() {
   const router = useRouter();
@@ -36,13 +35,11 @@ export default function AccessTokensPage() {
     [teams, teamSlug],
   );
 
-  const { data: tokens, mutate } = useSWR<AccessToken[]>(
-    team && token ? ["accessTokens", team.id, token] : null,
-    () =>
-      fetchJson<AccessToken[]>(
-        `${url}/api/dashboard/teams/${team!.id}/access_tokens`,
-        token!,
-      ),
+  // Keyed on the token, not the team: personal access tokens belong to the
+  // signed-in member, not to a team.
+  const { data: tokens, mutate } = useSWR<PersonalAccessToken[]>(
+    token ? ["personalAccessTokens", token] : null,
+    () => listPersonalAccessTokens(url, token!),
   );
 
   const [showCreate, setShowCreate] = useState(false);
@@ -50,7 +47,7 @@ export default function AccessTokensPage() {
   const [createdToken, setCreatedToken] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
-  const [revoking, setRevoking] = useState<AccessToken | null>(null);
+  const [revoking, setRevoking] = useState<PersonalAccessToken | null>(null);
   const [revokeError, setRevokeError] = useState<string | undefined>();
 
   if (!mounted || !team || !token) return null;
@@ -60,18 +57,10 @@ export default function AccessTokensPage() {
     setError(null);
     setSubmitting(true);
     try {
-      const res = await fetch(`${url}/v1/create_personal_access_token`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({ name: newName }),
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const body = (await res.json()) as { accessToken: string };
-      setCreatedToken(body.accessToken);
+      const created = await createPersonalAccessToken(url, token, newName);
+      setCreatedToken(created.accessToken);
       setNewName("");
+      setShowCreate(false);
       await mutate();
     } catch (err) {
       setError((err as Error).message);
@@ -84,15 +73,7 @@ export default function AccessTokensPage() {
     if (!revoking) return;
     setRevokeError(undefined);
     try {
-      const res = await fetch(`${url}/v1/delete_personal_access_token`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({ id: revoking.id }),
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      await deletePersonalAccessToken(url, token, revoking.id);
       await mutate();
     } catch (err) {
       setRevokeError((err as Error).message);
@@ -101,16 +82,16 @@ export default function AccessTokensPage() {
   };
 
   const teamId = team.id;
-  const myTokens = (tokens ?? []).filter((t) => t.kind === "pat");
+  const myTokens = tokens ?? [];
 
   return (
-    <TeamSettingsLayout page="access-tokens" title="Team Access Tokens">
+    <TeamSettingsLayout page="access-tokens" title="Access Tokens">
       <Sheet>
         <div className="flex items-start justify-between gap-3">
           <div className="flex flex-col gap-3 text-sm">
             <p className="text-content-primary">
-              These access tokens allow your team to access this orchestrator's
-              management API.
+              These access tokens let you reach this orchestrator's management
+              API — from CI, a script, or the Convex CLI.
             </p>
             <div>
               <div className="font-semibold text-content-primary">Team ID</div>
@@ -120,18 +101,19 @@ export default function AccessTokensPage() {
             </div>
             <div>
               <div className="font-semibold text-content-primary">
-                What can team access tokens do?
+                What can an access token do?
               </div>
               <ul className="mt-1 list-disc pl-5 text-content-primary">
                 <li>Create new projects</li>
                 <li>Create new deployments</li>
-                <li>Manage all projects on the team</li>
-                <li>Read and write data in all projects</li>
+                <li>Manage all projects you have access to</li>
+                <li>Read and write data in those projects</li>
               </ul>
             </div>
             <p className="text-content-primary">
-              You cannot see tokens that other members of your team have
-              created.
+              These tokens carry your own access, so they are listed here for
+              every team you belong to. You cannot see tokens created by other
+              members.
             </p>
           </div>
           <Button size="xs" onClick={() => setShowCreate(true)}>
@@ -164,7 +146,7 @@ export default function AccessTokensPage() {
           ))}
           {myTokens.length === 0 && (
             <li className="py-3 text-sm text-content-secondary">
-              You have not created any team access tokens yet.
+              You have not created any access tokens yet.
             </li>
           )}
         </ul>
@@ -234,10 +216,4 @@ export default function AccessTokensPage() {
       )}
     </TeamSettingsLayout>
   );
-}
-
-async function fetchJson<T>(u: string, token: string): Promise<T> {
-  const res = await fetch(u, { headers: { Authorization: `Bearer ${token}` } });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return (await res.json()) as T;
 }

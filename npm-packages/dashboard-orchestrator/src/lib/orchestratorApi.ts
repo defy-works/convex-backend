@@ -592,3 +592,74 @@ export async function verifyCustomDomain(
   );
   return verifyCustomDomainSchema.parse(data);
 }
+
+// ---------- Personal access tokens ----------
+//
+// These are member-scoped: `create_personal_access_token` stores
+// `member_id = <caller>` and leaves `team_id` NULL. Read them back through
+// `list_personal_access_tokens`, which filters on `member_id`. The
+// team-scoped `/api/dashboard/teams/{team_id}/access_tokens` filters on
+// `team_id` and so can never return a personal access token.
+
+export const personalAccessTokenSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  creationTime: z.number(),
+  keySuffix: z.string(),
+  // Omitted entirely by the orchestrator when the token never expires.
+  expiresAt: z.number().nullable().optional(),
+});
+export type PersonalAccessToken = z.infer<typeof personalAccessTokenSchema>;
+
+const paginatedPersonalAccessTokensSchema = z.object({
+  tokens: z.array(personalAccessTokenSchema),
+  cursor: z.string().nullable().optional(),
+});
+
+export const createdPersonalAccessTokenSchema = z.object({
+  /** Full secret. Shown once at creation and never retrievable again. */
+  accessToken: z.string(),
+  id: z.string(),
+  name: z.string(),
+  creationTime: z.number(),
+});
+export type CreatedPersonalAccessToken = z.infer<
+  typeof createdPersonalAccessTokenSchema
+>;
+
+export async function listPersonalAccessTokens(
+  baseUrl: string,
+  token: string,
+): Promise<PersonalAccessToken[]> {
+  const data = await request<unknown>(
+    baseUrl,
+    "/v1/list_personal_access_tokens",
+    { token },
+  );
+  return paginatedPersonalAccessTokensSchema.parse(data).tokens;
+}
+
+export async function createPersonalAccessToken(
+  baseUrl: string,
+  token: string,
+  name: string,
+): Promise<CreatedPersonalAccessToken> {
+  const data = await request<unknown>(
+    baseUrl,
+    "/v1/create_personal_access_token",
+    { method: "POST", token, body: JSON.stringify({ name }) },
+  );
+  return createdPersonalAccessTokenSchema.parse(data);
+}
+
+export async function deletePersonalAccessToken(
+  baseUrl: string,
+  token: string,
+  id: string,
+): Promise<void> {
+  await request<unknown>(baseUrl, "/v1/delete_personal_access_token", {
+    method: "POST",
+    token,
+    body: JSON.stringify({ id }),
+  });
+}
