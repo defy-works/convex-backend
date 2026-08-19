@@ -24,7 +24,15 @@ env:
     vars.DASHBOARD_ORCHESTRATOR_IMAGE_NAME || 'convex-dashboard-orchestrator' }}
 
 jobs:
+  # Seconds-long static checks on the Dockerfiles, gating the image builds
+  # below. A missing yarn install fails the backend image ~2.5 minutes in,
+  # after downloading 4400 packages; catching it here keeps that feedback
+  # immediate instead of burning a full release run.
+  dockerfile_checks:
+    uses: ./.github/workflows/dockerfile_checks.yml
+
   release_backend:
+    needs: dockerfile_checks
     uses: ./.github/workflows/release_local_backend.yml
     permissions:
       contents: read
@@ -32,6 +40,7 @@ jobs:
       id-token: write
 
   release_dashboard:
+    needs: dockerfile_checks
     uses: ./.github/workflows/release_local_dashboard.yml
     permissions:
       contents: read
@@ -39,6 +48,7 @@ jobs:
       id-token: write
 
   release_orchestrator:
+    needs: dockerfile_checks
     uses: ./.github/workflows/release_local_orchestrator.yml
     permissions:
       contents: read
@@ -46,6 +56,7 @@ jobs:
       id-token: write
 
   release_dashboard_orchestrator:
+    needs: dockerfile_checks
     uses: ./.github/workflows/release_local_dashboard_orchestrator.yml
     permissions:
       contents: read
