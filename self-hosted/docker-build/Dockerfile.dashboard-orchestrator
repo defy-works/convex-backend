@@ -22,6 +22,12 @@ NODE_VERSION=$(cat /nvmrc | tr -d 'v\n')
 apt-get install -y --no-install-recommends nodejs=${NODE_VERSION}-1nodesource1
 EOF
 
+# The git-hosted docusaurus-openapi-docs dependency (allowlisted in
+# pnpm-workspace.yaml onlyBuiltDependencies) runs `yarn install` in its
+# prepare step, so pnpm install needs yarn on PATH. CI runners preinstall
+# it; this image doesn't.
+RUN npm install -g yarn
+
 WORKDIR /app
 # pnpm/turbo come pinned from scripts/package-lock.json, so release builds
 # always use the exact vetted versions.
