@@ -36,6 +36,17 @@ JS_INSTALL_PATTERN = re.compile(r"install-js|pnpm\s+install|just\s+pnpm\b")
 YARN_INSTALL_PATTERN = re.compile(r"npm\s+install\s+-g\s+yarn|corepack\s+enable")
 
 
+def is_dockerfile(name: str) -> bool:
+    """`Dockerfile`, `Dockerfile.backend`, `foo.dockerfile` — but not
+    `dockerfile_checks.yml`, which merely starts with the word."""
+    lowered = name.lower()
+    return (
+        lowered == "dockerfile"
+        or lowered.startswith("dockerfile.")
+        or lowered.endswith(".dockerfile")
+    )
+
+
 def dockerfiles() -> list[Path]:
     """Every tracked Dockerfile, so a newly added one is covered automatically."""
     out = subprocess.run(
@@ -45,9 +56,7 @@ def dockerfiles() -> list[Path]:
         text=True,
         check=True,
     ).stdout.splitlines()
-    return [
-        REPO_ROOT / p for p in out if Path(p).name.lower().startswith("dockerfile")
-    ]
+    return [REPO_ROOT / p for p in out if is_dockerfile(Path(p).name)]
 
 
 def first_match(lines: list[str], pattern: re.Pattern[str]) -> int | None:
