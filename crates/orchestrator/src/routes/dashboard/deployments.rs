@@ -104,9 +104,20 @@ pub(crate) async fn get_deployment_auth_dashboard(
     let admin_key = crate::routes::deployment_internal::ephemeral_admin_key(&state, &d)
         .await
         .ok_or(ApiError::Forbidden)?;
+    // Derived from config rather than read off the row: `d.url` carries any
+    // canonical override, and the console has to stay reachable even when that
+    // override is broken.
+    let (console_url, _) = crate::provisioner::default_origins(
+        &d.name,
+        &state.config.router_host,
+        state.config.site_router_host.as_deref(),
+        &state.config.router_public_scheme,
+        state.config.router_public_port,
+    );
     Ok(Json(GetDeploymentAuthDashboardResponse {
         admin_key,
         url: d.url,
+        console_url,
     }))
 }
 

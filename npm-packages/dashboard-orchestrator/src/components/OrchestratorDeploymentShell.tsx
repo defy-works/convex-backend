@@ -106,7 +106,17 @@ export function OrchestratorDeploymentShell({
   const teamsURI = `/t/${team.slug}`;
   const projectsURI = `/t/${team.slug}/${project.slug}`;
   const deploymentsURI = `/t/${team.slug}/${project.slug}/${deployment.name}`;
-  const browserDeploymentUrl = deploymentUrlForBrowser(auth.url);
+  // Connect over the orchestrator-derived hostname, not the canonical one. A
+  // canonical URL is where the operator's own app reaches the backend; when it
+  // is misconfigured (pointed at a CDN that intercepts requests, DNS not
+  // propagated, wrong TLS) the console must keep working, because the console
+  // is where they go to fix it. Falls back to the canonical URL when talking
+  // to an orchestrator that predates `consoleUrl`.
+  const browserDeploymentUrl = deploymentUrlForBrowser(
+    auth.consoleUrl ?? auth.url,
+  );
+  // What we show the user: their canonical URL.
+  const displayDeploymentUrl = deploymentUrlForBrowser(auth.url);
 
   const deploymentInfo: DeploymentInfo = {
     ok: true,
@@ -162,7 +172,9 @@ export function OrchestratorDeploymentShell({
         // orchestrator deployments. Falls back to "S16" if the orchestrator
         // pre-dates the tier-on-platform-response field.
         class: deployment.tier ?? "S16",
-        deploymentUrl: browserDeploymentUrl,
+        // The summary card shows the deployment's own address, which is the
+        // canonical URL when one is set — not the hostname we connect over.
+        deploymentUrl: displayDeploymentUrl,
         createTime: deployment.creationTime,
         region: regionName,
         isDefault: true,

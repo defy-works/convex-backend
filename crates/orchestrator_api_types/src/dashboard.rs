@@ -147,7 +147,18 @@ pub struct DeploymentResponse {
 #[serde(rename_all = "camelCase")]
 pub struct GetDeploymentAuthDashboardResponse {
     pub admin_key: String,
+    /// The deployment's canonical origin — what its apps talk to, and what the
+    /// dashboard displays. May be a custom domain the operator chose.
     pub url: String,
+    /// The origin the dashboard should actually *connect* over.
+    ///
+    /// Always the orchestrator-derived `<name>.<router_host>` hostname, never
+    /// a canonical override. A canonical URL is about where an operator's own
+    /// app reaches the backend; if it is misconfigured — pointed at a CDN that
+    /// intercepts requests, DNS not propagated, TLS wrong — that must not also
+    /// cost them the admin console, which is the tool they need in order to
+    /// fix it.
+    pub console_url: String,
 }
 
 /// Body of `POST /api/dashboard/deployments/register` — used by operators in
@@ -346,6 +357,14 @@ pub struct CanonicalUrls {
     /// True when the desired origins differ from what the running container
     /// has — i.e. a restart is needed before the change takes effect.
     pub restart_pending: bool,
+    /// Set when a canonical URL was accepted but did not actually reach this
+    /// deployment when we probed it. Attaching a custom domain proves the
+    /// operator owns the hostname; it does not prove requests to it arrive
+    /// here. A CDN in front answering with its own challenge page, DNS that
+    /// has not propagated, or a proxy stripping the upgrade all look fine at
+    /// save time and then break the deployment silently.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reachability_warning: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]

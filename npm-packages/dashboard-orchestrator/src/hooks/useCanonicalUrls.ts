@@ -25,6 +25,9 @@ export function useCanonicalUrls(deploymentId: number | undefined) {
     // Feed the server's answer straight back in — it already recomputed
     // restartPending, so a revalidation round trip would only repeat it.
     await mutate(next, { revalidate: false });
+    // Returned so the caller can surface `reachabilityWarning`, which only the
+    // save response carries (reads don't probe the network).
+    return next;
   };
 
   /**
