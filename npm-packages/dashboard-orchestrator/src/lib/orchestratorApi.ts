@@ -269,7 +269,14 @@ export async function createDeployment(
 
 export type DeploymentAuth = {
   adminKey: string;
+  /** Canonical origin — what the deployment's apps use, and what we display. */
   url: string;
+  /**
+   * Origin to actually connect the dashboard over: the orchestrator-derived
+   * hostname, never a canonical override. Optional so a dashboard newer than
+   * its orchestrator still works, falling back to `url`.
+   */
+  consoleUrl?: string;
 };
 
 export async function fetchDeploymentAuth(
@@ -488,6 +495,12 @@ export const canonicalUrlsSchema = z.object({
   defaultUrl: z.string(),
   defaultSiteUrl: z.string(),
   restartPending: z.boolean(),
+  /**
+   * Set when a canonical URL saved fine but did not actually reach the
+   * deployment when probed — a CDN answering with its own challenge page,
+   * DNS not propagated, another service on the hostname.
+   */
+  reachabilityWarning: z.string().nullish(),
 });
 export type CanonicalUrls = z.infer<typeof canonicalUrlsSchema>;
 

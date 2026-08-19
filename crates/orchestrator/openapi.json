@@ -3693,6 +3693,10 @@
           "restartPending": {
             "type": "boolean",
             "description": "True when the desired origins differ from what the running container\nhas — i.e. a restart is needed before the change takes effect."
+          },
+          "reachabilityWarning": {
+            "type": ["string", "null"],
+            "description": "Set when a canonical URL was accepted but did not actually reach this\ndeployment when we probed it. Attaching a custom domain proves the\noperator owns the hostname; it does not prove requests to it arrive\nhere. A CDN in front answering with its own challenge page, DNS that\nhas not propagated, or a proxy stripping the upgrade all look fine at\nsave time and then break the deployment silently."
           }
         }
       },
@@ -4211,13 +4215,18 @@
       },
       "GetDeploymentAuthDashboardResponse": {
         "type": "object",
-        "required": ["adminKey", "url"],
+        "required": ["adminKey", "url", "consoleUrl"],
         "properties": {
           "adminKey": {
             "type": "string"
           },
           "url": {
-            "type": "string"
+            "type": "string",
+            "description": "The deployment's canonical origin — what its apps talk to, and what the\ndashboard displays. May be a custom domain the operator chose."
+          },
+          "consoleUrl": {
+            "type": "string",
+            "description": "The origin the dashboard should actually *connect* over.\n\nAlways the orchestrator-derived `<name>.<router_host>` hostname, never\na canonical override. A canonical URL is about where an operator's own\napp reaches the backend; if it is misconfigured — pointed at a CDN that\nintercepts requests, DNS not propagated, TLS wrong — that must not also\ncost them the admin console, which is the tool they need in order to\nfix it."
           }
         }
       },

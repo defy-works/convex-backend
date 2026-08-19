@@ -114,6 +114,9 @@ async fn canonical_urls_for(
         desired_site_url: deployment.desired_site_url,
         default_url,
         default_site_url,
+        // Only the setter probes; reading the current values must not pay for
+        // a network round trip on every dashboard page load.
+        reachability_warning: None,
     })
 }
 
@@ -191,7 +194,65 @@ pub(crate) async fn set_canonical_urls(
         .await
         .map_err(ApiError::Internal)?;
 
-    Ok(Json(canonical_urls_for(&state, deployment_id).await?))
+    let mut result = canonical_urls_for(&state, deployment_id).await?;
+    // Best-effort end-to-end check. The validation above proves the hostname
+    // is attached to this deployment; it does not prove a request to it lands
+    // here. Non-blocking on purpose — DNS may simply not have propagated yet,
+    // and refusing the save would be worse than reporting it.
+    if let Some(url) = url.as_deref() {
+        let deployment = state
+            .storage
+            .get_deployment(deployment_id)
+            .await
+            .map_err(ApiError::Internal)?;
+        if let Some(deployment) = deployment {
+            result.reachability_warning = probe_reaches_deployment(url, &deployment.name).await;
+        }
+    }
+    Ok(Json(result))
+}
+
+/// `GET <url>/instance_name` and confirm this deployment answers.
+///
+/// That endpoint is unauthenticated and returns the backend's own instance
+/// name, so it distinguishes "reaches this deployment" from "reaches
+/// something else" — a CDN challenge page, another tenant, a parked domain —
+/// which is precisely the failure attaching a custom domain cannot rule out.
+/// Returns `None` when the deployment answered, or `Some(warning)` otherwise.
+async fn probe_reaches_deployment(url: &str, deployment_name: &str) -> Option<String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+        .ok()?;
+    let probe_url = format!("{}/instance_name", url.trim_end_matches('/'));
+    match client.get(&probe_url).send().await {
+        Err(e) => Some(format!(
+            "Could not reach {url}: {e}. Requests to this URL will fail until DNS \
+             and TLS resolve to this orchestrator."
+        )),
+        Ok(resp) => {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            let answered = body.trim();
+            if status.is_success() && answered == deployment_name {
+                None
+            } else if status.is_success() {
+                Some(format!(
+                    "{url} answered, but not as this deployment (expected \
+                     `{deployment_name}`, got `{}`). Something in front of the \
+                     backend — a CDN, proxy, or another service on this hostname \
+                     — is intercepting requests.",
+                    answered.chars().take(60).collect::<String>()
+                ))
+            } else {
+                Some(format!(
+                    "{url} returned HTTP {status} instead of this deployment's \
+                     name. Something in front of the backend is intercepting \
+                     requests; a CDN bot-protection challenge is the usual cause."
+                ))
+            }
+        },
+    }
 }
 
 fn to_api(record: crate::storage::CustomDomainRecord) -> CustomDomain {
