@@ -1,4 +1,5 @@
 import { DeploymentSettingsLayout } from "@common/layouts/DeploymentSettingsLayout";
+import { RestoreFromZipDropzone } from "@common/features/settings/components/RestoreFromZipDropzone";
 import { DeploymentInfoContext } from "@common/lib/deploymentContext";
 import { joinUrlPath } from "@common/lib/helpers/joinUrlPath";
 import udfs from "@common/udfs";
@@ -117,8 +118,9 @@ function BackupsLayout({
       <div className="flex flex-wrap items-center justify-between gap-4">
         <h3 className="min-w-fit">Backup &amp; Restore</h3>
         <span className="text-sm">
-          Trigger a snapshot of this deployment from the dashboard. To restore,
-          run{" "}
+          Trigger a snapshot of this deployment, restore one of the backups
+          below, or upload a backup zip from your machine. The equivalent CLI
+          command is{" "}
           <code className="rounded-sm bg-background-tertiary px-1 text-xs">
             npx convex import --replace-all backup.zip
           </code>
@@ -165,6 +167,11 @@ function BackupsLayout({
             storage. Manual backups run immediately; periodic backups fire in
             the background per the schedule above.
           </p>
+          <hr className="w-full" />
+          <RestoreFromZipDropzone
+            deploymentUrl={deploymentUrl}
+            adminKey={adminKey}
+          />
         </Sheet>
 
         <div className="flex flex-col gap-4 pb-8 xl:grow xl:pb-0">
