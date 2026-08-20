@@ -34,6 +34,22 @@ reconcile_cargo_lock() {
     return 0
   fi
   cargo update --workspace 2>&1 | sed 's/^/  /'
+  # `cargo update --workspace` re-resolves the workspace members but does not
+  # prune entries nothing depends on any more, so an upstream merge that drops
+  # a dependency leaves dead packages behind. The 2026-08-20 sync left registry
+  # copies of shuttle, shuttle-engine, shuttle-schedulers and shuttle-std in the
+  # lockfile; `cargo update -w --locked` — the gate in build_local_backend.yml —
+  # rejects exactly that, so Build Convex Backend went red on `enhanced` for
+  # four consecutive runs while the sync kept reporting success. A full resolve
+  # prunes them.
+  cargo metadata --format-version 1 >/dev/null 2>&1 || true
+  # Assert with the identical command CI gates on. Checking that the fork-local
+  # crates are present is necessary but not sufficient — only this catches a
+  # lockfile that resolves here yet fails there.
+  if ! cargo update -w --locked >/dev/null 2>&1; then
+    echo "Cargo.lock still fails 'cargo update -w --locked' after regeneration" >&2
+    return 1
+  fi
   if ! git diff --quiet Cargo.lock; then
     git add Cargo.lock
     git commit --amend --no-edit
