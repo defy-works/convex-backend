@@ -627,7 +627,6 @@ export async function deleteCustomDomain(
   );
 }
 
-
 // ---------- Team invitations ----------
 
 export const invitationSchema = z.object({
