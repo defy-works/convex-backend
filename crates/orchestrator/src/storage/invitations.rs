@@ -92,12 +92,23 @@ impl Storage {
         Ok(())
     }
 
-    pub async fn cancel_invitation(&self, id: i64) -> anyhow::Result<()> {
+    /// Delete a pending invitation. Scoped to `team_id` on purpose: the caller
+    /// is authorized as an admin *of that team*, and `id` is a guessable
+    /// BIGSERIAL, so deleting on `id` alone would let an admin of any team
+    /// cancel another team's invitations.
+    ///
+    /// Returns whether a row was actually removed, so the route can answer 404
+    /// instead of pretending to have cancelled something that wasn't there.
+    pub async fn cancel_invitation(&self, team_id: i64, id: i64) -> anyhow::Result<bool> {
         let conn = self.pool().acquire().await?;
-        conn.client()
-            .execute("DELETE FROM invitations WHERE id = $1", &[&id])
+        let removed = conn
+            .client()
+            .execute(
+                "DELETE FROM invitations WHERE id = $1 AND team_id = $2",
+                &[&id, &team_id],
+            )
             .await?;
-        Ok(())
+        Ok(removed > 0)
     }
 }
 

@@ -13,6 +13,7 @@ use axum::{
 };
 use orchestrator_api_types::{
     dashboard::{
+        CancelInvitationArgs,
         CreateTeamArgs,
         InvitationArgs,
         InvitationResponse,
@@ -420,15 +421,19 @@ pub(crate) async fn create_invite(
     post,
     path = "/api/dashboard/teams/{team_id}/invites/cancel",
     params(("team_id" = i64, Path)),
-    request_body = RemoveMemberArgs,
-    responses((status = 200), (status = 403)),
+    request_body = CancelInvitationArgs,
+    responses(
+        (status = 200),
+        (status = 403, description = "caller is not an admin of this team"),
+        (status = 404, description = "no such pending invitation on this team"),
+    ),
     tag = "dashboard",
 )]
 pub(crate) async fn cancel_invite(
     auth: AuthIdentity,
     State(state): State<OrchestratorState>,
     Path(team_id): Path<i64>,
-    Json(args): Json<RemoveMemberArgs>,
+    Json(args): Json<CancelInvitationArgs>,
 ) -> ApiResult<StatusCode> {
     let caller = auth.require_member()?;
     if !matches!(
@@ -441,11 +446,17 @@ pub(crate) async fn cancel_invite(
     ) {
         return Err(ApiError::Forbidden);
     }
-    state
+    // Scoped to `team_id`, which is the team the caller was just authorized
+    // against — otherwise an admin of any team could cancel another team's
+    // invitation by guessing its id.
+    let removed = state
         .storage
-        .cancel_invitation(args.member_id as i64)
+        .cancel_invitation(team_id, args.invitation_id as i64)
         .await
         .map_err(ApiError::Internal)?;
+    if !removed {
+        return Err(ApiError::NotFound("invitation".into()));
+    }
     Ok(StatusCode::OK)
 }
 

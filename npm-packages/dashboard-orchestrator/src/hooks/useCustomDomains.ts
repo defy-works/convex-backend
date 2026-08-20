@@ -4,7 +4,6 @@ import {
   deleteCustomDomain,
   listCustomDomains,
   retryCustomDomain,
-  setCustomDomainTlsMode,
   verifyCustomDomain,
 } from "../lib/orchestratorApi";
 import { useAccessToken } from "../lib/useOrchestratorToken";
@@ -22,13 +21,9 @@ export function useCustomDomains(deploymentId: number | undefined) {
     { refreshInterval: 10_000 },
   );
 
-  const add = async (
-    domain: string,
-    kind: "api" | "site",
-    tlsMode: "acme" | "upstream" = "acme",
-  ) => {
+  const add = async (domain: string, kind: "api" | "site") => {
     if (!token || !deploymentId) return;
-    await createCustomDomain(url, token, deploymentId, domain, kind, tlsMode);
+    await createCustomDomain(url, token, deploymentId, domain, kind);
     await mutate();
   };
 
@@ -41,17 +36,6 @@ export function useCustomDomains(deploymentId: number | undefined) {
   const retry = async (domain: string) => {
     if (!token || !deploymentId) return;
     await retryCustomDomain(url, token, deploymentId, domain);
-    await mutate();
-  };
-
-  /**
-   * Switch a domain's TLS mode. Going to `acme` orders a certificate on the
-   * spot, so the row comes back `pending` and the poll above shows it move to
-   * `issuing` then `active`.
-   */
-  const setTlsMode = async (domain: string, tlsMode: "acme" | "upstream") => {
-    if (!token || !deploymentId) return;
-    await setCustomDomainTlsMode(url, token, deploymentId, domain, tlsMode);
     await mutate();
   };
 
@@ -74,7 +58,6 @@ export function useCustomDomains(deploymentId: number | undefined) {
     add,
     remove,
     retry,
-    setTlsMode,
     verify,
   };
 }

@@ -1996,7 +1996,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/RemoveMemberArgs"
+                "$ref": "#/components/schemas/CancelInvitationArgs"
               }
             }
           },
@@ -2007,7 +2007,10 @@
             "description": ""
           },
           "403": {
-            "description": ""
+            "description": "caller is not an admin of this team"
+          },
+          "404": {
+            "description": "no such pending invitation on this team"
           }
         }
       }
@@ -3655,6 +3658,18 @@
           },
           "cursor": {
             "type": ["string", "null"]
+          }
+        }
+      },
+      "CancelInvitationArgs": {
+        "type": "object",
+        "description": "Body of `teams/{team_id}/invites/cancel`. Distinct from `RemoveMemberArgs`,\nwhich this used to borrow — that made the wire field for an invitation id\nliterally `memberId`.",
+        "required": ["invitationId"],
+        "properties": {
+          "invitationId": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
           }
         }
       },

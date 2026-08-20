@@ -499,13 +499,18 @@ pub(crate) async fn transfer_deployment(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// Validate that the requested tier is known. Custom tiers are additionally
-/// clamped to this host's own maximum RAM/CPU so one deployment cannot ask
-/// Docker for a limit larger than the machine itself.
+/// Validate that the requested tier is known and fits on this host.
+///
+/// Applies to presets as well as `custom:` values. It used to check only
+/// custom tiers, so a 16-core/32 GB machine happily accepted S256 (32 CPUs /
+/// 64 GB) — docker would then be handed a `--cpus` larger than the machine,
+/// and the dashboard offered the tier as if it were a real option.
+///
+/// The `max` tier is exempt: `unbounded` means "no `--memory`/`--cpus` flags
+/// at all", so it asks for nothing it cannot have.
 ///
 /// Called from `create_deployment` and, via `pub(crate)`, from
 /// `deployment_internal::create_project`'s auto-provision path.
-///
 pub(crate) async fn ensure_host_capacity(
     state: &crate::state::OrchestratorState,
     tier_name: &str,
@@ -521,13 +526,13 @@ fn validate_tier_with_host_capacity(
 ) -> crate::errors::ApiResult<()> {
     let tier = crate::provisioner::tiers::resolve(tier_name)
         .ok_or_else(|| ApiError::BadRequest(format!("unknown tier {tier_name}")))?;
-    if tier.custom
-        && (u64::from(tier.memory_mb) > host.total_memory_mb || tier.cpus > host.total_cpus as f32)
-    {
+    if tier.unbounded {
+        return Ok(());
+    }
+    if u64::from(tier.memory_mb) > host.total_memory_mb || tier.cpus > host.total_cpus as f32 {
         return Err(ApiError::BadRequest(format!(
-            "custom tier exceeds host maximum (requested {} MB / {:.2} CPUs, host has {} MB / {} \
-             CPUs)",
-            tier.memory_mb, tier.cpus, host.total_memory_mb, host.total_cpus
+            "tier {} exceeds host maximum (requested {} MB / {:.2} CPUs, host has {} MB / {} CPUs)",
+            tier.name, tier.memory_mb, tier.cpus, host.total_memory_mb, host.total_cpus
         )));
     }
     Ok(())
@@ -558,16 +563,30 @@ async fn _update_deployment(
     Ok(StatusCode::OK)
 }
 
-/// Like `ensure_host_capacity`, kept as a separate restart hook for the
-/// existing callsites. Overprovisioning across deployments is allowed; this
-/// only rejects unknown tiers and custom per-deployment limits above the
-/// machine maximum.
+/// Capacity check for the restart path, which grandfathers the tier a
+/// deployment is already on.
+///
+/// Now that oversized presets are rejected, validating a restart the same way
+/// as a create would strand any deployment provisioned before the rule — the
+/// operator could neither restart it nor, on some paths, get far enough to
+/// resize it. Restarting what already exists stays possible; *changing* to an
+/// oversized tier still goes through `ensure_host_capacity` and is refused.
 pub(crate) async fn ensure_host_capacity_for_restart(
     state: &crate::state::OrchestratorState,
-    _deployment_id: i64,
+    deployment_id: i64,
     tier_name: &str,
     _force: bool,
 ) -> crate::errors::ApiResult<()> {
+    let current = state
+        .storage
+        .get_deployment(deployment_id)
+        .await
+        .map_err(ApiError::Internal)?
+        .and_then(|d| d.desired_tier.or(Some(d.tier)));
+    if current.as_deref() == Some(tier_name) {
+        // Unchanged: this is a restart, not a resize.
+        return Ok(());
+    }
     let host = state.host_capacity.read();
     validate_tier_with_host_capacity(tier_name, host)
 }
@@ -901,9 +920,32 @@ mod tests {
         }
     }
 
+    // Presets used to be exempt from the host check, so a 1-CPU box offered
+    // S256 (32 CPUs / 64 GB) as a selectable tier and handed docker a --cpus
+    // larger than the machine.
     #[test]
-    fn preset_tiers_can_exceed_host_capacity_for_overprovisioning() {
-        validate_tier_with_host_capacity("S256", tiny_host()).unwrap();
+    fn preset_tiers_larger_than_the_host_are_rejected() {
+        assert!(matches!(
+            validate_tier_with_host_capacity("S256", tiny_host()),
+            Err(ApiError::BadRequest(_))
+        ));
+    }
+
+    #[test]
+    fn preset_tiers_that_fit_are_accepted() {
+        let host = crate::host_capacity::HostCapacity {
+            total_memory_mb: 65536,
+            total_cpus: 32,
+        };
+        validate_tier_with_host_capacity("S256", host).unwrap();
+        validate_tier_with_host_capacity("S4", tiny_host()).unwrap();
+    }
+
+    #[test]
+    fn the_unbounded_tier_is_always_allowed() {
+        // `max` emits no --memory/--cpus at all, so it cannot ask for more
+        // than the machine has.
+        validate_tier_with_host_capacity("max", tiny_host()).unwrap();
     }
 
     #[test]

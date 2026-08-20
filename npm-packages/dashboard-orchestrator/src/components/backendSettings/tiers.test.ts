@@ -26,6 +26,41 @@ describe("backend tier helpers", () => {
     expect(parseCustomTier(tier)).toEqual({ memoryMb: 12288, cpus: 6.5 });
   });
 
+  // A tier bigger than the machine is not a real option — the orchestrator
+  // rejects it, and docker would be handed a --cpus larger than the host. The
+  // picker used to offer every preset regardless.
+  test("presets are classified against host capacity", () => {
+    const host = { totalMemoryMb: 32768, totalCpus: 16 };
+    const exceeds = (t: { memoryMb: number; cpus: number }) =>
+      t.memoryMb > host.totalMemoryMb || t.cpus > host.totalCpus;
+
+    const byName = Object.fromEntries(TIERS.map((t) => [t.name, t]));
+    // S256 is 64 GB / 32 CPUs — double this host on both axes.
+    expect(exceeds(byName.S256)).toBe(true);
+    // S128 is exactly 32 GB / 16 CPUs, so it fits on the nose.
+    expect(exceeds(byName.S128)).toBe(false);
+    expect(exceeds(byName.S16)).toBe(false);
+  });
+
+  test("the reachable custom maximum is the host maximum", () => {
+    // The number inputs step from `min`, so reachable values are min + n*step.
+    // min=0.1/step=0.25 topped an 8-CPU host out at 7.85 (0.1 + 31*0.25),
+    // because 8.10 overshoots max. Whole-core steps land on the host value.
+    const cpuMax = (totalCpus: number) => {
+      const min = 1;
+      const step = 1;
+      return min + Math.floor((Math.floor(totalCpus) - min) / step) * step;
+    };
+    expect(cpuMax(8)).toBe(8);
+    expect(cpuMax(16)).toBe(16);
+
+    // Memory steps by half a GB from 0.5, and the max is floored to the step.
+    const memMax = (totalMemoryMb: number) =>
+      Math.floor((totalMemoryMb / 1024) * 2) / 2;
+    expect(memMax(62976)).toBe(61.5);
+    expect(memMax(65536)).toBe(64);
+  });
+
   test("custom tier resources clamp to system maximums", () => {
     expect(
       clampCustomTierResources(

@@ -32,7 +32,6 @@ use orchestrator_api_types::dashboard::{
     CustomDomainArgs,
     ListCustomDomains,
     SetCanonicalUrlsArgs,
-    SetCustomDomainTlsModeArgs,
     VerifyCustomDomainResponse,
 };
 
@@ -68,10 +67,6 @@ pub fn router() -> Router<OrchestratorState> {
         .route(
             "/deployments/{deployment_id}/custom_domains/retry",
             post(retry_custom_domain),
-        )
-        .route(
-            "/deployments/{deployment_id}/custom_domains/tls_mode",
-            post(set_custom_domain_tls_mode),
         )
         .route(
             "/deployments/{deployment_id}/canonical_urls",
@@ -309,15 +304,69 @@ pub(crate) async fn create_custom_domain(
     // sees a network error for a request that actually succeeded (the row is
     // already committed above; a reload of the dashboard shows it). Reply
     // first, reconfigure the proxy afterwards.
-    if tls_mode == custom_domains::TLS_MODE_UPSTREAM {
-        // Nothing to issue — the certificate lives in front of us. The domain
-        // still needs its router, so sync without entering issuance.
-        spawn_traefik_sync(state.clone());
-    } else {
-        spawn_issuance(state.clone(), domain);
-    }
+    spawn_detect_and_provision(state.clone(), domain);
 
     Ok(Json(to_api(record)))
+}
+
+/// Work out how a domain's TLS is terminated, record it, and act on it.
+///
+/// Runs off the request path because it does DNS and an HTTPS round trip.
+/// This replaces asking the operator to pick `acme` vs `upstream`: whether
+/// DNS resolves to this orchestrator settles who owns the certificate, and
+/// they can't know that more reliably than we can measure it.
+fn spawn_detect_and_provision(state: OrchestratorState, domain: String) {
+    tokio::spawn(async move {
+        let Ok(Some(record)) = state.storage.get_custom_domain(&domain).await else {
+            return;
+        };
+        let Ok(Some(deployment)) = state.storage.get_deployment(record.deployment_id).await
+        else {
+            return;
+        };
+
+        let detection = custom_domains::detect_domain(
+            &domain,
+            &state.config.router_host,
+            &deployment.name,
+        )
+        .await;
+
+        if let Some(tls_mode) = detection.tls_mode.as_deref()
+            && let Err(e) = state
+                .storage
+                .set_custom_domain_tls_mode(&domain, tls_mode)
+                .await
+        {
+            tracing::warn!(error = %e, %domain, "could not record detected TLS mode");
+        }
+        if let Err(e) = state
+            .storage
+            .set_custom_domain_status(
+                &domain,
+                &detection.cert_state,
+                detection.error.as_deref(),
+            )
+            .await
+        {
+            tracing::warn!(error = %e, %domain, "could not record detected domain state");
+        }
+
+        // Only order a certificate once we know it is ours to serve. A domain
+        // fronted by something that already terminates TLS needs routing, not
+        // issuance — and ordering anyway burns ACME rate limit on a
+        // certificate nobody would ever present.
+        match detection.tls_mode.as_deref() {
+            Some(custom_domains::TLS_MODE_ACME) => {
+                spawn_issuance(state.clone(), domain.clone());
+            },
+            _ => {
+                if let Err(e) = custom_domains::sync_traefik_config(&state).await {
+                    tracing::warn!(error = %format!("{e:#}"), %domain, "traefik sync failed");
+                }
+            },
+        }
+    });
 }
 
 #[utoipa::path(
@@ -429,65 +478,6 @@ pub(crate) async fn retry_custom_domain(
 
 #[utoipa::path(
     post,
-    path = "/api/dashboard/deployments/{deployment_id}/custom_domains/tls_mode",
-    params(("deployment_id" = i64, Path)),
-    request_body = SetCustomDomainTlsModeArgs,
-    responses(
-        (status = 200, body = CustomDomain),
-        (status = 400, description = "unknown domain or TLS mode"),
-    ),
-    tag = "dashboard",
-)]
-pub(crate) async fn set_custom_domain_tls_mode(
-    _auth: AuthIdentity,
-    State(state): State<OrchestratorState>,
-    Path(_deployment_id): Path<i64>,
-    Json(args): Json<SetCustomDomainTlsModeArgs>,
-) -> ApiResult<Json<CustomDomain>> {
-    let domain = custom_domains::validate_domain(&args.domain)
-        .map_err(|e| ApiError::BadRequest(e.to_string()))?;
-    let tls_mode = custom_domains::validate_tls_mode(&args.tls_mode)
-        .map_err(|e| ApiError::BadRequest(e.to_string()))?;
-
-    let record = state
-        .storage
-        .get_custom_domain(&domain)
-        .await
-        .map_err(ApiError::Internal)?
-        .ok_or_else(|| ApiError::BadRequest(format!("{domain} is not configured")))?;
-
-    if record.tls_mode == tls_mode {
-        return Ok(Json(to_api(record)));
-    }
-
-    state
-        .storage
-        .set_custom_domain_tls_mode(&domain, &tls_mode)
-        .await
-        .map_err(ApiError::Internal)?;
-
-    // Moving to `acme` means we now own the certificate, so order one straight
-    // away instead of leaving the domain dark until the hourly renewal sweep
-    // notices it. `spawn_issuance` re-syncs Traefik first, which is what makes
-    // the HTTP-01 challenge reachable. Moving to `upstream` only needs the
-    // router rewritten — the certificate lives in front of us.
-    if tls_mode == custom_domains::TLS_MODE_ACME {
-        spawn_issuance(state.clone(), domain.clone());
-    } else {
-        spawn_traefik_sync(state.clone());
-    }
-
-    let updated = state
-        .storage
-        .get_custom_domain(&domain)
-        .await
-        .map_err(ApiError::Internal)?
-        .ok_or_else(|| ApiError::BadRequest(format!("{domain} is not configured")))?;
-    Ok(Json(to_api(updated)))
-}
-
-#[utoipa::path(
-    post,
     path = "/api/dashboard/deployments/{deployment_id}/custom_domains/verify",
     params(("deployment_id" = i64, Path)),
     request_body = CustomDomainArgs,
@@ -504,7 +494,47 @@ pub(crate) async fn verify_custom_domain(
         .map_err(|e| ApiError::BadRequest(e.to_string()))?;
 
     let deployment_name = deployment_name_for_domain(&state, &domain).await?;
-    let (cert_state, error) = custom_domains::probe_domain(&domain, &deployment_name).await;
+    let detection = custom_domains::detect_domain(
+        &domain,
+        &state.config.router_host,
+        &deployment_name,
+    )
+    .await;
+    let cert_state = detection.cert_state;
+    let error = detection.error;
+
+    // Verification is also where the TLS mode is decided: whether DNS points
+    // here settles who owns the certificate, so there is nothing for the
+    // operator to choose. Only write it when detection was conclusive.
+    if let Some(tls_mode) = detection.tls_mode.as_deref() {
+        let previous = state
+            .storage
+            .get_custom_domain(&domain)
+            .await
+            .map_err(ApiError::Internal)?
+            .map(|d| d.tls_mode);
+        if previous.as_deref() != Some(tls_mode) {
+            tracing::info!(
+                %domain,
+                from = previous.as_deref().unwrap_or("unknown"),
+                to = tls_mode,
+                "custom domain TLS mode re-detected"
+            );
+            state
+                .storage
+                .set_custom_domain_tls_mode(&domain, tls_mode)
+                .await
+                .map_err(ApiError::Internal)?;
+            // Taking over TLS means we owe it a certificate; nothing else
+            // would order one now that the mode is inferred rather than
+            // chosen.
+            if tls_mode == custom_domains::TLS_MODE_ACME {
+                spawn_issuance(state.clone(), domain.clone());
+            } else {
+                spawn_traefik_sync(state.clone());
+            }
+        }
+    }
 
     state
         .storage

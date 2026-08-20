@@ -8,19 +8,19 @@ import { Menu, MenuItem } from "@ui/Menu";
 import { ConfirmationDialog } from "@ui/ConfirmationDialog";
 import { CaretSortIcon, CheckIcon } from "@radix-ui/react-icons";
 import { TeamSettingsLayout } from "../../../../components/TeamSettingsLayout";
-import { listTeams, Team } from "../../../../lib/orchestratorApi";
+import {
+  cancelInvitation,
+  createInvitation,
+  Invitation,
+  listInvitations,
+  listTeams,
+  Team,
+} from "../../../../lib/orchestratorApi";
 import { useAccessToken } from "../../../../lib/useOrchestratorToken";
 import { useSession } from "../../../../lib/auth-client";
 import { orchestratorUrl } from "../../../../lib/config";
 
 type Member = { id: number; email: string; name: string | null; role: string };
-type Invitation = {
-  id: number;
-  email: string;
-  role: string;
-  code: string;
-  createdAt: number;
-};
 
 export default function TeamMembersPage() {
   const router = useRouter();
@@ -44,7 +44,7 @@ export default function TeamMembersPage() {
   );
   const { data: invites, mutate: mutateInvites } = useSWR<Invitation[]>(
     team && token ? ["invites", team.id, token] : null,
-    () => fetchJson(`${url}/api/dashboard/teams/${team!.id}/invites`, token!),
+    () => listInvitations(url, token!, team!.id),
   );
 
   const [inviteEmail, setInviteEmail] = useState("");
@@ -56,6 +56,8 @@ export default function TeamMembersPage() {
   const [submitting, setSubmitting] = useState(false);
   const [removing, setRemoving] = useState<Member | null>(null);
   const [removeError, setRemoveError] = useState<string | undefined>();
+  const [cancelling, setCancelling] = useState<Invitation | null>(null);
+  const [cancelError, setCancelError] = useState<string | undefined>();
 
   const session = useSession();
   const myEmail = session?.data?.user?.email ?? "";
@@ -68,21 +70,25 @@ export default function TeamMembersPage() {
     setError(null);
     setSubmitting(true);
     try {
-      const res = await fetch(`${url}/api/dashboard/teams/${team.id}/invites`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({ email: inviteEmail, role: inviteRole }),
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      await createInvitation(url, token, team.id, inviteEmail, inviteRole);
       setInviteEmail("");
       await mutateInvites();
     } catch (err) {
       setError((err as Error).message);
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  const onConfirmCancelInvite = async () => {
+    if (!cancelling) return;
+    setCancelError(undefined);
+    try {
+      await cancelInvitation(url, token, team.id, cancelling.id);
+      await mutateInvites();
+    } catch (err) {
+      setCancelError((err as Error).message);
+      throw err;
     }
   };
 
@@ -252,10 +258,34 @@ export default function TeamMembersPage() {
                     {inv.role} · code {inv.code.slice(0, 8)}…
                   </div>
                 </div>
+                <Button
+                  size="xs"
+                  variant="danger"
+                  onClick={() => setCancelling(inv)}
+                >
+                  Cancel
+                </Button>
               </li>
             ))}
           </ul>
         </Sheet>
+      )}
+      {cancelling && (
+        <ConfirmationDialog
+          dialogTitle="Cancel invitation"
+          confirmText="Cancel invitation"
+          onClose={() => setCancelling(null)}
+          onConfirm={onConfirmCancelInvite}
+          error={cancelError}
+          dialogBody={
+            <>
+              Withdraw the invitation for{" "}
+              <span className="font-semibold">{cancelling.email}</span>. Their
+              invite link stops working immediately; you can invite them again
+              later.
+            </>
+          }
+        />
       )}
       {removing && (
         <ConfirmationDialog
