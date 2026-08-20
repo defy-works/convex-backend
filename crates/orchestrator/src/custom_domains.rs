@@ -415,6 +415,78 @@ pub struct DomainDetection {
     pub error: Option<String>,
 }
 
+/// Whether a resolved address is reachable from the public internet, and so
+/// meaningful to compare a customer's DNS record against.
+///
+/// The orchestrator resolves its own router host from inside its container,
+/// where that name frequently answers with the machine's private view —
+/// docker bridge gateways (172.17.0.1), the VPC address (172.31.x.x), IPv6
+/// link-local. A customer's CNAME resolves to the *public* address, so
+/// comparing against the private view never intersects and rejects a
+/// correctly-pointed domain.
+fn is_public_ip(ip: &IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => {
+            !v4.is_private()
+                && !v4.is_loopback()
+                && !v4.is_link_local()
+                && !v4.is_broadcast()
+                && !v4.is_unspecified()
+                // Documentation ranges (192.0.2/24, 198.51.100/24, 203.0.113/24)
+                // are deliberately NOT excluded: they never appear in real DNS,
+                // and excluding them only breaks tests that use them by
+                // convention.
+                // 100.64.0.0/10, carrier-grade NAT — also not addressable.
+                && !(v4.octets()[0] == 100 && (64..128).contains(&v4.octets()[1]))
+        },
+        IpAddr::V6(v6) => {
+            !v6.is_loopback()
+                && !v6.is_unspecified()
+                // fe80::/10 link-local and fc00::/7 unique-local.
+                && !(v6.segments()[0] & 0xffc0 == 0xfe80)
+                && !(v6.octets()[0] & 0xfe == 0xfc)
+        },
+    }
+}
+
+/// What the two resolutions say about where the domain points.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DnsVerdict {
+    PointsHere,
+    PointsElsewhere,
+    /// We could not establish our own public address, so the comparison is
+    /// meaningless and must not be used to reject anything.
+    Unknown,
+}
+
+fn compare_resolutions(
+    domain_ips: &Result<BTreeSet<IpAddr>, String>,
+    router_ips: &Result<BTreeSet<IpAddr>, String>,
+) -> DnsVerdict {
+    let public = |set: &Result<BTreeSet<IpAddr>, String>| -> BTreeSet<IpAddr> {
+        set.as_ref()
+            .map(|s| s.iter().copied().filter(is_public_ip).collect())
+            .unwrap_or_default()
+    };
+    let router = public(router_ips);
+    if router.is_empty() {
+        // Local dev (`localhost`), or a container whose view of its own
+        // hostname is private. Either way we cannot tell direct from proxied.
+        return DnsVerdict::Unknown;
+    }
+    let domain = public(domain_ips);
+    if domain.is_empty() {
+        // We know where we are and the domain isn't there — a record that
+        // doesn't resolve is conclusively not pointing at us.
+        return DnsVerdict::PointsElsewhere;
+    }
+    if domain.intersection(&router).next().is_some() {
+        DnsVerdict::PointsHere
+    } else {
+        DnsVerdict::PointsElsewhere
+    }
+}
+
 /// Resolve a hostname to its addresses. `Err` carries the resolver's message.
 async fn resolve_ips(host: &str) -> Result<BTreeSet<IpAddr>, String> {
     // Port is irrelevant; `lookup_host` just needs one to form a socket addr.
@@ -501,24 +573,22 @@ fn classify_detection(
     router_ips: &Result<BTreeSet<IpAddr>, String>,
     probe: &Result<String, String>,
 ) -> DomainDetection {
-    let points_here = match (domain_ips, router_ips) {
-        (Ok(d), Ok(r)) => !d.is_empty() && !r.is_empty() && d.intersection(r).next().is_some(),
-        // Can't compare — e.g. the router host is `localhost` in local dev, or
-        // DNS is down. Fall back to what the probe says.
-        _ => false,
-    };
+    let dns = compare_resolutions(domain_ips, router_ips);
     let answered_as_us = probe.as_deref().map(|b| b == expected_deployment).unwrap_or(false);
+    let points_here = dns == DnsVerdict::PointsHere;
 
     if answered_as_us {
         return DomainDetection {
             cert_state: CERT_STATE_ACTIVE.to_string(),
             // Reaching us without DNS pointing here means something in front
             // forwarded the request, and that something owns the certificate.
-            tls_mode: Some(if points_here {
-                TLS_MODE_ACME.to_string()
-            } else {
-                TLS_MODE_UPSTREAM.to_string()
-            }),
+            // When the comparison was inconclusive we cannot tell the two
+            // apart, so leave the stored mode alone rather than guessing.
+            tls_mode: match dns {
+                DnsVerdict::PointsHere => Some(TLS_MODE_ACME.to_string()),
+                DnsVerdict::PointsElsewhere => Some(TLS_MODE_UPSTREAM.to_string()),
+                DnsVerdict::Unknown => None,
+            },
             error: None,
         };
     }
@@ -544,17 +614,41 @@ fn classify_detection(
         };
     }
 
+    let detail = match probe {
+        Ok(body) => format!(
+            "it answered with `{}`",
+            body.chars().take(80).collect::<String>()
+        ),
+        Err(e) => format!("the request failed: {e}"),
+    };
+    let error = match dns {
+        DnsVerdict::PointsElsewhere => format!(
+            "DNS for {domain} {}, which is not this orchestrator ({router_host} {}), \
+             and requests to it do not reach {expected_deployment} — {detail}. Point \
+             the record at {router_host}; if it is behind a CDN, switch that record \
+             to DNS-only so requests arrive here directly.",
+            render_ips(domain_ips),
+            render_ips(router_ips),
+        ),
+        // Don't blame DNS for something we could not check. This is the
+        // container-view case: the orchestrator's own hostname resolved only
+        // to private addresses, so there was nothing public to compare.
+        DnsVerdict::Unknown => format!(
+            "Requests to {domain} do not reach {expected_deployment} — {detail}. \
+             Point the record at {router_host}; if it is behind a CDN, switch that \
+             record to DNS-only so requests arrive here directly. (This orchestrator \
+             could not determine its own public address, so DNS was not compared: \
+             {router_host} {} from inside the container.)",
+            render_ips(router_ips),
+        ),
+        // Unreachable: PointsHere is handled above.
+        DnsVerdict::PointsHere => unreachable!("handled above"),
+    };
     DomainDetection {
         cert_state: CERT_STATE_PENDING.to_string(),
         // Neither signal is conclusive; don't overwrite what is stored.
         tls_mode: None,
-        error: Some(format!(
-            "DNS for {domain} {}, which is not this orchestrator ({router_host} {}), \
-             and requests to it do not reach {expected_deployment}. Point the record \
-             at {router_host} — if it is behind a CDN, use DNS-only mode.",
-            render_ips(domain_ips),
-            render_ips(router_ips),
-        )),
+        error: Some(error),
     }
 }
 
@@ -678,6 +772,69 @@ mod detection_tests {
         assert_eq!(d.cert_state, CERT_STATE_PENDING);
         assert_eq!(d.tls_mode, None);
         assert!(d.error.expect("error").contains("does not resolve"));
+    }
+
+    // The orchestrator resolves its own router host from inside a container,
+    // where that name often answers with the machine's private view. Observed
+    // in production: defyhost.com -> 172.17.0.1 (docker0), 172.18.0.1,
+    // 172.31.46.31 (VPC), fe80::… — none of which a customer's CNAME could
+    // ever match, so a correctly-pointed domain was rejected.
+    const CONTAINER_VIEW: &[&str] =
+        &["172.17.0.1", "172.18.0.1", "172.31.46.31", "fe80::4f2:3bff:fe06:9111"];
+
+    #[test]
+    fn a_private_view_of_our_own_host_is_not_used_to_reject() {
+        let d = classify_detection(
+            "api.prime-reserve.com",
+            "defyhost.com",
+            "calm-lynx-792",
+            &ips(&["203.0.113.99"]),
+            &ips(CONTAINER_VIEW),
+            &Ok("calm-lynx-792".into()),
+        );
+        // The deployment answered; that is what counts.
+        assert_eq!(d.cert_state, CERT_STATE_ACTIVE);
+        // But we could not tell direct from proxied, so don't guess a mode.
+        assert_eq!(d.tls_mode, None);
+    }
+
+    #[test]
+    fn an_unusable_self_resolution_does_not_claim_dns_is_wrong() {
+        let d = classify_detection(
+            "api.prime-reserve.com",
+            "defyhost.com",
+            "calm-lynx-792",
+            &ips(&["104.21.25.228"]),
+            &ips(CONTAINER_VIEW),
+            &Ok("<!DOCTYPE html>".into()),
+        );
+        assert_eq!(d.cert_state, CERT_STATE_PENDING);
+        let err = d.error.expect("error");
+        assert!(
+            err.contains("could not determine its own public address"),
+            "must admit the comparison was skipped: {err}"
+        );
+        assert!(
+            !err.contains("which is not this orchestrator"),
+            "must not assert a mismatch it never established: {err}"
+        );
+    }
+
+    #[test]
+    fn a_public_self_resolution_still_detects_a_proxy() {
+        // Regression guard: filtering private addresses must not weaken the
+        // real comparison when the router host does resolve publicly.
+        let d = classify_detection(
+            "api.prime-reserve.com",
+            "convex.example.com",
+            "calm-lynx-792",
+            &ips(&["104.21.25.228", "172.67.134.218"]),
+            &ips(&["203.0.113.10", "172.17.0.1"]),
+            &Ok("<!DOCTYPE html>".into()),
+        );
+        let err = d.error.expect("error");
+        assert!(err.contains("which is not this orchestrator"), "{err}");
+        assert!(err.contains("DNS-only"), "{err}");
     }
 
     #[test]
