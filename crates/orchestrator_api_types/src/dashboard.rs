@@ -97,6 +97,15 @@ pub struct InvitationArgs {
     pub role: String,
 }
 
+/// Body of `teams/{team_id}/invites/cancel`. Distinct from `RemoveMemberArgs`,
+/// which this used to borrow — that made the wire field for an invitation id
+/// literally `memberId`.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CancelInvitationArgs {
+    pub invitation_id: u64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct InvitationResponse {
@@ -336,18 +345,6 @@ pub struct CustomDomainArgs {
     pub domain: String,
 }
 
-/// Body of `custom_domains/tls_mode`. Switches how a domain's TLS is served.
-///
-/// Going `upstream` -> `acme` orders a certificate immediately rather than
-/// waiting for the renewal sweep, which is the point: an operator who moves a
-/// domain off an upstream terminator wants it serving now.
-#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct SetCustomDomainTlsModeArgs {
-    pub domain: String,
-    /// `acme` or `upstream`.
-    pub tls_mode: String,
-}
 
 /// What a deployment advertises about itself, and what the operator wants it
 /// to advertise. These become `CONVEX_CLOUD_ORIGIN` / `CONVEX_SITE_ORIGIN` on

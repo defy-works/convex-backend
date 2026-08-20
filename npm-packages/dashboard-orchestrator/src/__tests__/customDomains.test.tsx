@@ -72,34 +72,23 @@ test("adds a domain and refreshes the list", async () => {
       7,
       "api.example.com",
       "api",
-      // Issuing a certificate is the default; upstream is opt-in.
-      "acme",
+      // No TLS mode: the orchestrator detects it from where DNS points.
     ),
   );
   // Re-listed so the new row appears without a manual reload.
   await waitFor(() => expect(mockList).toHaveBeenCalledTimes(2));
 });
 
-test("can add a domain whose TLS is terminated upstream", async () => {
-  const user = userEvent.setup();
-  mockCreate.mockResolvedValue({});
+test("there is no TLS mode to choose — it is detected", async () => {
+  // Whether something in front terminates TLS is a fact about where DNS
+  // points, which the orchestrator measures. Asking the operator to declare
+  // it just invited them to declare it wrongly.
   renderCard();
   await waitFor(() => expect(mockList).toHaveBeenCalled());
 
-  await user.type(screen.getByLabelText("Domain"), "proxied.example.com");
-  await user.selectOptions(screen.getByLabelText("TLS"), "upstream");
-  await user.click(screen.getByRole("button", { name: "Add" }));
-
-  await waitFor(() =>
-    expect(mockCreate).toHaveBeenCalledWith(
-      "http://orchestrator.test",
-      "pat_test",
-      7,
-      "proxied.example.com",
-      "api",
-      "upstream",
-    ),
-  );
+  expect(screen.queryByLabelText("TLS")).toBeNull();
+  // The surface a domain fronts is still a real choice.
+  expect(screen.getByLabelText("Points at")).toBeInTheDocument();
 });
 
 test("does not offer to retry issuance for an upstream domain", async () => {
@@ -126,7 +115,8 @@ test("does not offer to retry issuance for an upstream domain", async () => {
   await waitFor(() =>
     expect(screen.getByText("proxied.example.com")).toBeInTheDocument(),
   );
-  expect(screen.getByText("TLS upstream")).toBeInTheDocument();
+  // Retry is still hidden for an upstream-terminated domain: there is no
+  // certificate of ours to re-issue.
   expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
 });
 
@@ -264,7 +254,6 @@ test("a domain can front HTTP actions instead of the database", async () => {
       7,
       "hooks.example.com",
       "site",
-      "acme",
     ),
   );
 });

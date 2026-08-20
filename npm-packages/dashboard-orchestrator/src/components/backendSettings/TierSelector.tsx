@@ -45,14 +45,27 @@ export function TierSelector({
     setCustomResources(clamped);
     onChange(encodeCustomTier(clamped));
   };
+  // The step ladder on a number input is anchored at `min`, so reachable
+  // values are `min + n*step`. With min=0.1/step=0.25 an 8-CPU host topped out
+  // at 7.85 (0.1 + 31*0.25) because 8.10 overshoots `max`. Anchoring both
+  // inputs at a multiple of their own step makes the host maximum reachable.
   const maxMemoryGb = capacity
-    ? Number((capacity.totalMemoryMb / 1024).toFixed(2))
+    ? // Round down to the step so the ceiling is actually selectable.
+      Math.floor((capacity.totalMemoryMb / 1024) * 2) / 2
     : undefined;
+  const maxCpus = capacity ? Math.floor(capacity.totalCpus) : undefined;
   return (
     <div className="flex flex-col gap-2">
       <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
         {TIERS.map((tier) => {
           const selected = value === tier.name;
+          // A tier bigger than the machine is not a real option: the
+          // orchestrator rejects it, and docker would be handed a --cpus
+          // larger than the host.
+          const tooBig =
+            capacity !== undefined &&
+            (tier.memoryMb > capacity.totalMemoryMb ||
+              tier.cpus > capacity.totalCpus);
           return (
             // eslint-disable-next-line react/forbid-elements -- card-style radio, intentional plain button
             <button
@@ -60,11 +73,22 @@ export function TierSelector({
               type="button"
               onClick={() => onChange(tier.name)}
               aria-pressed={selected}
+              disabled={tooBig}
+              title={
+                tooBig
+                  ? `This host has ${Math.round(
+                      capacity!.totalMemoryMb / 1024,
+                    )} GB and ${capacity!.totalCpus} CPUs — too small for ${
+                      tier.name
+                    }.`
+                  : undefined
+              }
               className={cn(
                 "flex flex-col items-start rounded-md border px-3 py-2 text-left transition-all",
                 selected
                   ? "border-content-link bg-background-secondary"
                   : "border-border-transparent bg-background-tertiary/40 hover:bg-background-tertiary",
+                tooBig && "cursor-not-allowed opacity-40 hover:bg-transparent",
               )}
             >
               <span className="font-mono text-sm font-semibold">
@@ -72,6 +96,7 @@ export function TierSelector({
               </span>
               <span className="text-xs text-content-secondary">
                 {formatTierResources(tier)}
+                {tooBig && " · exceeds host"}
               </span>
             </button>
           );
@@ -101,6 +126,8 @@ export function TierSelector({
             {}
             <input
               type="number"
+              // min is a multiple of step, so every half-GB up to and
+              // including maxMemoryGb is reachable from the spinner.
               min={0.5}
               max={maxMemoryGb}
               step={0.5}
@@ -119,9 +146,13 @@ export function TierSelector({
             {}
             <input
               type="number"
-              min={0.1}
-              max={capacity?.totalCpus}
-              step={0.25}
+              // Whole cores. Docker accepts fractional --cpus and the preset
+              // ladder still uses it for the sub-core S4, but there is no
+              // reason to hand-allocate a fraction of a core, and the old
+              // min=0.1/step=0.25 ladder made the host maximum unreachable.
+              min={1}
+              max={maxCpus}
+              step={1}
               value={customResources.cpus}
               onChange={(e) =>
                 updateCustom({

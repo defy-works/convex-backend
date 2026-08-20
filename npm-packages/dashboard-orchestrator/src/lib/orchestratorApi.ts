@@ -587,7 +587,6 @@ export async function createCustomDomain(
   deploymentId: number,
   domain: string,
   kind: "api" | "site" = "api",
-  tlsMode: "acme" | "upstream" = "acme",
 ): Promise<CustomDomain> {
   const data = await request<unknown>(
     baseUrl,
@@ -595,7 +594,7 @@ export async function createCustomDomain(
     {
       method: "POST",
       token,
-      body: JSON.stringify({ domain, kind, tlsMode }),
+      body: JSON.stringify({ domain, kind }),
     },
   );
   return customDomainSchema.parse(data);
@@ -628,24 +627,57 @@ export async function deleteCustomDomain(
   );
 }
 
-/**
- * Switch a domain between orchestrator-issued (`acme`) and upstream-terminated
- * TLS. Moving to `acme` starts issuance immediately rather than waiting for
- * the hourly renewal sweep.
- */
-export async function setCustomDomainTlsMode(
+
+// ---------- Team invitations ----------
+
+export const invitationSchema = z.object({
+  id: z.number(),
+  email: z.string(),
+  role: z.string(),
+  code: z.string(),
+  createdAt: z.number(),
+});
+export type Invitation = z.infer<typeof invitationSchema>;
+
+export async function listInvitations(
   baseUrl: string,
   token: string,
-  deploymentId: number,
-  domain: string,
-  tlsMode: "acme" | "upstream",
-): Promise<CustomDomain> {
+  teamId: number,
+): Promise<Invitation[]> {
   const data = await request<unknown>(
     baseUrl,
-    `/api/dashboard/deployments/${deploymentId}/custom_domains/tls_mode`,
-    { method: "POST", token, body: JSON.stringify({ domain, tlsMode }) },
+    `/api/dashboard/teams/${teamId}/invites`,
+    { token },
   );
-  return customDomainSchema.parse(data);
+  return z.array(invitationSchema).parse(data);
+}
+
+export async function createInvitation(
+  baseUrl: string,
+  token: string,
+  teamId: number,
+  email: string,
+  role: string,
+): Promise<void> {
+  await request<unknown>(baseUrl, `/api/dashboard/teams/${teamId}/invites`, {
+    method: "POST",
+    token,
+    body: JSON.stringify({ email, role }),
+  });
+}
+
+/** Withdraw a pending invitation. Team-admin only, and scoped to the team. */
+export async function cancelInvitation(
+  baseUrl: string,
+  token: string,
+  teamId: number,
+  invitationId: number,
+): Promise<void> {
+  await request<unknown>(
+    baseUrl,
+    `/api/dashboard/teams/${teamId}/invites/cancel`,
+    { method: "POST", token, body: JSON.stringify({ invitationId }) },
+  );
 }
 
 export async function verifyCustomDomain(

@@ -21,6 +21,7 @@
 
 use std::{
     collections::BTreeSet,
+    net::IpAddr,
     path::{
         Path,
         PathBuf,
@@ -402,6 +403,161 @@ pub async fn probe_domain(
     classify_probe_response(domain, expected_deployment, status, &body)
 }
 
+/// What a full verification learned about a domain.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DomainDetection {
+    /// `active` only when this deployment answered over the hostname.
+    pub cert_state: String,
+    /// The TLS mode we inferred. `None` means "not confident — leave the
+    /// stored mode alone", which is the case when the domain neither points
+    /// here nor answers as us.
+    pub tls_mode: Option<String>,
+    pub error: Option<String>,
+}
+
+/// Resolve a hostname to its addresses. `Err` carries the resolver's message.
+async fn resolve_ips(host: &str) -> Result<BTreeSet<IpAddr>, String> {
+    // Port is irrelevant; `lookup_host` just needs one to form a socket addr.
+    match tokio::net::lookup_host((host, 443u16)).await {
+        Ok(addrs) => Ok(addrs.map(|a| a.ip()).collect()),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+/// Verify a custom domain end to end, and infer how its TLS is terminated.
+///
+/// Two independent signals, because neither alone is sufficient:
+///
+/// - **Where DNS points.** If the domain resolves to the same addresses as the
+///   orchestrator's own router host, traffic arrives here directly, so nothing
+///   else can be terminating TLS and the certificate has to be ours (`acme`).
+/// - **Whether the deployment answers.** An HTTPS request to the domain must
+///   come back as this deployment. A proxy in front can satisfy this while DNS
+///   points at the proxy — that is exactly what `upstream` means.
+///
+/// A domain that neither resolves here nor answers as us is not verified, and
+/// the error names both resolutions so the operator can see the mismatch.
+pub async fn detect_domain(
+    domain: &str,
+    router_host: &str,
+    expected_deployment: &str,
+) -> DomainDetection {
+    let domain_ips = resolve_ips(domain).await;
+    let router_ips = resolve_ips(router_host).await;
+    let probe = probe_body(domain).await;
+    classify_detection(
+        domain,
+        router_host,
+        expected_deployment,
+        &domain_ips,
+        &router_ips,
+        &probe,
+    )
+}
+
+/// `GET https://<domain>/instance_name`, returning the trimmed body or the
+/// transport error.
+async fn probe_body(domain: &str) -> Result<String, String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let resp = client
+        .get(format!("https://{domain}/instance_name"))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    let status = resp.status().as_u16();
+    let body = resp.text().await.unwrap_or_default();
+    let trimmed = body.trim().to_string();
+    if trimmed.is_empty() {
+        return Err(format!("HTTP {status} with an empty body"));
+    }
+    Ok(trimmed)
+}
+
+fn render_ips(ips: &Result<BTreeSet<IpAddr>, String>) -> String {
+    match ips {
+        Err(e) => format!("does not resolve ({e})"),
+        Ok(set) if set.is_empty() => "does not resolve".to_string(),
+        Ok(set) => format!(
+            "resolves to {}",
+            set.iter()
+                .take(4)
+                .map(|ip| ip.to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+    }
+}
+
+/// The decision `detect_domain` makes from its three signals, split out so the
+/// combinations are testable without DNS or a network.
+fn classify_detection(
+    domain: &str,
+    router_host: &str,
+    expected_deployment: &str,
+    domain_ips: &Result<BTreeSet<IpAddr>, String>,
+    router_ips: &Result<BTreeSet<IpAddr>, String>,
+    probe: &Result<String, String>,
+) -> DomainDetection {
+    let points_here = match (domain_ips, router_ips) {
+        (Ok(d), Ok(r)) => !d.is_empty() && !r.is_empty() && d.intersection(r).next().is_some(),
+        // Can't compare — e.g. the router host is `localhost` in local dev, or
+        // DNS is down. Fall back to what the probe says.
+        _ => false,
+    };
+    let answered_as_us = probe.as_deref().map(|b| b == expected_deployment).unwrap_or(false);
+
+    if answered_as_us {
+        return DomainDetection {
+            cert_state: CERT_STATE_ACTIVE.to_string(),
+            // Reaching us without DNS pointing here means something in front
+            // forwarded the request, and that something owns the certificate.
+            tls_mode: Some(if points_here {
+                TLS_MODE_ACME.to_string()
+            } else {
+                TLS_MODE_UPSTREAM.to_string()
+            }),
+            error: None,
+        };
+    }
+
+    if points_here {
+        // DNS is right, so this is ours to serve — the domain just isn't
+        // serving yet. A freshly added domain sits here until issuance lands.
+        let detail = match probe {
+            Ok(body) => format!(
+                "got `{}`",
+                body.chars().take(80).collect::<String>()
+            ),
+            Err(e) => e.clone(),
+        };
+        return DomainDetection {
+            cert_state: CERT_STATE_PENDING.to_string(),
+            tls_mode: Some(TLS_MODE_ACME.to_string()),
+            error: Some(format!(
+                "DNS for {domain} points at this orchestrator, but it is not \
+                 serving {expected_deployment} yet: {detail}. This is normal \
+                 until the certificate is issued."
+            )),
+        };
+    }
+
+    DomainDetection {
+        cert_state: CERT_STATE_PENDING.to_string(),
+        // Neither signal is conclusive; don't overwrite what is stored.
+        tls_mode: None,
+        error: Some(format!(
+            "DNS for {domain} {}, which is not this orchestrator ({router_host} {}), \
+             and requests to it do not reach {expected_deployment}. Point the record \
+             at {router_host} — if it is behind a CDN, use DNS-only mode.",
+            render_ips(domain_ips),
+            render_ips(router_ips),
+        )),
+    }
+}
+
 /// The decision `probe_domain` makes once a response has arrived, split out so
 /// it can be tested without a network.
 fn classify_probe_response(
@@ -427,6 +583,117 @@ fn classify_probe_response(
              or a router pointing elsewhere — is intercepting requests."
         )),
     )
+}
+
+#[cfg(test)]
+mod detection_tests {
+    use super::*;
+
+    fn ips(list: &[&str]) -> Result<BTreeSet<IpAddr>, String> {
+        Ok(list.iter().map(|s| s.parse().expect("ip")).collect())
+    }
+
+    const ORCH: &[&str] = &["203.0.113.10"];
+    // Cloudflare-style: the record resolves to the proxy, not to us.
+    const CDN: &[&str] = &["104.21.5.5"];
+
+    #[test]
+    fn dns_here_and_serving_is_active_and_ours_to_issue() {
+        let d = classify_detection(
+            "api.example.com",
+            "convex.example.com",
+            "kind-panda-859",
+            &ips(ORCH),
+            &ips(ORCH),
+            &Ok("kind-panda-859".into()),
+        );
+        assert_eq!(d.cert_state, CERT_STATE_ACTIVE);
+        assert_eq!(d.tls_mode.as_deref(), Some(TLS_MODE_ACME));
+        assert_eq!(d.error, None);
+    }
+
+    #[test]
+    fn a_proxy_that_forwards_correctly_is_active_and_upstream() {
+        // Reaching us without DNS pointing here means something in front
+        // terminated TLS and forwarded — that is what `upstream` means, and
+        // it is now inferred rather than declared by the operator.
+        let d = classify_detection(
+            "api.example.com",
+            "convex.example.com",
+            "kind-panda-859",
+            &ips(CDN),
+            &ips(ORCH),
+            &Ok("kind-panda-859".into()),
+        );
+        assert_eq!(d.cert_state, CERT_STATE_ACTIVE);
+        assert_eq!(d.tls_mode.as_deref(), Some(TLS_MODE_UPSTREAM));
+    }
+
+    #[test]
+    fn dns_here_but_not_serving_yet_is_pending_and_ours() {
+        // The state a freshly added domain sits in until issuance lands.
+        let d = classify_detection(
+            "api.example.com",
+            "convex.example.com",
+            "kind-panda-859",
+            &ips(ORCH),
+            &ips(ORCH),
+            &Err("connection refused".into()),
+        );
+        assert_eq!(d.cert_state, CERT_STATE_PENDING);
+        assert_eq!(d.tls_mode.as_deref(), Some(TLS_MODE_ACME));
+        assert!(d.error.expect("error").contains("until the certificate is issued"));
+    }
+
+    #[test]
+    fn pointing_elsewhere_and_not_reaching_us_is_rejected_with_both_resolutions() {
+        // The Cloudflare-challenge case: something answers, but not as us.
+        let d = classify_detection(
+            "backend.prime-reserve.com",
+            "convex.example.com",
+            "kind-panda-859",
+            &ips(CDN),
+            &ips(ORCH),
+            &Ok("<!DOCTYPE html><title>Just a moment...</title>".into()),
+        );
+        assert_eq!(d.cert_state, CERT_STATE_PENDING);
+        // Not confident either way — must not clobber the stored mode.
+        assert_eq!(d.tls_mode, None);
+        let err = d.error.expect("error");
+        assert!(err.contains("104.21.5.5"), "names where it does point: {err}");
+        assert!(err.contains("203.0.113.10"), "names where it should point: {err}");
+        assert!(err.contains("DNS-only"), "tells them how to fix it: {err}");
+    }
+
+    #[test]
+    fn a_domain_that_does_not_resolve_says_so() {
+        let d = classify_detection(
+            "typo.example.com",
+            "convex.example.com",
+            "kind-panda-859",
+            &Err("no such host".into()),
+            &ips(ORCH),
+            &Err("dns error".into()),
+        );
+        assert_eq!(d.cert_state, CERT_STATE_PENDING);
+        assert_eq!(d.tls_mode, None);
+        assert!(d.error.expect("error").contains("does not resolve"));
+    }
+
+    #[test]
+    fn an_unresolvable_router_host_falls_back_to_the_probe() {
+        // `router_host` is `localhost` in local dev, so the IP comparison is
+        // meaningless there. Reaching the deployment must still count.
+        let d = classify_detection(
+            "api.example.com",
+            "localhost",
+            "kind-panda-859",
+            &ips(CDN),
+            &Err("no address".into()),
+            &Ok("kind-panda-859".into()),
+        );
+        assert_eq!(d.cert_state, CERT_STATE_ACTIVE);
+    }
 }
 
 #[cfg(test)]
