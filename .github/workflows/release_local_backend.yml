@@ -98,9 +98,22 @@ jobs:
           cache-from: |
             type=s3,name=convex-backend-${{ matrix.arch }}-${{ github.sha }},prefix=cache/buildkit/,region=${{ vars.AWS_REGION }},bucket=${{ vars.RUNS_ON_S3_BUCKET_CACHE }}
             type=s3,name=convex-backend-${{ matrix.arch }}-${{ github.ref_name }},prefix=cache/buildkit/,region=${{ vars.AWS_REGION }},bucket=${{ vars.RUNS_ON_S3_BUCKET_CACHE }}
+          # Only the per-branch cache is written. Exporting `mode=max` costs
+          # 3-10 minutes of upload on this image, and writing both targets paid
+          # that twice for near-identical content: the per-SHA copy can only
+          # ever be restored by a re-run of the very same commit, which the
+          # per-branch entry already covers by then. It stays in `cache-from`,
+          # where a miss is just a manifest lookup.
           cache-to: |
-            type=s3,name=convex-backend-${{ matrix.arch }}-${{ github.sha }},mode=max,prefix=cache/buildkit/,region=${{ vars.AWS_REGION }},bucket=${{ vars.RUNS_ON_S3_BUCKET_CACHE }}
             type=s3,name=convex-backend-${{ matrix.arch }}-${{ github.ref_name }},mode=max,prefix=cache/buildkit/,region=${{ vars.AWS_REGION }},bucket=${{ vars.RUNS_ON_S3_BUCKET_CACHE }}
+          # Compile cache, independent of the layer cache above. Secrets rather
+          # than build-args so nothing lands in image history; the build falls
+          # back to compiling uncached if any of them is absent.
+          secrets: |
+            r2_access_key=${{ secrets.R2_ACCESS_KEY_ID }}
+            r2_secret_key=${{ secrets.R2_SECRET_ACCESS_KEY }}
+            r2_endpoint=${{ vars.R2_ENDPOINT }}
+            r2_bucket=${{ vars.R2_BUCKET }}
           outputs: push-by-digest=true,type=image,push=true
           provenance: false
           build-args: |

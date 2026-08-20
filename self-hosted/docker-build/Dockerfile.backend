@@ -86,6 +86,38 @@ RUN curl -fsSL https://mise.run | MISE_VERSION="v$(sed -nE 's/^min_version = "([
 # static-lib download to our fork) via hierarchical discovery from the working
 # directory, so it must be present before `cargo chef cook` builds dependencies.
 COPY .cargo/config.toml ./.cargo/config.toml
+
+# sccache, pinned to the version .github/actions/setup-rust already uses for the
+# non-Docker jobs. It caches individual rustc invocations keyed on compiler
+# inputs, which is the property the Docker layer cache does not have: any change
+# to Cargo.lock invalidates the cook layer wholesale, and this fork merges
+# upstream hourly, so that happens often. With sccache the ~490 dependencies
+# whose inputs did not change are fetched instead of rebuilt even when the layer
+# misses. Output is unaffected -- sccache replays the exact compiler artefact.
+ARG TARGETARCH
+RUN set -eux; \
+    case "${TARGETARCH}" in \
+      amd64) sccache_arch=x86_64 ;; \
+      arm64) sccache_arch=aarch64 ;; \
+      *) echo "unsupported TARGETARCH: ${TARGETARCH}" >&2; exit 1 ;; \
+    esac; \
+    url="https://github.com/mozilla/sccache/releases/download/v0.16.0/sccache-v0.16.0-${sccache_arch}-unknown-linux-musl.tar.gz"; \
+    curl -fsSL "$url" -o /tmp/sccache.tar.gz; \
+    tar -xzf /tmp/sccache.tar.gz -C /tmp; \
+    mv /tmp/sccache-v0.16.0-${sccache_arch}-unknown-linux-musl/sccache /usr/local/bin/sccache; \
+    chmod +x /usr/local/bin/sccache; \
+    rm -rf /tmp/sccache.tar.gz /tmp/sccache-v0.16.0-*
+
+# Turns the mounted R2 credentials into an sccache server and echoes the env
+# that enables it, or echoes nothing at all. Sourced by both cargo layers below.
+#
+# Fail-open by construction: a missing secret, an unreachable bucket or a server
+# that will not start leaves RUSTC_WRAPPER unset and the build simply compiles
+# without the cache. A compile cache must never be able to turn a slow release
+# into a failed one -- the same rule .github/actions/setup-rust follows.
+COPY self-hosted/docker-build/sccache-env.sh /usr/local/bin/sccache-env
+RUN chmod +x /usr/local/bin/sccache-env
+
 COPY --from=chef /tmp/recipe.json recipe.json
 # Use cargo-chef to build dependencies from the recipe created in the first stage
 # This step will be cached unless dependencies change
@@ -109,7 +141,14 @@ COPY --from=chef /tmp/recipe.json recipe.json
 # This cannot affect the published image. Everything here is the `build`
 # stage; the final stage starts `FROM ubuntu:noble` and copies only the two
 # binaries out, so image content and size are byte-for-byte unchanged.
-RUN PROTOC="$(mise which protoc)" cargo chef cook --release --recipe-path recipe.json
+RUN --mount=type=secret,id=r2_access_key --mount=type=secret,id=r2_secret_key \
+    --mount=type=secret,id=r2_endpoint --mount=type=secret,id=r2_bucket <<EOF
+set -e
+eval "\$(sccache-env)"
+export PROTOC="\$(mise which protoc)"
+cargo chef cook --release --recipe-path recipe.json
+if [ -n "\${RUSTC_WRAPPER:-}" ]; then sccache --show-stats || true; fi
+EOF
 # Now copy everything else over -- we've minimized the set of files that cause a full `pnpm install` or `cargo build` to run.
 COPY . .
 
@@ -122,12 +161,17 @@ ENV VERGEN_GIT_COMMIT_TIMESTAMP=${VERGEN_GIT_COMMIT_TIMESTAMP}
 # The cargo mounts are deliberately absent here — see the cook layer above.
 # They must match that layer exactly, or a mount here shadows the warm
 # target/, registry and git db baked into it and forces a full recompile.
-RUN --mount=type=cache,target=/root/.local/share/pnpm/store,sharing=locked <<EOF
-export PROTOC="$(mise which protoc)"
+RUN --mount=type=cache,target=/root/.local/share/pnpm/store,sharing=locked \
+    --mount=type=secret,id=r2_access_key --mount=type=secret,id=r2_secret_key \
+    --mount=type=secret,id=r2_endpoint --mount=type=secret,id=r2_bucket <<EOF
+set -e
+eval "\$(sccache-env)"
+export PROTOC="\$(mise which protoc)"
 cargo build --release -p local_backend --bin convex-local-backend
 cp target/release/convex-local-backend .
 cargo build --release -p keybroker --bin generate_key
 cp target/release/generate_key .
+if [ -n "\${RUSTC_WRAPPER:-}" ]; then sccache --show-stats || true; fi
 EOF
 ARG debug
 RUN if [[ -z "$debug" ]]; then strip ./convex-local-backend; strip ./generate_key; fi
