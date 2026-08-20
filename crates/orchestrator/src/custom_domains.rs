@@ -724,13 +724,13 @@ mod detection_tests {
     }
 
     const ORCH: &[&str] = &["203.0.113.10"];
-    const CDN: &[&str] = &["104.21.5.5"];
+    const CDN: &[&str] = &["198.51.100.5"];
     // The orchestrator resolving its own router host from inside a container
     // sees the machine's private view, never the address a customer's record
-    // could match. Observed: defyhost.com -> docker0, a second bridge, the VPC
-    // address, and IPv6 link-local.
+    // could match: the docker0 bridge, a second bridge, the host's private
+    // address on its network, and an IPv6 link-local.
     const CONTAINER_VIEW: &[&str] =
-        &["172.17.0.1", "172.18.0.1", "172.31.46.31", "fe80::4f2:3bff:fe06:9111"];
+        &["172.17.0.1", "172.18.0.1", "172.31.0.2", "fe80::1"];
 
     fn classify(
         domain_ips: &Result<BTreeSet<IpAddr>, String>,
@@ -809,7 +809,7 @@ mod detection_tests {
         assert_eq!(d.cert_state, CERT_STATE_PENDING);
         assert_eq!(d.tls_mode, None);
         let err = d.error.expect("error");
-        assert!(err.contains("104.21.5.5"), "{err}");
+        assert!(err.contains("198.51.100.5"), "{err}");
         assert!(err.contains("203.0.113.10"), "{err}");
     }
 
@@ -820,9 +820,9 @@ mod detection_tests {
         // IP scores as a bot. The old message told the operator to change DNS,
         // which was wrong — DNS was fine.
         let d = classify_detection(
-            "backend.prime-reserve.com",
-            "defyhost.com",
-            "calm-lynx-792",
+            "backend.example.net",
+            "example.com",
+            "swift-otter-123",
             TOKEN,
             &ips(CDN),
             &ips(CONTAINER_VIEW),

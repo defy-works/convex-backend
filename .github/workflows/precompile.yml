@@ -117,6 +117,8 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           r2-access-key: ${{ secrets.R2_ACCESS_KEY_ID }}
           r2-secret-key: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          r2-endpoint: ${{ vars.R2_ENDPOINT }}
+          r2-bucket: ${{ vars.R2_BUCKET }}
 
       # Restore-only: OSS can't write this cache (cache-write role is get-convex/convex-only).
       - name: Restore pnpm artifacts

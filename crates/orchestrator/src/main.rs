@@ -100,7 +100,7 @@ struct Args {
     router_host: String,
 
     /// Optional separate hostname for HTTP-actions traffic, e.g.
-    /// `defysite.com`. When set, site URLs become `<deployment>.<host>`
+    /// `example-site.com`. When set, site URLs become `<deployment>.<host>`
     /// rather than `<deployment>-site.<router_host>`. Browsers must resolve
     /// `*.<site_router_host>` to the proxy. The legacy hostname keeps
     /// working regardless.

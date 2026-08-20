@@ -20,6 +20,19 @@ inputs:
     required: false
     default: ""
     description: "pass vars.AWS_REGION for the RunsOn cache bucket"
+  # Passed in rather than written here: this repository is public, and the R2
+  # endpoint embeds the Cloudflare account ID. Repository variables are not
+  # public, so the identifier stays out of the source while the cache keeps
+  # working. Unset simply disables the R2 fallback (the step logs a notice and
+  # sccache uses local disk), so a fork without these builds fine.
+  r2-endpoint:
+    required: false
+    default: ""
+    description: "pass vars.R2_ENDPOINT — the S3-compatible R2 endpoint URL"
+  r2-bucket:
+    required: false
+    default: ""
+    description: "pass vars.R2_BUCKET — the R2 bucket holding the sccache cache"
 
 runs:
   using: composite
@@ -126,8 +139,8 @@ runs:
     - name: Start sccache
       shell: bash
       env:
-        SCCACHE_ENDPOINT: https://ea26d42490b89665b79782576c63381c.r2.cloudflarestorage.com
-        SCCACHE_BUCKET: defy-convex-runner
+        SCCACHE_ENDPOINT: ${{ inputs.r2-endpoint }}
+        SCCACHE_BUCKET: ${{ inputs.r2-bucket }}
         SCCACHE_REGION: auto
         # Never idle-exit. Linking test binaries doesn't go through sccache, so
         # a long link tail (>600s, the default idle timeout) makes the server
@@ -149,7 +162,8 @@ runs:
           unset SCCACHE_ENDPOINT
           export SCCACHE_BUCKET="$RUNS_ON_BUCKET" SCCACHE_S3_KEY_PREFIX=cache/sccache
           export SCCACHE_REGION="${RUNS_ON_REGION:-us-east-1}" AWS_REGION="${RUNS_ON_REGION:-us-east-1}"
-        elif [ -n "$R2_ACCESS_KEY" ] && [ -n "$R2_SECRET_KEY" ]; then
+        elif [ -n "$R2_ACCESS_KEY" ] && [ -n "$R2_SECRET_KEY" ] \
+          && [ -n "$SCCACHE_ENDPOINT" ] && [ -n "$SCCACHE_BUCKET" ]; then
           export AWS_ACCESS_KEY_ID=$R2_ACCESS_KEY AWS_SECRET_ACCESS_KEY=$R2_SECRET_KEY
           unset AWS_SESSION_TOKEN
           # PRs from forks can't be trusted with cache writes.
@@ -157,7 +171,10 @@ runs:
             export SCCACHE_S3_RW_MODE=READ_ONLY
           fi
         else
-          echo "::notice::R2 cache credentials not available; sccache uses local disk cache only"
+          # Endpoint and bucket now arrive as inputs (vars.R2_ENDPOINT /
+          # vars.R2_BUCKET) rather than being written into this public repo, so
+          # "not configured" covers a missing variable as well as a missing key.
+          echo "::notice::R2 cache not configured; sccache uses local disk cache only"
           unset SCCACHE_BUCKET SCCACHE_ENDPOINT SCCACHE_REGION
         fi
         # Try to start sccache up to 3 times. Sometimes it times out for unknown reasons.

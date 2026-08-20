@@ -97,7 +97,7 @@ services:
       # falls back to http://localhost. Explicit PUBLIC_ORIGIN overrides.
       - CONVEX_ORCHESTRATOR_PUBLIC_ORIGIN=${PUBLIC_ORIGIN:-${DASHBOARD_HOST:+https://}${DASHBOARD_HOST:-http://localhost}}
       - CONVEX_ORCHESTRATOR_ROUTER_HOST=${ROUTER_HOST:-localhost}
-      # Optional dedicated host for HTTP actions, e.g. `defysite.com`. When
+      # Optional dedicated host for HTTP actions, e.g. `example-site.com`. When
       # set, a deployment's site URL becomes `<name>.${SITE_ROUTER_HOST}`
       # instead of `<name>-site.${ROUTER_HOST}`. The legacy hostname keeps
       # routing either way, so existing apps don't break; a deployment only

@@ -35,12 +35,12 @@ jest.mock("../lib/orchestratorApi", () => ({
 }));
 
 const DEFAULTS = {
-  currentUrl: "https://shiny-ibis.defyhost.com",
-  currentSiteUrl: "https://shiny-ibis-site.defyhost.com",
+  currentUrl: "https://shiny-ibis.example.com",
+  currentSiteUrl: "https://shiny-ibis-site.example.com",
   desiredUrl: null,
   desiredSiteUrl: null,
-  defaultUrl: "https://shiny-ibis.defyhost.com",
-  defaultSiteUrl: "https://shiny-ibis-site.defyhost.com",
+  defaultUrl: "https://shiny-ibis.example.com",
+  defaultSiteUrl: "https://shiny-ibis-site.example.com",
   restartPending: false,
 };
 
@@ -71,7 +71,7 @@ beforeEach(() => {
         lastError: null,
       },
     ],
-    targetHost: "defyhost.com",
+    targetHost: "example.com",
     routingEnabled: true,
   });
 });
@@ -85,7 +85,7 @@ test("offers attached domains of the matching surface alongside the default", as
     "Database (Convex API)",
   ) as HTMLSelectElement;
   const values = Array.from(select.options).map((o) => o.value);
-  expect(values).toContain("https://shiny-ibis.defyhost.com");
+  expect(values).toContain("https://shiny-ibis.example.com");
   expect(values).toContain("https://backend.dayqwest.app");
   // A `site` domain must not be selectable as the database URL.
   expect(values).not.toContain("https://api.dayqwest.app");
@@ -103,7 +103,7 @@ test("a canonical URL whose domain was deleted collapses to the default and can 
   });
   mockListDomains.mockResolvedValue({
     domains: [],
-    targetHost: "defyhost.com",
+    targetHost: "example.com",
     routingEnabled: true,
   });
 
@@ -115,7 +115,7 @@ test("a canonical URL whose domain was deleted collapses to the default and can 
   const select = screen.getByLabelText(
     "Database (Convex API)",
   ) as HTMLSelectElement;
-  expect(select.value).toBe("https://shiny-ibis.defyhost.com");
+  expect(select.value).toBe("https://shiny-ibis.example.com");
   expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
 });
 
