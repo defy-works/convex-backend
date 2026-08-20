@@ -41,7 +41,6 @@ export function CanonicalUrlsCard({
   const [site, setSite] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
-  const [reachability, setReachability] = useState<string | null>(null);
   const [restartOpen, setRestartOpen] = useState(false);
   const [restarting, setRestarting] = useState(false);
 
@@ -101,13 +100,8 @@ export function CanonicalUrlsCard({
   const onSave = async () => {
     setSaving(true);
     setFormError(null);
-    setReachability(null);
     try {
-      const saved = await save({ url: cloudValue, siteUrl: siteValue });
-      // The save succeeded; the URL just may not route here yet. Surfaced as a
-      // warning rather than an error because the usual causes (DNS still
-      // propagating) resolve on their own.
-      setReachability(saved?.reachabilityWarning ?? null);
+      await save({ url: cloudValue, siteUrl: siteValue });
     } catch (err) {
       setFormError((err as Error).message);
     } finally {
@@ -184,23 +178,6 @@ export function CanonicalUrlsCard({
         <p className="mt-3 text-xs text-content-error" role="alert">
           {formError}
         </p>
-      )}
-
-      {reachability && (
-        <div
-          className="mt-3 rounded-sm bg-background-tertiary/40 p-3"
-          role="alert"
-        >
-          <p className="text-sm font-medium text-content-warning">
-            This URL doesn&apos;t reach the deployment
-          </p>
-          <p className="mt-1 text-xs text-content-secondary">{reachability}</p>
-          <p className="mt-1 text-xs text-content-secondary">
-            The setting was saved. The dashboard keeps working either way — it
-            connects over the deployment&apos;s own hostname — but apps using
-            this URL will fail until it resolves here.
-          </p>
-        </div>
       )}
 
       {canonical.restartPending && !dirty && (

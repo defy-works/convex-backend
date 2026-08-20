@@ -32,6 +32,7 @@ use orchestrator_api_types::dashboard::{
     CustomDomainArgs,
     ListCustomDomains,
     SetCanonicalUrlsArgs,
+    SetCustomDomainTlsModeArgs,
     VerifyCustomDomainResponse,
 };
 
@@ -67,6 +68,10 @@ pub fn router() -> Router<OrchestratorState> {
         .route(
             "/deployments/{deployment_id}/custom_domains/retry",
             post(retry_custom_domain),
+        )
+        .route(
+            "/deployments/{deployment_id}/custom_domains/tls_mode",
+            post(set_custom_domain_tls_mode),
         )
         .route(
             "/deployments/{deployment_id}/canonical_urls",
@@ -114,9 +119,6 @@ async fn canonical_urls_for(
         desired_site_url: deployment.desired_site_url,
         default_url,
         default_site_url,
-        // Only the setter probes; reading the current values must not pay for
-        // a network round trip on every dashboard page load.
-        reachability_warning: None,
     })
 }
 
@@ -156,9 +158,11 @@ pub(crate) async fn set_canonical_urls(
         .await
         .map_err(ApiError::Internal)?;
 
-    // Only a hostname this orchestrator actually routes to this deployment
-    // can be canonical. Anything else would hand clients a URL that resolves
-    // somewhere else, or nowhere.
+    // Attachment alone is not enough: it proves the operator owns the name, not
+    // that requests to it arrive here. A canonical URL that doesn't route is
+    // what breaks every client of the deployment, so the domain has to be
+    // *verified* — `cert_state == "active"`, which `probe_domain` only sets
+    // after the deployment identified itself over that hostname.
     let check = |value: &Option<String>, kind: &str, default: &str| -> Result<(), ApiError> {
         let Some(url) = value.as_deref() else {
             return Ok(());
@@ -167,13 +171,25 @@ pub(crate) async fn set_canonical_urls(
             return Ok(());
         }
         let host = custom_domains::host_of(url);
-        if domains.iter().any(|d| d.kind == kind && d.domain == host) {
-            Ok(())
-        } else {
-            Err(ApiError::BadRequest(format!(
+        let Some(domain) = domains.iter().find(|d| d.kind == kind && d.domain == host) else {
+            return Err(ApiError::BadRequest(format!(
                 "{host} is not a custom domain attached to this deployment for `{kind}`"
-            )))
+            )));
+        };
+        if domain.cert_state == custom_domains::CERT_STATE_ACTIVE {
+            return Ok(());
         }
+        Err(ApiError::BadRequest(format!(
+            "{host} has not been verified yet (state `{}`). Use Check on the \
+             domain until it reports active — that confirms a request to {host} \
+             actually reaches this deployment — then set it as canonical.{}",
+            domain.cert_state,
+            domain
+                .last_error
+                .as_deref()
+                .map(|e| format!(" Last check: {e}"))
+                .unwrap_or_default()
+        )))
     };
     check(&args.url, custom_domains::KIND_API, &current.default_url)?;
     check(
@@ -194,66 +210,9 @@ pub(crate) async fn set_canonical_urls(
         .await
         .map_err(ApiError::Internal)?;
 
-    let mut result = canonical_urls_for(&state, deployment_id).await?;
-    // Best-effort end-to-end check. The validation above proves the hostname
-    // is attached to this deployment; it does not prove a request to it lands
-    // here. Non-blocking on purpose — DNS may simply not have propagated yet,
-    // and refusing the save would be worse than reporting it.
-    if let Some(url) = url.as_deref() {
-        let deployment = state
-            .storage
-            .get_deployment(deployment_id)
-            .await
-            .map_err(ApiError::Internal)?;
-        if let Some(deployment) = deployment {
-            result.reachability_warning = probe_reaches_deployment(url, &deployment.name).await;
-        }
-    }
-    Ok(Json(result))
+    Ok(Json(canonical_urls_for(&state, deployment_id).await?))
 }
 
-/// `GET <url>/instance_name` and confirm this deployment answers.
-///
-/// That endpoint is unauthenticated and returns the backend's own instance
-/// name, so it distinguishes "reaches this deployment" from "reaches
-/// something else" — a CDN challenge page, another tenant, a parked domain —
-/// which is precisely the failure attaching a custom domain cannot rule out.
-/// Returns `None` when the deployment answered, or `Some(warning)` otherwise.
-async fn probe_reaches_deployment(url: &str, deployment_name: &str) -> Option<String> {
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(5))
-        .build()
-        .ok()?;
-    let probe_url = format!("{}/instance_name", url.trim_end_matches('/'));
-    match client.get(&probe_url).send().await {
-        Err(e) => Some(format!(
-            "Could not reach {url}: {e}. Requests to this URL will fail until DNS \
-             and TLS resolve to this orchestrator."
-        )),
-        Ok(resp) => {
-            let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            let answered = body.trim();
-            if status.is_success() && answered == deployment_name {
-                None
-            } else if status.is_success() {
-                Some(format!(
-                    "{url} answered, but not as this deployment (expected \
-                     `{deployment_name}`, got `{}`). Something in front of the \
-                     backend — a CDN, proxy, or another service on this hostname \
-                     — is intercepting requests.",
-                    answered.chars().take(60).collect::<String>()
-                ))
-            } else {
-                Some(format!(
-                    "{url} returned HTTP {status} instead of this deployment's \
-                     name. Something in front of the backend is intercepting \
-                     requests; a CDN bot-protection challenge is the usual cause."
-                ))
-            }
-        },
-    }
-}
 
 fn to_api(record: crate::storage::CustomDomainRecord) -> CustomDomain {
     CustomDomain {
@@ -470,6 +429,65 @@ pub(crate) async fn retry_custom_domain(
 
 #[utoipa::path(
     post,
+    path = "/api/dashboard/deployments/{deployment_id}/custom_domains/tls_mode",
+    params(("deployment_id" = i64, Path)),
+    request_body = SetCustomDomainTlsModeArgs,
+    responses(
+        (status = 200, body = CustomDomain),
+        (status = 400, description = "unknown domain or TLS mode"),
+    ),
+    tag = "dashboard",
+)]
+pub(crate) async fn set_custom_domain_tls_mode(
+    _auth: AuthIdentity,
+    State(state): State<OrchestratorState>,
+    Path(_deployment_id): Path<i64>,
+    Json(args): Json<SetCustomDomainTlsModeArgs>,
+) -> ApiResult<Json<CustomDomain>> {
+    let domain = custom_domains::validate_domain(&args.domain)
+        .map_err(|e| ApiError::BadRequest(e.to_string()))?;
+    let tls_mode = custom_domains::validate_tls_mode(&args.tls_mode)
+        .map_err(|e| ApiError::BadRequest(e.to_string()))?;
+
+    let record = state
+        .storage
+        .get_custom_domain(&domain)
+        .await
+        .map_err(ApiError::Internal)?
+        .ok_or_else(|| ApiError::BadRequest(format!("{domain} is not configured")))?;
+
+    if record.tls_mode == tls_mode {
+        return Ok(Json(to_api(record)));
+    }
+
+    state
+        .storage
+        .set_custom_domain_tls_mode(&domain, &tls_mode)
+        .await
+        .map_err(ApiError::Internal)?;
+
+    // Moving to `acme` means we now own the certificate, so order one straight
+    // away instead of leaving the domain dark until the hourly renewal sweep
+    // notices it. `spawn_issuance` re-syncs Traefik first, which is what makes
+    // the HTTP-01 challenge reachable. Moving to `upstream` only needs the
+    // router rewritten — the certificate lives in front of us.
+    if tls_mode == custom_domains::TLS_MODE_ACME {
+        spawn_issuance(state.clone(), domain.clone());
+    } else {
+        spawn_traefik_sync(state.clone());
+    }
+
+    let updated = state
+        .storage
+        .get_custom_domain(&domain)
+        .await
+        .map_err(ApiError::Internal)?
+        .ok_or_else(|| ApiError::BadRequest(format!("{domain} is not configured")))?;
+    Ok(Json(to_api(updated)))
+}
+
+#[utoipa::path(
+    post,
     path = "/api/dashboard/deployments/{deployment_id}/custom_domains/verify",
     params(("deployment_id" = i64, Path)),
     request_body = CustomDomainArgs,
@@ -485,7 +503,8 @@ pub(crate) async fn verify_custom_domain(
     let domain = custom_domains::validate_domain(&args.domain)
         .map_err(|e| ApiError::BadRequest(e.to_string()))?;
 
-    let (cert_state, error) = custom_domains::probe_domain(&domain).await;
+    let deployment_name = deployment_name_for_domain(&state, &domain).await?;
+    let (cert_state, error) = custom_domains::probe_domain(&domain, &deployment_name).await;
 
     state
         .storage
@@ -498,6 +517,34 @@ pub(crate) async fn verify_custom_domain(
         cert_state,
         error,
     }))
+}
+
+/// The deployment a custom domain is attached to, by name.
+///
+/// `probe_domain` needs it to tell "this deployment answered" apart from
+/// "something answered", which is the whole basis of the `active` state.
+async fn deployment_name_for_domain(
+    state: &OrchestratorState,
+    domain: &str,
+) -> ApiResult<String> {
+    let record = state
+        .storage
+        .get_custom_domain(domain)
+        .await
+        .map_err(ApiError::Internal)?
+        .ok_or_else(|| ApiError::BadRequest(format!("{domain} is not configured")))?;
+    let deployment = state
+        .storage
+        .get_deployment(record.deployment_id)
+        .await
+        .map_err(ApiError::Internal)?
+        .ok_or_else(|| {
+            ApiError::Internal(anyhow::anyhow!(
+                "custom domain {domain} references deployment {} which no longer exists",
+                record.deployment_id
+            ))
+        })?;
+    Ok(deployment.name)
 }
 
 /// Re-renders the Traefik config off the request path. Used where there is no
@@ -584,7 +631,17 @@ async fn issue_now(state: &OrchestratorState, domain: &str) -> anyhow::Result<()
     // being served before calling the domain active.
     custom_domains::sync_traefik_config(state).await?;
 
-    let (cert_state, error) = custom_domains::probe_domain(domain).await;
+    let deployment = state
+        .storage
+        .get_deployment(record.deployment_id)
+        .await?
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "custom domain {domain} references deployment {} which no longer exists",
+                record.deployment_id
+            )
+        })?;
+    let (cert_state, error) = custom_domains::probe_domain(domain, &deployment.name).await;
     state
         .storage
         .set_custom_domain_status(domain, &cert_state, error.as_deref())

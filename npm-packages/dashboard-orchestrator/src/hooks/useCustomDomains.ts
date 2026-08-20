@@ -4,6 +4,7 @@ import {
   deleteCustomDomain,
   listCustomDomains,
   retryCustomDomain,
+  setCustomDomainTlsMode,
   verifyCustomDomain,
 } from "../lib/orchestratorApi";
 import { useAccessToken } from "../lib/useOrchestratorToken";
@@ -43,6 +44,17 @@ export function useCustomDomains(deploymentId: number | undefined) {
     await mutate();
   };
 
+  /**
+   * Switch a domain's TLS mode. Going to `acme` orders a certificate on the
+   * spot, so the row comes back `pending` and the poll above shows it move to
+   * `issuing` then `active`.
+   */
+  const setTlsMode = async (domain: string, tlsMode: "acme" | "upstream") => {
+    if (!token || !deploymentId) return;
+    await setCustomDomainTlsMode(url, token, deploymentId, domain, tlsMode);
+    await mutate();
+  };
+
   // Returns the probe result so the caller can surface *why* a domain is
   // still pending — the causes (DNS not pointed here, ACME rate limit) are
   // only fixable by the operator.
@@ -62,6 +74,7 @@ export function useCustomDomains(deploymentId: number | undefined) {
     add,
     remove,
     retry,
+    setTlsMode,
     verify,
   };
 }

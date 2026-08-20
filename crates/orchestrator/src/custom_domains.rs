@@ -258,6 +258,13 @@ pub fn validate_kind(kind: &str) -> anyhow::Result<String> {
 pub const TLS_MODE_ACME: &str = "acme";
 pub const TLS_MODE_UPSTREAM: &str = "upstream";
 
+/// `cert_state` values. `active` is only ever written by `probe_domain` after
+/// the deployment identified itself over the hostname, so it is the one state
+/// that proves the domain routes here — which is what gates making it
+/// canonical.
+pub const CERT_STATE_ACTIVE: &str = "active";
+pub const CERT_STATE_PENDING: &str = "pending";
+
 /// The bare hostname inside an origin, e.g. `https://api.example.com:8443/x`
 /// -> `api.example.com`. Used to decide whether a canonical URL points at a
 /// given custom domain; returns the input unchanged when it is already bare.
@@ -359,11 +366,21 @@ fn write_atomic(path: &Path, body: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Probes the domain over HTTPS to confirm Traefik is serving it with a
-/// certificate the platform's own TLS stack accepts. Issuance succeeding
-/// doesn't prove the routing works, so the dashboard's "active" state is
-/// driven from this rather than from the ACME result.
-pub async fn probe_domain(domain: &str) -> (String, Option<String>) {
+/// Probes the domain over HTTPS and confirms **this deployment** answers.
+///
+/// `/instance_name` is unauthenticated and returns the backend's own instance
+/// name, so comparing the body is what separates "reaches this deployment"
+/// from "reaches something". This used to treat any HTTP response as proof,
+/// which made `active` meaningless: a CDN bot-protection challenge, a parked
+/// domain, another tenant, or Traefik's own 404 on an unrouted host all
+/// answer with a valid TLS handshake and some HTTP status. The Check button
+/// reported `active` for every one of them.
+///
+/// Returns `("active", None)` only when the deployment identifies itself.
+pub async fn probe_domain(
+    domain: &str,
+    expected_deployment: &str,
+) -> (String, Option<String>) {
     let url = format!("https://{domain}/instance_name");
     let client = match reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
@@ -373,11 +390,119 @@ pub async fn probe_domain(domain: &str) -> (String, Option<String>) {
         Err(e) => return ("pending".to_string(), Some(e.to_string())),
     };
 
-    match client.get(&url).send().await {
-        // Any HTTP response at all means TLS completed against a cert the
-        // client trusts. The status code reflects the backend, not the domain.
-        Ok(_) => ("active".to_string(), None),
-        Err(e) => ("pending".to_string(), Some(e.to_string())),
+    let resp = match client.get(&url).send().await {
+        Ok(r) => r,
+        // No TLS handshake, DNS failure, timeout — nothing is being served
+        // here for us yet.
+        Err(e) => return ("pending".to_string(), Some(e.to_string())),
+    };
+
+    let status = resp.status().as_u16();
+    let body = resp.text().await.unwrap_or_default();
+    classify_probe_response(domain, expected_deployment, status, &body)
+}
+
+/// The decision `probe_domain` makes once a response has arrived, split out so
+/// it can be tested without a network.
+fn classify_probe_response(
+    domain: &str,
+    expected_deployment: &str,
+    status: u16,
+    body: &str,
+) -> (String, Option<String>) {
+    let answered = body.trim();
+    if answered == expected_deployment {
+        return (CERT_STATE_ACTIVE.to_string(), None);
+    }
+    // A response arrived but it is not this deployment. Quote a bounded slice
+    // of what did answer — an HTML challenge page is the usual culprit and
+    // recognisable from its first line.
+    let excerpt: String = answered.chars().take(80).collect();
+    (
+        CERT_STATE_PENDING.to_string(),
+        Some(format!(
+            "{domain} answered with HTTP {status} but did not identify as \
+             `{expected_deployment}`; got `{excerpt}`. Something in front of \
+             the backend — a CDN challenge, another service on this hostname, \
+             or a router pointing elsewhere — is intercepting requests."
+        )),
+    )
+}
+
+#[cfg(test)]
+mod probe_tests {
+    use super::*;
+
+    // The bug this guards: the probe used to treat *any* HTTP response as
+    // proof, so Check reported `active` for a CDN challenge page, a parked
+    // domain, another tenant, or Traefik's own 404 on an unrouted host.
+
+    #[test]
+    fn the_deployment_identifying_itself_is_active() {
+        let (state, err) = classify_probe_response(
+            "api.example.com",
+            "kind-panda-859",
+            200,
+            "kind-panda-859",
+        );
+        assert_eq!(state, CERT_STATE_ACTIVE);
+        assert_eq!(err, None);
+    }
+
+    #[test]
+    fn trailing_whitespace_still_counts_as_a_match() {
+        // The endpoint returns a bare string; curl-style newlines must not
+        // make a working domain look broken.
+        let (state, _) = classify_probe_response(
+            "api.example.com",
+            "kind-panda-859",
+            200,
+            "kind-panda-859\n",
+        );
+        assert_eq!(state, CERT_STATE_ACTIVE);
+    }
+
+    #[test]
+    fn a_cdn_challenge_page_is_not_active() {
+        let (state, err) = classify_probe_response(
+            "backend.prime-reserve.com",
+            "kind-panda-859",
+            403,
+            "<!DOCTYPE html><html lang=\"en-US\"><head><title>Just a moment...</title>",
+        );
+        assert_eq!(state, CERT_STATE_PENDING);
+        let err = err.expect("a mismatch must explain itself");
+        assert!(err.contains("did not identify as"), "{err}");
+        assert!(err.contains("Just a moment"), "excerpt must be quoted: {err}");
+    }
+
+    #[test]
+    fn another_deployment_answering_is_not_active() {
+        // Two deployments behind the same wildcard: routing sends the request
+        // to the wrong container. Answering successfully is not enough.
+        let (state, _) = classify_probe_response(
+            "api.example.com",
+            "kind-panda-859",
+            200,
+            "sunny-deer-163",
+        );
+        assert_eq!(state, CERT_STATE_PENDING);
+    }
+
+    #[test]
+    fn an_empty_body_is_not_active() {
+        let (state, _) =
+            classify_probe_response("api.example.com", "kind-panda-859", 200, "");
+        assert_eq!(state, CERT_STATE_PENDING);
+    }
+
+    #[test]
+    fn a_long_html_body_is_truncated_in_the_error() {
+        let body = "x".repeat(5000);
+        let (_, err) =
+            classify_probe_response("api.example.com", "kind-panda-859", 200, &body);
+        // Bounded so a whole HTML page can't land in a DB column or the UI.
+        assert!(err.expect("error").len() < 400);
     }
 }
 

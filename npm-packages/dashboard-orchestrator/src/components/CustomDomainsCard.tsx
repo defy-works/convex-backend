@@ -44,6 +44,7 @@ export function CustomDomainsCard({
     add,
     remove,
     retry,
+    setTlsMode: applyTlsMode,
     verify,
   } = useCustomDomains(deploymentId);
 
@@ -88,6 +89,23 @@ export function CustomDomainsCard({
     setBusy(domain);
     try {
       await retry(domain);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  /**
+   * Take over TLS for a domain that was terminating upstream. Issuance starts
+   * immediately, so the row goes pending -> issuing -> active under the poll
+   * without the operator having to remove and re-add the domain.
+   */
+  const onIssueCertificate = async (domain: string) => {
+    setBusy(domain);
+    setProbeErrors((prev) => ({ ...prev, [domain]: "" }));
+    try {
+      await applyTlsMode(domain, "acme");
+    } catch (err) {
+      setProbeErrors((prev) => ({ ...prev, [domain]: (err as Error).message }));
     } finally {
       setBusy(null);
     }
@@ -235,6 +253,17 @@ export function CustomDomainsCard({
                     onClick={() => void onRetry(d.domain)}
                   >
                     Retry
+                  </Button>
+                )}
+                {d.tlsMode === "upstream" && (
+                  <Button
+                    size="xs"
+                    variant="neutral"
+                    disabled={busy === d.domain}
+                    onClick={() => void onIssueCertificate(d.domain)}
+                    tip="Stop relying on the upstream terminator and have this orchestrator issue and renew a Let's Encrypt certificate for the domain. Starts immediately."
+                  >
+                    {busy === d.domain ? "Starting…" : "Issue certificate"}
                   </Button>
                 )}
                 <Button

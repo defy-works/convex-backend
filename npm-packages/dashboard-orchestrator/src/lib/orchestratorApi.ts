@@ -73,6 +73,48 @@ export class OrchestratorApiError extends Error {
 
 // ---------- Internals ----------
 
+/** Number of extra attempts for a read that died before producing a response. */
+const NETWORK_RETRIES = 2;
+const RETRY_DELAY_MS = 400;
+
+/**
+ * `fetch`, retrying a **read** that failed at the transport layer.
+ *
+ * Adding or removing a custom domain rewrites Traefik's dynamic config, and
+ * Traefik reloads when it lands. Dashboard traffic travels back through that
+ * same Traefik, so the reload can drop an in-flight connection — and the
+ * request most likely to be in flight is the list refetch the mutation itself
+ * triggers. That surfaced as "Could not load custom domains: NetworkError when
+ * attempting to fetch resource" for an operation that had actually succeeded.
+ *
+ * Only retried when there is no response at all (`fetch` rejects, which the
+ * browser does for a dropped connection) and only for GET, which is
+ * idempotent. A mutation that may have already been applied is never replayed,
+ * and any HTTP status — including 5xx — is returned untouched for the caller
+ * to interpret.
+ */
+async function fetchWithRetry(
+  url: string,
+  init: RequestInit,
+): Promise<Response> {
+  const method = (init.method ?? "GET").toUpperCase();
+  // Total attempts, not extra ones — so the delay below is only paid between
+  // attempts that will actually happen. A mutation gets exactly one.
+  const attempts = method === "GET" ? NETWORK_RETRIES + 1 : 1;
+  let lastError: unknown;
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    try {
+      return await fetch(url, init);
+    } catch (err) {
+      lastError = err;
+      if (attempt < attempts - 1) {
+        await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS));
+      }
+    }
+  }
+  throw lastError;
+}
+
 async function request<T>(
   baseUrl: string,
   path: string,
@@ -88,7 +130,7 @@ async function request<T>(
     headers.Authorization = `Bearer ${init.token}`;
   }
   const url = `${baseUrl.replace(/\/$/, "")}${path}`;
-  const res = await fetch(url, { ...init, headers });
+  const res = await fetchWithRetry(url, { ...init, headers });
   if (!res.ok) {
     let message = res.statusText;
     let code: string | undefined;
@@ -495,12 +537,6 @@ export const canonicalUrlsSchema = z.object({
   defaultUrl: z.string(),
   defaultSiteUrl: z.string(),
   restartPending: z.boolean(),
-  /**
-   * Set when a canonical URL saved fine but did not actually reach the
-   * deployment when probed — a CDN answering with its own challenge page,
-   * DNS not propagated, another service on the hostname.
-   */
-  reachabilityWarning: z.string().nullish(),
 });
 export type CanonicalUrls = z.infer<typeof canonicalUrlsSchema>;
 
@@ -590,6 +626,26 @@ export async function deleteCustomDomain(
     `/api/dashboard/deployments/${deploymentId}/custom_domains/delete`,
     { method: "POST", token, body: JSON.stringify({ domain }) },
   );
+}
+
+/**
+ * Switch a domain between orchestrator-issued (`acme`) and upstream-terminated
+ * TLS. Moving to `acme` starts issuance immediately rather than waiting for
+ * the hourly renewal sweep.
+ */
+export async function setCustomDomainTlsMode(
+  baseUrl: string,
+  token: string,
+  deploymentId: number,
+  domain: string,
+  tlsMode: "acme" | "upstream",
+): Promise<CustomDomain> {
+  const data = await request<unknown>(
+    baseUrl,
+    `/api/dashboard/deployments/${deploymentId}/custom_domains/tls_mode`,
+    { method: "POST", token, body: JSON.stringify({ domain, tlsMode }) },
+  );
+  return customDomainSchema.parse(data);
 }
 
 export async function verifyCustomDomain(

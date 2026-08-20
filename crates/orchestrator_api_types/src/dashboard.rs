@@ -336,6 +336,19 @@ pub struct CustomDomainArgs {
     pub domain: String,
 }
 
+/// Body of `custom_domains/tls_mode`. Switches how a domain's TLS is served.
+///
+/// Going `upstream` -> `acme` orders a certificate immediately rather than
+/// waiting for the renewal sweep, which is the point: an operator who moves a
+/// domain off an upstream terminator wants it serving now.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SetCustomDomainTlsModeArgs {
+    pub domain: String,
+    /// `acme` or `upstream`.
+    pub tls_mode: String,
+}
+
 /// What a deployment advertises about itself, and what the operator wants it
 /// to advertise. These become `CONVEX_CLOUD_ORIGIN` / `CONVEX_SITE_ORIGIN` on
 /// the backend container, which is where `CONVEX_CLOUD_URL` /
@@ -357,14 +370,6 @@ pub struct CanonicalUrls {
     /// True when the desired origins differ from what the running container
     /// has — i.e. a restart is needed before the change takes effect.
     pub restart_pending: bool,
-    /// Set when a canonical URL was accepted but did not actually reach this
-    /// deployment when we probed it. Attaching a custom domain proves the
-    /// operator owns the hostname; it does not prove requests to it arrive
-    /// here. A CDN in front answering with its own challenge page, DNS that
-    /// has not propagated, or a proxy stripping the upgrade all look fine at
-    /// save time and then break the deployment silently.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reachability_warning: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
