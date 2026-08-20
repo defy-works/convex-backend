@@ -5,3 +5,7 @@ convex_local_storage/
 .DS_Store
 .turbo/
 # testing 123
+
+# Python bytecode from the check scripts in scripts/.
+__pycache__/
+*.pyc
