@@ -49,6 +49,75 @@ test("a 204 with no body still resolves", async () => {
   ).resolves.toBeUndefined();
 });
 
+// Adding or removing a custom domain rewrites Traefik's dynamic config, and
+// Traefik reloads when it lands. Dashboard traffic returns through that same
+// Traefik, so the reload can drop the list refetch the mutation triggers —
+// which surfaced as "Could not load custom domains: NetworkError when
+// attempting to fetch resource" for an operation that had already succeeded.
+test("a read dropped at the transport layer is retried", async () => {
+  let calls = 0;
+  global.fetch = jest.fn(async () => {
+    calls += 1;
+    if (calls === 1) {
+      throw new TypeError("NetworkError when attempting to fetch resource.");
+    }
+    return {
+      ok: true,
+      status: 200,
+      statusText: "",
+      text: async () =>
+        JSON.stringify({
+          domains: [],
+          targetHost: "convex.example.com",
+          routingEnabled: true,
+        }),
+      json: async () => ({}),
+    };
+  }) as unknown as typeof fetch;
+
+  await expect(
+    listCustomDomains("http://orchestrator.test", "pat", 7),
+  ).resolves.toMatchObject({ targetHost: "convex.example.com" });
+  expect(calls).toBe(2);
+});
+
+test("a dropped mutation is never replayed", async () => {
+  // The write may already have been applied; retrying could double-apply it.
+  let calls = 0;
+  global.fetch = jest.fn(async () => {
+    calls += 1;
+    throw new TypeError("NetworkError when attempting to fetch resource.");
+  }) as unknown as typeof fetch;
+
+  const started = Date.now();
+  await expect(
+    deleteCustomDomain("http://orchestrator.test", "pat", 7, "a.example.com"),
+  ).rejects.toThrow(/NetworkError/);
+  expect(calls).toBe(1);
+  // And fails straight away: a request that is never retried must not pay the
+  // inter-attempt delay before surfacing the error.
+  expect(Date.now() - started).toBeLessThan(200);
+});
+
+test("an HTTP error status is surfaced, not retried away", async () => {
+  let calls = 0;
+  global.fetch = jest.fn(async () => {
+    calls += 1;
+    return {
+      ok: false,
+      status: 500,
+      statusText: "Internal Server Error",
+      text: async () => "",
+      json: async () => ({ message: "boom" }),
+    };
+  }) as unknown as typeof fetch;
+
+  await expect(
+    listCustomDomains("http://orchestrator.test", "pat", 7),
+  ).rejects.toMatchObject({ status: 500 });
+  expect(calls).toBe(1);
+});
+
 test("responses that do carry JSON are still parsed", async () => {
   mockFetchOnce({
     status: 200,

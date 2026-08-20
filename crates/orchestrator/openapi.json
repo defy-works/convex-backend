@@ -3693,10 +3693,6 @@
           "restartPending": {
             "type": "boolean",
             "description": "True when the desired origins differ from what the running container\nhas — i.e. a restart is needed before the change takes effect."
-          },
-          "reachabilityWarning": {
-            "type": ["string", "null"],
-            "description": "Set when a canonical URL was accepted but did not actually reach this\ndeployment when we probed it. Attaching a custom domain proves the\noperator owns the hostname; it does not prove requests to it arrive\nhere. A CDN in front answering with its own challenge page, DNS that\nhas not propagated, or a proxy stripping the upgrade all look fine at\nsave time and then break the deployment silently."
           }
         }
       },

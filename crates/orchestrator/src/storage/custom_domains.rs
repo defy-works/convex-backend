@@ -169,6 +169,29 @@ impl Storage {
         Ok(())
     }
 
+    /// Switch a domain between `acme` and `upstream` TLS.
+    ///
+    /// Also resets `cert_state` to pending and clears `last_error`: the old
+    /// state described the previous mode, and leaving a stale `active` behind
+    /// would let a domain be made canonical on the strength of a check that no
+    /// longer describes how it is served.
+    pub async fn set_custom_domain_tls_mode(
+        &self,
+        domain: &str,
+        tls_mode: &str,
+    ) -> anyhow::Result<()> {
+        let conn = self.pool().acquire().await?;
+        conn.client()
+            .execute(
+                "UPDATE custom_domains
+                 SET tls_mode = $2, cert_state = 'pending', last_error = NULL
+                 WHERE domain = $1",
+                &[&domain, &tls_mode],
+            )
+            .await?;
+        Ok(())
+    }
+
     pub async fn list_custom_domains(
         &self,
         deployment_id: i64,
