@@ -124,6 +124,17 @@ fn cert_stem(domain: &str) -> String {
 /// so a domain can be validated *before* it has a certificate.
 const ACME_CHALLENGE_PATH: &str = "/.well-known/acme-challenge/";
 
+/// Where the orchestrator answers "which domain is this, and do you own it?".
+///
+/// Routed for every custom domain at the same priority as the ACME challenge,
+/// which is what makes it trustworthy: `.well-known` is a reserved namespace by
+/// RFC 8615, but nothing in Convex's `httpRouter` enforces that — only
+/// `/.files/` is reserved there, so an operator can absolutely define an HTTP
+/// action on this exact path. The high-priority Traefik router means such a
+/// route never sees the request, so verification cannot be shadowed, spoofed,
+/// or broken by whatever the deployment happens to serve.
+pub const DOMAIN_VERIFICATION_PATH: &str = "/.well-known/convex-domain-verification";
+
 pub struct RenderInput<'a> {
     pub routes: &'a [CustomDomainRoute],
     pub certificates: &'a [StoredCertificate],
@@ -166,6 +177,23 @@ pub fn render_config(input: RenderInput<'_>) -> String {
         services.push_str(&format!(
             "    convex-acme-challenge:\n      loadBalancer:\n        servers:\n          - url: \
              \"http://{}\"\n",
+            input.orchestrator_upstream
+        ));
+
+        // Domain verification, same shape and same priority. Sitting above the
+        // per-domain router (priority 100) is the whole point: the deployment
+        // never sees this path, so an HTTP action defined on it cannot shadow
+        // the answer. `websecure` only — unlike ACME, verification always runs
+        // over HTTPS, after a certificate exists or with one supplied upstream.
+        routers.push_str(&format!(
+            "    convex-domain-verification:\n      rule: \
+             \"Path(`{DOMAIN_VERIFICATION_PATH}`)\"\n      priority: 9000\n      \
+             entryPoints:\n        - websecure\n      service: \
+             convex-domain-verification\n      tls: {{}}\n"
+        ));
+        services.push_str(&format!(
+            "    convex-domain-verification:\n      loadBalancer:\n        servers:\n          - \
+             url: \"http://{}\"\n",
             input.orchestrator_upstream
         ));
     }
@@ -385,6 +413,7 @@ pub async fn probe_domain(
     let url = format!("https://{domain}/instance_name");
     let client = match reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
+        .user_agent(PROBE_USER_AGENT)
         .build()
     {
         Ok(c) => c,
@@ -413,6 +442,31 @@ pub struct DomainDetection {
     /// here nor answers as us.
     pub tls_mode: Option<String>,
     pub error: Option<String>,
+}
+
+/// Identify our verification requests.
+///
+/// Without a user agent these look like an unattributed bot, which is enough
+/// for a CDN to challenge them even when real browsers reach the origin fine.
+/// It does not defeat bot protection — a datacenter source IP is the bigger
+/// signal — but it makes the request attributable in the operator's CDN logs.
+const PROBE_USER_AGENT: &str =
+    concat!("convex-orchestrator/", env!("CARGO_PKG_VERSION"), " (domain-verification)");
+
+/// Does this response body look like a CDN bot-protection interstitial rather
+/// than the origin's own answer?
+///
+/// Worth telling apart: it means the request never reached the deployment, but
+/// it says nothing about whether *browsers* reach it — a CDN routinely
+/// challenges a datacenter-sourced probe while serving real users normally. So
+/// the advice for this case is "exempt this hostname", not "change DNS".
+fn looks_like_cdn_challenge(body: &str) -> bool {
+    let b = body.to_ascii_lowercase();
+    b.contains("just a moment")
+        || b.contains("_cf_chl_opt")
+        || b.contains("challenges.cloudflare.com")
+        || b.contains("cf-browser-verification")
+        || b.contains("attention required")
 }
 
 /// Whether a resolved address is reachable from the public internet, and so
@@ -513,6 +567,7 @@ pub async fn detect_domain(
     domain: &str,
     router_host: &str,
     expected_deployment: &str,
+    expected_token: &str,
 ) -> DomainDetection {
     let domain_ips = resolve_ips(domain).await;
     let router_ips = resolve_ips(router_host).await;
@@ -521,6 +576,7 @@ pub async fn detect_domain(
         domain,
         router_host,
         expected_deployment,
+        expected_token,
         &domain_ips,
         &router_ips,
         &probe,
@@ -530,12 +586,14 @@ pub async fn detect_domain(
 /// `GET https://<domain>/instance_name`, returning the trimmed body or the
 /// transport error.
 async fn probe_body(domain: &str) -> Result<String, String> {
+    let path = DOMAIN_VERIFICATION_PATH;
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
+        .user_agent(PROBE_USER_AGENT)
         .build()
         .map_err(|e| e.to_string())?;
     let resp = client
-        .get(format!("https://{domain}/instance_name"))
+        .get(format!("https://{domain}{path}"))
         .send()
         .await
         .map_err(|e| e.to_string())?;
@@ -569,12 +627,18 @@ fn classify_detection(
     domain: &str,
     router_host: &str,
     expected_deployment: &str,
+    expected_token: &str,
     domain_ips: &Result<BTreeSet<IpAddr>, String>,
     router_ips: &Result<BTreeSet<IpAddr>, String>,
     probe: &Result<String, String>,
 ) -> DomainDetection {
     let dns = compare_resolutions(domain_ips, router_ips);
-    let answered_as_us = probe.as_deref().map(|b| b == expected_deployment).unwrap_or(false);
+    // One test for both surfaces: did the orchestrator itself answer over this
+    // hostname with the secret only it holds? Traefik routes the verification
+    // path above the per-domain router, so the deployment never sees it — which
+    // is why this works identically for `api` and `site`, and why an operator's
+    // own HTTP action on that path cannot forge the answer.
+    let answered_as_us = probe.as_deref().map(|b| b == expected_token).unwrap_or(false);
     let points_here = dns == DnsVerdict::PointsHere;
 
     if answered_as_us {
@@ -610,6 +674,28 @@ fn classify_detection(
                 "DNS for {domain} points at this orchestrator, but it is not \
                  serving {expected_deployment} yet: {detail}. This is normal \
                  until the certificate is issued."
+            )),
+        };
+    }
+
+    // A CDN challenge is its own diagnosis. The request never reached the
+    // deployment, but that says nothing about whether browsers do: a CDN will
+    // happily challenge a datacenter-sourced probe while serving real users
+    // normally. Telling the operator to change DNS here sends them to fix
+    // something that isn't broken.
+    if let Ok(body) = probe
+        && looks_like_cdn_challenge(body)
+    {
+        return DomainDetection {
+            cert_state: CERT_STATE_PENDING.to_string(),
+            tls_mode: None,
+            error: Some(format!(
+                "A CDN in front of {domain} answered our verification request with a \
+                 bot-protection challenge, so we could not confirm it reaches \
+                 {expected_deployment}. Browsers may well be fine. Exempt this hostname \
+                 from bot protection and check again — on Cloudflare's free plan that \
+                 means turning Bot Fight Mode off for the zone, since a WAF Skip rule \
+                 cannot exempt it per-hostname."
             )),
         };
     }
@@ -683,173 +769,162 @@ fn classify_probe_response(
 mod detection_tests {
     use super::*;
 
+    const TOKEN: &str = "d4f1c0a9b7e34d2f8a6c5b1e9f0a3c7d";
+
     fn ips(list: &[&str]) -> Result<BTreeSet<IpAddr>, String> {
         Ok(list.iter().map(|s| s.parse().expect("ip")).collect())
     }
 
     const ORCH: &[&str] = &["203.0.113.10"];
-    // Cloudflare-style: the record resolves to the proxy, not to us.
     const CDN: &[&str] = &["104.21.5.5"];
+    // The orchestrator resolving its own router host from inside a container
+    // sees the machine's private view, never the address a customer's record
+    // could match. Observed: defyhost.com -> docker0, a second bridge, the VPC
+    // address, and IPv6 link-local.
+    const CONTAINER_VIEW: &[&str] =
+        &["172.17.0.1", "172.18.0.1", "172.31.46.31", "fe80::4f2:3bff:fe06:9111"];
 
-    #[test]
-    fn dns_here_and_serving_is_active_and_ours_to_issue() {
-        let d = classify_detection(
+    fn classify(
+        domain_ips: &Result<BTreeSet<IpAddr>, String>,
+        router_ips: &Result<BTreeSet<IpAddr>, String>,
+        probe: &Result<String, String>,
+    ) -> DomainDetection {
+        classify_detection(
             "api.example.com",
             "convex.example.com",
             "kind-panda-859",
-            &ips(ORCH),
-            &ips(ORCH),
-            &Ok("kind-panda-859".into()),
-        );
+            TOKEN,
+            domain_ips,
+            router_ips,
+            probe,
+        )
+    }
+
+    #[test]
+    fn the_token_coming_back_is_what_verifies_a_domain() {
+        // Served by the orchestrator over Traefik's high-priority router, so
+        // it proves the hostname reaches us — whatever the deployment serves.
+        let d = classify(&ips(ORCH), &ips(ORCH), &Ok(TOKEN.into()));
         assert_eq!(d.cert_state, CERT_STATE_ACTIVE);
         assert_eq!(d.tls_mode.as_deref(), Some(TLS_MODE_ACME));
         assert_eq!(d.error, None);
     }
 
     #[test]
-    fn a_proxy_that_forwards_correctly_is_active_and_upstream() {
-        // Reaching us without DNS pointing here means something in front
-        // terminated TLS and forwarded — that is what `upstream` means, and
-        // it is now inferred rather than declared by the operator.
+    fn the_same_token_works_for_a_site_domain() {
+        // The old probe asked for /instance_name, which only exists on the API
+        // port — a site domain could never verify. One endpoint now covers
+        // both surfaces because Traefik answers it, not the backend.
         let d = classify_detection(
-            "api.example.com",
+            "hooks.example.com",
             "convex.example.com",
             "kind-panda-859",
-            &ips(CDN),
+            TOKEN,
             &ips(ORCH),
-            &Ok("kind-panda-859".into()),
+            &ips(ORCH),
+            &Ok(TOKEN.into()),
         );
+        assert_eq!(d.cert_state, CERT_STATE_ACTIVE);
+    }
+
+    #[test]
+    fn a_deployments_own_response_cannot_forge_verification() {
+        // An HTTP action on the verification path never sees the request, but
+        // even if something echoed plausible content it is not the token.
+        for body in ["kind-panda-859", "No matching routes found", "OK", ""] {
+            let d = classify(&ips(ORCH), &ips(ORCH), &Ok(body.into()));
+            assert_eq!(
+                d.cert_state, CERT_STATE_PENDING,
+                "must not verify on body {body:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_proxy_that_forwards_correctly_is_active_and_upstream() {
+        let d = classify(&ips(CDN), &ips(ORCH), &Ok(TOKEN.into()));
         assert_eq!(d.cert_state, CERT_STATE_ACTIVE);
         assert_eq!(d.tls_mode.as_deref(), Some(TLS_MODE_UPSTREAM));
     }
 
     #[test]
     fn dns_here_but_not_serving_yet_is_pending_and_ours() {
-        // The state a freshly added domain sits in until issuance lands.
-        let d = classify_detection(
-            "api.example.com",
-            "convex.example.com",
-            "kind-panda-859",
-            &ips(ORCH),
-            &ips(ORCH),
-            &Err("connection refused".into()),
-        );
+        let d = classify(&ips(ORCH), &ips(ORCH), &Err("connection refused".into()));
         assert_eq!(d.cert_state, CERT_STATE_PENDING);
         assert_eq!(d.tls_mode.as_deref(), Some(TLS_MODE_ACME));
         assert!(d.error.expect("error").contains("until the certificate is issued"));
     }
 
     #[test]
-    fn pointing_elsewhere_and_not_reaching_us_is_rejected_with_both_resolutions() {
-        // The Cloudflare-challenge case: something answers, but not as us.
-        let d = classify_detection(
-            "backend.prime-reserve.com",
-            "convex.example.com",
-            "kind-panda-859",
-            &ips(CDN),
-            &ips(ORCH),
-            &Ok("<!DOCTYPE html><title>Just a moment...</title>".into()),
-        );
+    fn pointing_elsewhere_and_not_reaching_us_names_both_resolutions() {
+        let d = classify(&ips(CDN), &ips(ORCH), &Ok("<!DOCTYPE html>".into()));
         assert_eq!(d.cert_state, CERT_STATE_PENDING);
-        // Not confident either way — must not clobber the stored mode.
         assert_eq!(d.tls_mode, None);
         let err = d.error.expect("error");
-        assert!(err.contains("104.21.5.5"), "names where it does point: {err}");
-        assert!(err.contains("203.0.113.10"), "names where it should point: {err}");
-        assert!(err.contains("DNS-only"), "tells them how to fix it: {err}");
+        assert!(err.contains("104.21.5.5"), "{err}");
+        assert!(err.contains("203.0.113.10"), "{err}");
     }
 
     #[test]
-    fn a_domain_that_does_not_resolve_says_so() {
+    fn a_cdn_challenge_is_diagnosed_as_a_cdn_challenge() {
+        // Observed: the domain served the deployment to the public internet
+        // while challenging the orchestrator's own probe, because a datacenter
+        // IP scores as a bot. The old message told the operator to change DNS,
+        // which was wrong — DNS was fine.
         let d = classify_detection(
-            "typo.example.com",
-            "convex.example.com",
-            "kind-panda-859",
-            &Err("no such host".into()),
-            &ips(ORCH),
-            &Err("dns error".into()),
+            "backend.prime-reserve.com",
+            "defyhost.com",
+            "calm-lynx-792",
+            TOKEN,
+            &ips(CDN),
+            &ips(CONTAINER_VIEW),
+            &Ok("<!DOCTYPE html><head><title>Just a moment...</title>".into()),
         );
         assert_eq!(d.cert_state, CERT_STATE_PENDING);
-        assert_eq!(d.tls_mode, None);
-        assert!(d.error.expect("error").contains("does not resolve"));
+        let err = d.error.expect("error");
+        assert!(err.contains("bot-protection challenge"), "{err}");
+        assert!(err.contains("Bot Fight Mode"), "names the free-tier trap: {err}");
+        assert!(
+            !err.contains("Point the record at"),
+            "must not send them to change DNS that is already correct: {err}"
+        );
     }
-
-    // The orchestrator resolves its own router host from inside a container,
-    // where that name often answers with the machine's private view. Observed
-    // in production: defyhost.com -> 172.17.0.1 (docker0), 172.18.0.1,
-    // 172.31.46.31 (VPC), fe80::… — none of which a customer's CNAME could
-    // ever match, so a correctly-pointed domain was rejected.
-    const CONTAINER_VIEW: &[&str] =
-        &["172.17.0.1", "172.18.0.1", "172.31.46.31", "fe80::4f2:3bff:fe06:9111"];
 
     #[test]
     fn a_private_view_of_our_own_host_is_not_used_to_reject() {
-        let d = classify_detection(
-            "api.prime-reserve.com",
-            "defyhost.com",
-            "calm-lynx-792",
-            &ips(&["203.0.113.99"]),
-            &ips(CONTAINER_VIEW),
-            &Ok("calm-lynx-792".into()),
-        );
-        // The deployment answered; that is what counts.
+        let d = classify(&ips(&["203.0.113.99"]), &ips(CONTAINER_VIEW), &Ok(TOKEN.into()));
         assert_eq!(d.cert_state, CERT_STATE_ACTIVE);
-        // But we could not tell direct from proxied, so don't guess a mode.
+        // Could not tell direct from proxied, so don't guess a mode.
         assert_eq!(d.tls_mode, None);
     }
 
     #[test]
     fn an_unusable_self_resolution_does_not_claim_dns_is_wrong() {
-        let d = classify_detection(
-            "api.prime-reserve.com",
-            "defyhost.com",
-            "calm-lynx-792",
-            &ips(&["104.21.25.228"]),
-            &ips(CONTAINER_VIEW),
-            &Ok("<!DOCTYPE html>".into()),
-        );
+        let d = classify(&ips(CDN), &ips(CONTAINER_VIEW), &Ok("something else".into()));
+        let err = d.error.expect("error");
+        assert!(err.contains("could not determine its own public address"), "{err}");
+        assert!(!err.contains("which is not this orchestrator"), "{err}");
+    }
+
+    #[test]
+    fn a_domain_that_does_not_resolve_says_so() {
+        let d = classify(&Err("no such host".into()), &ips(ORCH), &Err("dns error".into()));
         assert_eq!(d.cert_state, CERT_STATE_PENDING);
-        let err = d.error.expect("error");
-        assert!(
-            err.contains("could not determine its own public address"),
-            "must admit the comparison was skipped: {err}"
-        );
-        assert!(
-            !err.contains("which is not this orchestrator"),
-            "must not assert a mismatch it never established: {err}"
-        );
+        assert!(d.error.expect("error").contains("does not resolve"));
     }
 
     #[test]
-    fn a_public_self_resolution_still_detects_a_proxy() {
-        // Regression guard: filtering private addresses must not weaken the
-        // real comparison when the router host does resolve publicly.
-        let d = classify_detection(
-            "api.prime-reserve.com",
-            "convex.example.com",
-            "calm-lynx-792",
-            &ips(&["104.21.25.228", "172.67.134.218"]),
-            &ips(&["203.0.113.10", "172.17.0.1"]),
-            &Ok("<!DOCTYPE html>".into()),
-        );
-        let err = d.error.expect("error");
-        assert!(err.contains("which is not this orchestrator"), "{err}");
-        assert!(err.contains("DNS-only"), "{err}");
-    }
-
-    #[test]
-    fn an_unresolvable_router_host_falls_back_to_the_probe() {
-        // `router_host` is `localhost` in local dev, so the IP comparison is
-        // meaningless there. Reaching the deployment must still count.
-        let d = classify_detection(
-            "api.example.com",
-            "localhost",
-            "kind-panda-859",
-            &ips(CDN),
-            &Err("no address".into()),
-            &Ok("kind-panda-859".into()),
-        );
-        assert_eq!(d.cert_state, CERT_STATE_ACTIVE);
+    fn a_challenge_is_recognised_from_several_shapes() {
+        for body in [
+            "<title>Just a moment...</title>",
+            "window._cf_chl_opt = {}",
+            "src='https://challenges.cloudflare.com/turnstile'",
+            "<title>Attention Required! | Cloudflare</title>",
+        ] {
+            assert!(looks_like_cdn_challenge(body), "not detected: {body}");
+        }
+        assert!(!looks_like_cdn_challenge(TOKEN));
+        assert!(!looks_like_cdn_challenge("No matching routes found"));
     }
 }
 
@@ -1010,6 +1085,53 @@ mod tests {
         assert!(config.contains("convex-custom-api-example-com:"));
         assert!(config.contains("rule: \"Host(`api.example.com`)\""));
         assert!(config.contains("url: \"http://orchestrator-happy-otter-123:3210\""));
+    }
+
+    #[test]
+    fn verification_outranks_the_deployment_router() {
+        // Load-bearing, not cosmetic: `httpRouter` reserves only `/.files/`,
+        // so an operator can define an HTTP action on the verification path.
+        // Priority is what guarantees the deployment never sees the request
+        // and therefore cannot answer instead of the orchestrator.
+        let config = render(&[route("api.example.com", "otter")], &[]);
+        assert!(config.contains("convex-domain-verification:"));
+        assert!(config.contains(&format!("rule: \"Path(`{DOMAIN_VERIFICATION_PATH}`)\"")));
+
+        let verification_priority = config
+            .split("convex-domain-verification:")
+            .nth(1)
+            .and_then(|s| s.split("priority: ").nth(1))
+            .and_then(|s| s.split_whitespace().next())
+            .and_then(|s| s.parse::<u32>().ok())
+            .expect("verification router has a priority");
+        let domain_priority = config
+            .split("convex-custom-api-example-com:")
+            .nth(1)
+            .and_then(|s| s.split("priority: ").nth(1))
+            .and_then(|s| s.split_whitespace().next())
+            .and_then(|s| s.parse::<u32>().ok())
+            .expect("domain router has a priority");
+        assert!(
+            verification_priority > domain_priority,
+            "verification ({verification_priority}) must outrank the deployment \
+             router ({domain_priority})"
+        );
+    }
+
+    #[test]
+    fn verification_points_at_the_orchestrator_not_the_deployment() {
+        let config = render(&[route("api.example.com", "otter")], &[]);
+        let service = config
+            .split("    convex-domain-verification:\n      loadBalancer:")
+            .nth(1)
+            .expect("verification service");
+        assert!(service.contains("http://orchestrator:8050"), "{service}");
+    }
+
+    #[test]
+    fn no_domains_means_no_verification_router() {
+        let config = render(&[], &[]);
+        assert!(!config.contains("convex-domain-verification"));
     }
 
     #[test]

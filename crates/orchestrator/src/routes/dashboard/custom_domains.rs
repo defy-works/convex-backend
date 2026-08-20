@@ -156,8 +156,9 @@ pub(crate) async fn set_canonical_urls(
     // Attachment alone is not enough: it proves the operator owns the name, not
     // that requests to it arrive here. A canonical URL that doesn't route is
     // what breaks every client of the deployment, so the domain has to be
-    // *verified* — `cert_state == "active"`, which `probe_domain` only sets
-    // after the deployment identified itself over that hostname.
+    // *verified* — `cert_state == "active"`, which is only ever written after
+    // the orchestrator fetched its own verification token back over that
+    // hostname.
     let check = |value: &Option<String>, kind: &str, default: &str| -> Result<(), ApiError> {
         let Some(url) = value.as_deref() else {
             return Ok(());
@@ -329,6 +330,7 @@ fn spawn_detect_and_provision(state: OrchestratorState, domain: String) {
             &domain,
             &state.config.router_host,
             &deployment.name,
+            record.verification_token.as_deref().unwrap_or_default(),
         )
         .await;
 
@@ -494,10 +496,17 @@ pub(crate) async fn verify_custom_domain(
         .map_err(|e| ApiError::BadRequest(e.to_string()))?;
 
     let deployment_name = deployment_name_for_domain(&state, &domain).await?;
+    let record = state
+        .storage
+        .get_custom_domain(&domain)
+        .await
+        .map_err(ApiError::Internal)?
+        .ok_or_else(|| ApiError::BadRequest(format!("{domain} is not configured")))?;
     let detection = custom_domains::detect_domain(
         &domain,
         &state.config.router_host,
         &deployment_name,
+        record.verification_token.as_deref().unwrap_or_default(),
     )
     .await;
     let cert_state = detection.cert_state;
@@ -671,10 +680,18 @@ async fn issue_now(state: &OrchestratorState, domain: &str) -> anyhow::Result<()
                 record.deployment_id
             )
         })?;
-    let (cert_state, error) = custom_domains::probe_domain(domain, &deployment.name).await;
+    // Same verification the Check button runs, so a domain reaches `active`
+    // by one definition rather than two that can disagree.
+    let detection = custom_domains::detect_domain(
+        domain,
+        &state.config.router_host,
+        &deployment.name,
+        record.verification_token.as_deref().unwrap_or_default(),
+    )
+    .await;
     state
         .storage
-        .set_custom_domain_status(domain, &cert_state, error.as_deref())
+        .set_custom_domain_status(domain, &detection.cert_state, detection.error.as_deref())
         .await?;
 
     Ok(())

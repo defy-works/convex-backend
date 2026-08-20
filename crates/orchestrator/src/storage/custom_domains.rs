@@ -18,6 +18,11 @@ pub struct CustomDomainRecord {
     /// Why the last issuance attempt failed, verbatim. Only the operator can
     /// fix the usual causes (DNS not pointed here, token lacks zone access).
     pub last_error: Option<String>,
+    /// Secret the orchestrator serves back over this hostname at
+    /// `DOMAIN_VERIFICATION_PATH`. Matching it proves the request reached this
+    /// orchestrator over this domain. `None` only for rows written before the
+    /// column existed and not yet backfilled.
+    pub verification_token: Option<String>,
 }
 
 /// A custom domain plus the name of the deployment it fronts. Rendering the
@@ -41,15 +46,17 @@ impl Storage {
         tls_mode: &str,
     ) -> anyhow::Result<CustomDomainRecord> {
         let now = now_unix_ms();
+        let token = crate::ids::random_id();
         let conn = self.pool().acquire().await?;
         let row = conn
             .client()
             .query_one(
                 "INSERT INTO custom_domains
-                     (deployment_id, domain, cert_state, created_at, kind, tls_mode)
-                 VALUES ($1, $2, 'pending', $3, $4, $5)
+                     (deployment_id, domain, cert_state, created_at, kind, tls_mode,
+                      verification_token)
+                 VALUES ($1, $2, 'pending', $3, $4, $5, $6)
                  RETURNING id",
-                &[&deployment_id, &domain, &now, &kind, &tls_mode],
+                &[&deployment_id, &domain, &now, &kind, &tls_mode, &token],
             )
             .await?;
         Ok(CustomDomainRecord {
@@ -61,6 +68,7 @@ impl Storage {
             tls_mode: tls_mode.to_string(),
             created_at: now,
             last_error: None,
+            verification_token: Some(token),
         })
     }
 
@@ -90,7 +98,7 @@ impl Storage {
         let row = conn
             .client()
             .query_opt(
-                "SELECT id, deployment_id, domain, cert_state, created_at, last_error, kind,
+                "SELECT id, deployment_id, domain, cert_state, created_at, last_error, kind, verification_token,
                         tls_mode
                  FROM custom_domains WHERE domain = $1",
                 &[&domain],
@@ -104,7 +112,8 @@ impl Storage {
             created_at: r.get(4),
             last_error: r.get(5),
             kind: r.get(6),
-            tls_mode: r.get(7),
+            verification_token: r.get(7),
+            tls_mode: r.get(8),
         }))
     }
 
@@ -200,7 +209,7 @@ impl Storage {
         let rows = conn
             .client()
             .query(
-                "SELECT id, deployment_id, domain, cert_state, created_at, last_error, kind,
+                "SELECT id, deployment_id, domain, cert_state, created_at, last_error, kind, verification_token,
                         tls_mode
                  FROM custom_domains WHERE deployment_id = $1",
                 &[&deployment_id],
@@ -216,7 +225,8 @@ impl Storage {
                 created_at: r.get(4),
                 last_error: r.get(5),
                 kind: r.get(6),
-                tls_mode: r.get(7),
+                verification_token: r.get(7),
+                tls_mode: r.get(8),
             })
             .collect())
     }

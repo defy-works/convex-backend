@@ -95,9 +95,15 @@ pub async fn run(pool: &PgPool) -> anyhow::Result<()> {
               ADD COLUMN IF NOT EXISTS last_error TEXT,
               ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'api',
               ADD COLUMN IF NOT EXISTS tls_mode TEXT NOT NULL DEFAULT 'acme',
+              ADD COLUMN IF NOT EXISTS verification_token TEXT,
               DROP COLUMN IF EXISTS challenge_type,
               DROP COLUMN IF EXISTS dns_credential_id;
             DROP TABLE IF EXISTS dns_provider_credentials;
+            -- Backfill rows added before verification existed. gen_random_uuid()
+            -- is in core Postgres from 13 on, so no extension is required.
+            UPDATE custom_domains
+               SET verification_token = replace(gen_random_uuid()::text, '-', '')
+             WHERE verification_token IS NULL;
             "#,
         )
         .await?;
