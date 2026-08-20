@@ -40,3 +40,8 @@ jobs:
       # keep `pnpm deploy` working in the dashboard images. See the comment on
       # that setting in npm-packages/pnpm-workspace.yaml.
       - run: python scripts/check_exotic_subdeps.py
+
+      # `\$` inside an unquoted heredoc reaches the shell as a literal and the
+      # substitution never runs. Cost a release; the Docker daemon is unusable
+      # on the dev machine, so nothing local catches it.
+      - run: python scripts/check_dockerfile_heredocs.py
