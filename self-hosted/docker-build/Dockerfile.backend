@@ -89,7 +89,27 @@ COPY .cargo/config.toml ./.cargo/config.toml
 COPY --from=chef /tmp/recipe.json recipe.json
 # Use cargo-chef to build dependencies from the recipe created in the first stage
 # This step will be cached unless dependencies change
-RUN --mount=type=cache,target=/convex/target/ --mount=type=cache,target=/usr/local/cargo/git/db --mount=type=cache,target=/usr/local/cargo/registry/ PROTOC="$(mise which protoc)" cargo chef cook --release --recipe-path recipe.json
+#
+# Fork divergence: upstream wraps this (and the real build below) in
+# `--mount=type=cache` for target/, the cargo registry and the git db. That is
+# right for a persistent builder and actively harmful on the ephemeral CI
+# runners this fork releases from, because a cache mount is NOT part of the
+# layer and so is never exported by `cache-to`. On a fresh runner the mount
+# starts empty, which makes a cache *hit* worse than a miss: BuildKit restores
+# this layer from S3, sees it as satisfied and skips the cook entirely, and
+# then the build layer below runs against an empty target/ and recompiles all
+# ~1000 dependencies from scratch. That was the whole ~44 min of this job.
+#
+# Without the mounts, cook's output lands in the layer, `cache-to mode=max`
+# exports it, and the next release restores warm dependencies and compiles
+# only the workspace crates that actually changed. The mounts must be removed
+# from both cargo RUNs, not just this one: a mount on the second RUN would
+# shadow the baked-in directories and put us back to an empty target/.
+#
+# This cannot affect the published image. Everything here is the `build`
+# stage; the final stage starts `FROM ubuntu:noble` and copies only the two
+# binaries out, so image content and size are byte-for-byte unchanged.
+RUN PROTOC="$(mise which protoc)" cargo chef cook --release --recipe-path recipe.json
 # Now copy everything else over -- we've minimized the set of files that cause a full `pnpm install` or `cargo build` to run.
 COPY . .
 
@@ -99,7 +119,10 @@ ARG VERGEN_GIT_SHA
 ARG VERGEN_GIT_COMMIT_TIMESTAMP
 ENV VERGEN_GIT_SHA=${VERGEN_GIT_SHA}
 ENV VERGEN_GIT_COMMIT_TIMESTAMP=${VERGEN_GIT_COMMIT_TIMESTAMP}
-RUN --mount=type=cache,target=/root/.local/share/pnpm/store,sharing=locked --mount=type=cache,target=/convex/target/ --mount=type=cache,target=/usr/local/cargo/git/db --mount=type=cache,target=/usr/local/cargo/registry/ <<EOF
+# The cargo mounts are deliberately absent here — see the cook layer above.
+# They must match that layer exactly, or a mount here shadows the warm
+# target/, registry and git db baked into it and forces a full recompile.
+RUN --mount=type=cache,target=/root/.local/share/pnpm/store,sharing=locked <<EOF
 export PROTOC="$(mise which protoc)"
 cargo build --release -p local_backend --bin convex-local-backend
 cp target/release/convex-local-backend .
