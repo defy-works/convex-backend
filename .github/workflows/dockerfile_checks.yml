@@ -28,9 +28,15 @@ jobs:
         with:
           python-version: "3.13"
 
-      - run: scripts/check_dockerfile_js_toolchain.py
+      # Invoked through `python` rather than relying on the shebang and the
+      # executable bit. This repo is largely authored on Windows, where git
+      # cannot set that bit, so a new gate script lands as mode 100644 and
+      # dies here with a bare `Permission denied` (exit 126) that is invisible
+      # until CI runs. Both scripts are committed 100755 as well, so either
+      # invocation works; this just stops the bit from being load-bearing.
+      - run: python scripts/check_dockerfile_js_toolchain.py
 
       # Replaces pnpm's `blockExoticSubdeps`, which this fork must disable to
       # keep `pnpm deploy` working in the dashboard images. See the comment on
       # that setting in npm-packages/pnpm-workspace.yaml.
-      - run: scripts/check_exotic_subdeps.py
+      - run: python scripts/check_exotic_subdeps.py
