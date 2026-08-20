@@ -84,7 +84,44 @@ reconcile_pnpm_lock() {
   fi
 }
 
+# The scripts/ toolchain (pnpm, dprint, turbo) is installed by the workflow
+# from the PRE-merge scripts/package.json, but every step below runs against
+# the POST-merge tree. When upstream bumps a pinned tool the two fall out of
+# step, and pnpm in particular then fails in a way that reads like a missing
+# binary rather than a version skew: the stale pnpm 10.34.5 saw the merged
+# `packageManager: pnpm@11.15.1`, tried to self-install it (per pnpm's
+# manage-package-manager-versions, which defaults on), and spawned `pnpm`
+# from a PATH that has none —
+#   ERROR  Command failed with ENOENT: pnpm add pnpm@11.15.1
+#   spawnSync pnpm ENOENT
+# Reinstalling from the merged manifest keeps toolchain and tree in lockstep,
+# so the next upstream bump is picked up instead of exploding. A no-op unless
+# the merge actually moved the pin, so it costs nothing on a normal sync.
+resync_scripts_toolchain() {
+  if [ ! -f scripts/package.json ]; then
+    return 0
+  fi
+  if ! command -v npm >/dev/null 2>&1; then
+    echo "npm not on PATH; cannot resync the scripts toolchain" >&2
+    return 1
+  fi
+  local want have
+  want="$(sed -nE 's/^[[:space:]]*"pnpm"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' scripts/package.json | head -1)"
+  have="$(scripts/node_modules/.bin/pnpm --version 2>/dev/null || true)"
+  if [ -z "${want}" ] || [ "${want}" = "${have}" ]; then
+    return 0
+  fi
+  echo "scripts toolchain has pnpm '${have:-none}', merged tree pins '${want}' — reinstalling" >&2
+  npm ci --prefix scripts 2>&1 | tail -5 | sed 's/^/  /'
+  have="$(scripts/node_modules/.bin/pnpm --version 2>/dev/null || true)"
+  if [ "${want}" != "${have}" ]; then
+    echo "scripts toolchain still has pnpm '${have:-none}' after npm ci; expected '${want}'" >&2
+    return 1
+  fi
+}
+
 reconcile_generated_locks() {
+  resync_scripts_toolchain
   reconcile_cargo_lock
   reconcile_pnpm_lock
 }
