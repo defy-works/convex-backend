@@ -38,6 +38,11 @@ jobs:
       contents: read
       packages: write
       id-token: write
+    # A called workflow gets no secrets beyond GITHUB_TOKEN unless they are
+    # passed. Without this the R2 credentials the backend image uses for its
+    # sccache compile cache arrive empty, and the build silently compiles
+    # uncached -- slow, not broken, so it does not announce itself.
+    secrets: inherit
 
   release_dashboard:
     needs: dockerfile_checks

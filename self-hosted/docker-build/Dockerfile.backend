@@ -141,13 +141,18 @@ COPY --from=chef /tmp/recipe.json recipe.json
 # This cannot affect the published image. Everything here is the `build`
 # stage; the final stage starts `FROM ubuntu:noble` and copies only the two
 # binaries out, so image content and size are byte-for-byte unchanged.
+# Quoted heredoc: with an unquoted `<<EOF` the Dockerfile parser expands
+# `${...}` itself and a `\$` escape survives into the shell as a literal
+# backslash-dollar, which silently turned `export PROTOC="$(mise which protoc)"`
+# into the literal string `$(mise which protoc)` and broke prost-build. `<<'EOF'`
+# disables Dockerfile expansion entirely, so the shell receives exactly this.
 RUN --mount=type=secret,id=r2_access_key --mount=type=secret,id=r2_secret_key \
-    --mount=type=secret,id=r2_endpoint --mount=type=secret,id=r2_bucket <<EOF
+    --mount=type=secret,id=r2_endpoint --mount=type=secret,id=r2_bucket <<'EOF'
 set -e
-eval "\$(sccache-env)"
-export PROTOC="\$(mise which protoc)"
+eval "$(sccache-env)"
+export PROTOC="$(mise which protoc)"
 cargo chef cook --release --recipe-path recipe.json
-if [ -n "\${RUSTC_WRAPPER:-}" ]; then sccache --show-stats || true; fi
+if [ -n "${RUSTC_WRAPPER:-}" ]; then sccache --show-stats || true; fi
 EOF
 # Now copy everything else over -- we've minimized the set of files that cause a full `pnpm install` or `cargo build` to run.
 COPY . .
@@ -163,15 +168,15 @@ ENV VERGEN_GIT_COMMIT_TIMESTAMP=${VERGEN_GIT_COMMIT_TIMESTAMP}
 # target/, registry and git db baked into it and forces a full recompile.
 RUN --mount=type=cache,target=/root/.local/share/pnpm/store,sharing=locked \
     --mount=type=secret,id=r2_access_key --mount=type=secret,id=r2_secret_key \
-    --mount=type=secret,id=r2_endpoint --mount=type=secret,id=r2_bucket <<EOF
+    --mount=type=secret,id=r2_endpoint --mount=type=secret,id=r2_bucket <<'EOF'
 set -e
-eval "\$(sccache-env)"
-export PROTOC="\$(mise which protoc)"
+eval "$(sccache-env)"
+export PROTOC="$(mise which protoc)"
 cargo build --release -p local_backend --bin convex-local-backend
 cp target/release/convex-local-backend .
 cargo build --release -p keybroker --bin generate_key
 cp target/release/generate_key .
-if [ -n "\${RUSTC_WRAPPER:-}" ]; then sccache --show-stats || true; fi
+if [ -n "${RUSTC_WRAPPER:-}" ]; then sccache --show-stats || true; fi
 EOF
 ARG debug
 RUN if [[ -z "$debug" ]]; then strip ./convex-local-backend; strip ./generate_key; fi

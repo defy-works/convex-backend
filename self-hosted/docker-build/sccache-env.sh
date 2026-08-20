@@ -21,9 +21,18 @@ secret_key="$(secret r2_secret_key || true)"
 endpoint="$(secret r2_endpoint || true)"
 bucket="$(secret r2_bucket || true)"
 
-if [ -z "${access_key}" ] || [ -z "${secret_key}" ] \
-  || [ -z "${endpoint}" ] || [ -z "${bucket}" ]; then
-  echo "sccache: R2 cache not configured; compiling without a compile cache" >&2
+missing=""
+[ -z "${access_key}" ] && missing="${missing} r2_access_key"
+[ -z "${secret_key}" ] && missing="${missing} r2_secret_key"
+[ -z "${endpoint}" ] && missing="${missing} r2_endpoint"
+[ -z "${bucket}" ] && missing="${missing} r2_bucket"
+if [ -n "${missing}" ]; then
+  # Name them. This fired once because the caller of the reusable release
+  # workflow did not pass `secrets: inherit`, so every secret arrived empty --
+  # a config bug that looks identical to "no cache configured" unless the
+  # message says which ones are absent.
+  echo "sccache: missing secret(s):${missing} -- compiling without a compile cache" >&2
+  echo "sccache: if this is CI, check that the calling workflow passes secrets." >&2
   exit 0
 fi
 
