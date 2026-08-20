@@ -145,7 +145,7 @@ impl Storage {
                 // without this they match `c.domain IS NULL` on every sweep
                 // and get flipped back to `issuing` forever.
                 "SELECT cd.id, cd.deployment_id, cd.domain, cd.cert_state, cd.created_at,
-                        cd.last_error, cd.kind, cd.tls_mode
+                        cd.last_error, cd.kind, cd.tls_mode, cd.verification_token
                  FROM custom_domains cd
                  LEFT JOIN custom_domain_certs c ON c.domain = cd.domain
                  WHERE cd.tls_mode <> 'upstream'
@@ -165,6 +165,7 @@ impl Storage {
                 last_error: r.get(5),
                 kind: r.get(6),
                 tls_mode: r.get(7),
+                verification_token: r.get(8),
             })
             .collect())
     }
