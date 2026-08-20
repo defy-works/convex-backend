@@ -233,7 +233,6 @@ thiserror = "2"
 thousands = "0.2.0"
 tikv-jemalloc-sys = { version = "0.7", features = [ "profiling", "stats", "unprefixed_malloc_on_supported_platforms" ] }
 tikv-jemallocator = { version = "0.7", features = [ "profiling", "stats", "unprefixed_malloc_on_supported_platforms" ] }
-tiny_http = "0.12"
 tld = "2.36.0"
 tokio = { version = "1.53.1", features = [ "full" ] }
 tokio-metrics = { version = "0.4.0" }
@@ -272,6 +271,7 @@ value = { path = "crates/value" }
 vector = { path = "crates/vector" }
 vergen = { version = "8.1.0" }
 walkdir = "2"
+wasm_runtime = { path = "crates/wasm_runtime" }
 wasmtime = "34"
 wasmtime-wasi = "34"
 wizer = "10"

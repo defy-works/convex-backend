@@ -29,3 +29,8 @@ jobs:
           python-version: "3.13"
 
       - run: scripts/check_dockerfile_js_toolchain.py
+
+      # Replaces pnpm's `blockExoticSubdeps`, which this fork must disable to
+      # keep `pnpm deploy` working in the dashboard images. See the comment on
+      # that setting in npm-packages/pnpm-workspace.yaml.
+      - run: scripts/check_exotic_subdeps.py

@@ -176,6 +176,36 @@ publishBranch: release
 # error message names the exact replacement string.
 onlyBuiltDependencies:
   - "root@https://codeload.github.com/nipunn1313/docusaurus-openapi-docs/tar.gz/33ca8ab0ecbe76adc157c6c7ade3e53e5c990428"
+
+# Fork-only. pnpm 11 added `blockExoticSubdeps` (default true), which confines
+# git- and tarball-resolved packages to *direct* dependencies. `dashboard-common`
+# declares one such dependency, `saffron` (get-convex/saffron), and that is fine
+# during a normal workspace install because it is direct there. It stops being
+# direct under `pnpm deploy`: both dashboard images run
+# `pnpm --filter=<app> deploy --legacy --prod`, which rebuilds an isolated tree
+# where dashboard-common is a *dependency* of the app, so saffron becomes a
+# subdependency and the install dies with
+#
+#   ERR_PNPM_EXOTIC_SUBDEP  Exotic dependency "saffron" (resolved via
+#   git-repository) is not allowed in subdependencies when blockExoticSubdeps
+#   is enabled
+#
+# taking both dashboard image builds down on both arches. The setting is binary
+# — pnpm exposes no per-package allowlist — so unblocking the build means
+# turning it off for the workspace.
+#
+# That is narrower than it sounds here. The threat this guards against is an
+# untrusted transitive dependency silently pulling arbitrary code from a git
+# remote; this workspace's lockfile contains exactly one exotic resolution, it
+# is a repo of the upstream we fork, and it is pinned to an immutable commit SHA
+# with a sha512 integrity hash that CI installs enforce via --frozen-lockfile.
+# `scripts/check_exotic_subdeps.py` re-imposes the guarantee as an explicit
+# allowlist, so a *new* exotic dependency fails CI instead of arriving silently
+# — which is the property `blockExoticSubdeps` was actually providing.
+#
+# Upstream has the same saffron dependency and the same `pnpm deploy` calls, so
+# it is on track to hit this too. Drop this if upstream lands its own fix.
+blockExoticSubdeps: false
 minimumReleaseAge: 10080
 # The next security overrides below force a brand-new next version; next pins
 # its @next/swc platform binaries to that exact (equally new) version, which
