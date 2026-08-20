@@ -43,9 +43,24 @@ jobs:
     # On-demand because this is the longest image build (~25 min) and spot
     # reclamation killed it mid-compile on two consecutive runs, so it never
     # reached the publish step.
+    #
+    # `cpu`/`ram` are overridden inline for the same reason as `spot`, and
+    # because the `xlarge-*` spec is only 4 vCPU / 16 GB despite the name.
+    #
+    # Sizing up is close to cost-neutral rather than more expensive: EC2 bills
+    # per second and price scales linearly with size inside a family, so 2x the
+    # cores at half the wall clock is the same bill. The only real premium is
+    # the fraction of the build that does not parallelize (link tail, image
+    # push, apt/npm downloads). 8 vCPU keeps that premium small; 16 was tested
+    # against and rejected as paying ~1.4x for diminishing returns, because a
+    # Rust release build stops scaling well past ~8 cores on this workspace.
+    #
+    # 8 vCPU / 32 GB maps to m7a/m7i/m7g `.2xlarge`, which exist in every
+    # region this fork builds in. The ratio is forced: the m7 families are
+    # fixed at 4 GB per vCPU, so `ram` is not an independent cost lever here.
     runs-on:
       "runs-on=${{ github.run_id }}-${{ matrix.arch }}/runner=xlarge-${{
-      matrix.arch }}/spot=false"
+      matrix.arch }}/cpu=8/ram=32/spot=false"
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
