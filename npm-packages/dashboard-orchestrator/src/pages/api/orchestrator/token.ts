@@ -86,6 +86,9 @@ export default async function handler(
     memberId: number;
     teamSlug: string;
     role: string;
+    // Absent on orchestrator builds that pre-date the admin console; the
+    // client defaults it to false, which just hides the admin nav.
+    isSuperAdmin?: boolean;
   };
 
   // Headers to discourage caching of bearer tokens.

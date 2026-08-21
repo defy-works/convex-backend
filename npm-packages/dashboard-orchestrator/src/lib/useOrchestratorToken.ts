@@ -9,6 +9,14 @@ export type OrchestratorSession = {
   memberId: number;
   teamSlug: string;
   role: string;
+  /**
+   * Instance-wide operator. Controls whether the admin nav renders.
+   *
+   * Presentation only: every /api/admin route is gated server-side by the
+   * SuperAdmin extractor, so a forged value here buys nothing but a page of
+   * 403s. Optional because an older orchestrator build won't send it.
+   */
+  isSuperAdmin?: boolean;
 };
 
 async function fetcher(url: string): Promise<OrchestratorSession | null> {
@@ -68,4 +76,17 @@ export function useOrchestratorSessionForInvite(
 export function useAccessToken(inviteCode?: string | null): string | null {
   const { data } = useOrchestratorSessionForInvite(inviteCode);
   return data?.accessToken ?? null;
+}
+
+/**
+ * Whether the current session is an instance operator.
+ *
+ * `false` while the session is still loading, so the admin nav never flashes
+ * in for a user who turns out not to have it. Callers that need to
+ * distinguish "not an operator" from "don't know yet" should read
+ * `isLoading` from `useOrchestratorSession` directly.
+ */
+export function useIsSuperAdmin(): boolean {
+  const { data } = useOrchestratorSession();
+  return data?.isSuperAdmin ?? false;
 }

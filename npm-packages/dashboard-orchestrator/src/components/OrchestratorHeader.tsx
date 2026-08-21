@@ -31,7 +31,7 @@ import { Avatar } from "./Avatar";
 import { ConvexOrb } from "./ConvexOrb";
 import { CreateTeamModal } from "./CreateTeamModal";
 import { NavBar } from "./NavBar";
-import { useAccessToken } from "../lib/useOrchestratorToken";
+import { useAccessToken, useIsSuperAdmin } from "../lib/useOrchestratorToken";
 import { signOut, useSession } from "../lib/auth-client";
 import { orchestratorUrl } from "../lib/config";
 import {
@@ -695,6 +695,9 @@ function UserMenu({
   const user = session?.data?.user;
   const name = user?.name || user?.email || "?";
   const email = user?.email ?? "";
+  // Presentation only — /api/admin is gated server-side by the SuperAdmin
+  // extractor. This just avoids showing a link that would 403.
+  const isSuperAdmin = useIsSuperAdmin();
   return (
     <Menu
       buttonProps={{
@@ -765,6 +768,22 @@ function UserMenu({
               </MenuLink>
             </Tooltip>
           ) : null}
+        </>
+      ) : null}
+      {isSuperAdmin ? (
+        <>
+          <hr className="mx-4" />
+          <Tooltip
+            side="left"
+            tip="Instance-wide operator view: fleet health, all teams, all members."
+          >
+            <MenuLink href="/admin">
+              <div className="flex w-full items-center justify-between">
+                Instance Admin
+                <GearIcon className="text-content-secondary" />
+              </div>
+            </MenuLink>
+          </Tooltip>
         </>
       ) : null}
       <hr className="mx-4" />
