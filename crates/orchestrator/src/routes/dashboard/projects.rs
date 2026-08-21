@@ -23,7 +23,11 @@ use crate::{
         ApiError,
         ApiResult,
     },
-    routes::helpers::project_to_response,
+    routes::helpers::{
+        project_to_response,
+        require_project_member,
+        require_team_member,
+    },
     state::OrchestratorState,
 };
 
@@ -50,10 +54,11 @@ pub fn router() -> Router<OrchestratorState> {
     tag = "dashboard",
 )]
 pub(crate) async fn list_projects(
-    _auth: AuthIdentity,
+    auth: AuthIdentity,
     State(state): State<OrchestratorState>,
     Path(team_id): Path<i64>,
 ) -> ApiResult<Json<Vec<ProjectResponse>>> {
+    require_team_member(&state, &auth, team_id).await?;
     let projects = state
         .storage
         .list_projects(team_id)
@@ -70,10 +75,11 @@ pub(crate) async fn list_projects(
     tag = "dashboard",
 )]
 pub(crate) async fn get_project_by_slug(
-    _auth: AuthIdentity,
+    auth: AuthIdentity,
     State(state): State<OrchestratorState>,
     Path((team_id, project_slug)): Path<(i64, String)>,
 ) -> ApiResult<Json<ProjectResponse>> {
+    require_team_member(&state, &auth, team_id).await?;
     let p = state
         .storage
         .get_project_by_slug(team_id, &project_slug)
@@ -91,10 +97,11 @@ pub(crate) async fn get_project_by_slug(
     tag = "dashboard",
 )]
 pub(crate) async fn get_project(
-    _auth: AuthIdentity,
+    auth: AuthIdentity,
     State(state): State<OrchestratorState>,
     Path(project_id): Path<i64>,
 ) -> ApiResult<Json<ProjectResponse>> {
+    require_project_member(&state, &auth, project_id).await?;
     let p = state
         .storage
         .get_project(project_id)
@@ -113,11 +120,12 @@ pub(crate) async fn get_project(
     tag = "dashboard",
 )]
 pub(crate) async fn update_project(
-    _auth: AuthIdentity,
+    auth: AuthIdentity,
     State(state): State<OrchestratorState>,
     Path(project_id): Path<i64>,
     Json(args): Json<UpdateProjectArgs>,
 ) -> ApiResult<StatusCode> {
+    require_project_member(&state, &auth, project_id).await?;
     state
         .storage
         .update_project(project_id, args.name.as_deref(), args.slug.as_deref())

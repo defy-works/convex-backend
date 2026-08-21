@@ -1,22 +1,47 @@
 use axum::{
-    extract::{Path, Query, State},
+    extract::{
+        Path,
+        Query,
+        State,
+    },
     http::StatusCode,
-    routing::{get, post},
-    Json, Router,
+    routing::{
+        get,
+        post,
+    },
+    Json,
+    Router,
 };
 use orchestrator_api_types::management::{
-    DeploymentClass, DeploymentRegion, DeploymentSettingsResponse, ListDeploymentClassesResponse,
-    ListDeploymentRegionsResponse, ListLocalDeploymentsResponse, PaginatedDeploymentsResponse,
-    PlatformCreateDeploymentArgs, PlatformDeploymentResponse, PlatformTransferDeploymentArgs,
-    PlatformUpdateDeploymentArgs, RestartDeploymentArgs, UpdateDeploymentSettingsArgs,
+    DeploymentClass,
+    DeploymentRegion,
+    DeploymentSettingsResponse,
+    ListDeploymentClassesResponse,
+    ListDeploymentRegionsResponse,
+    ListLocalDeploymentsResponse,
+    PaginatedDeploymentsResponse,
+    PlatformCreateDeploymentArgs,
+    PlatformDeploymentResponse,
+    PlatformTransferDeploymentArgs,
+    PlatformUpdateDeploymentArgs,
+    RestartDeploymentArgs,
+    UpdateDeploymentSettingsArgs,
 };
 use serde::Deserialize;
 
 use crate::{
     auth::identity::AuthIdentity,
-    errors::{ApiError, ApiResult},
+    errors::{
+        ApiError,
+        ApiResult,
+    },
     ids::random_deployment_name,
-    routes::helpers::deployment_to_platform,
+    routes::helpers::{
+        deployment_to_platform,
+        require_deployment_member_by_name,
+        require_project_member,
+        require_team_member,
+    },
     state::OrchestratorState,
     storage::DeploymentType,
 };
@@ -84,10 +109,11 @@ pub fn router() -> Router<OrchestratorState> {
     tag = "deployments",
 )]
 pub(crate) async fn list_deployments(
-    _auth: AuthIdentity,
+    auth: AuthIdentity,
     State(state): State<OrchestratorState>,
     Path(project_id): Path<i64>,
 ) -> ApiResult<Json<Vec<PlatformDeploymentResponse>>> {
+    require_project_member(&state, &auth, project_id).await?;
     let rows = state
         .storage
         .list_deployments(project_id)
@@ -226,11 +252,12 @@ pub(crate) struct DeploymentQuery {
     tag = "deployments",
 )]
 pub(crate) async fn get_default_deployment_for_project(
-    _auth: AuthIdentity,
+    auth: AuthIdentity,
     State(state): State<OrchestratorState>,
     Path(project_id): Path<i64>,
     Query(q): Query<DeploymentQuery>,
 ) -> ApiResult<Json<PlatformDeploymentResponse>> {
+    require_project_member(&state, &auth, project_id).await?;
     if let Some(reference) = q.reference {
         let d = state
             .storage
@@ -324,10 +351,11 @@ pub(crate) async fn get_default_deployment_by_slug(
     tag = "deployments",
 )]
 pub(crate) async fn list_team_deployments(
-    _auth: AuthIdentity,
+    auth: AuthIdentity,
     State(state): State<OrchestratorState>,
     Path(team_id): Path<i64>,
 ) -> ApiResult<Json<PaginatedDeploymentsResponse>> {
+    require_team_member(&state, &auth, team_id).await?;
     let rows = state
         .storage
         .list_deployments_for_team(team_id)
@@ -349,9 +377,11 @@ pub(crate) async fn list_team_deployments(
     tag = "deployments",
 )]
 pub(crate) async fn list_local_deployments(
-    _auth: AuthIdentity,
-    Path(_team_id): Path<i64>,
+    auth: AuthIdentity,
+    State(state): State<OrchestratorState>,
+    Path(team_id): Path<i64>,
 ) -> ApiResult<Json<ListLocalDeploymentsResponse>> {
+    require_team_member(&state, &auth, team_id).await?;
     Ok(Json(ListLocalDeploymentsResponse {
         deployments: Vec::new(),
     }))
@@ -367,9 +397,11 @@ pub(crate) async fn list_local_deployments(
     tag = "deployments",
 )]
 pub(crate) async fn list_deployment_classes(
-    _auth: AuthIdentity,
-    Path(_team_id): Path<i64>,
+    auth: AuthIdentity,
+    State(state): State<OrchestratorState>,
+    Path(team_id): Path<i64>,
 ) -> ApiResult<Json<ListDeploymentClassesResponse>> {
+    require_team_member(&state, &auth, team_id).await?;
     Ok(Json(ListDeploymentClassesResponse {
         classes: vec![DeploymentClass {
             name: "standard".into(),
@@ -409,10 +441,11 @@ pub(crate) async fn list_deployment_regions(
     tag = "deployments",
 )]
 pub(crate) async fn get_deployment(
-    _auth: AuthIdentity,
+    auth: AuthIdentity,
     State(state): State<OrchestratorState>,
     Path(deployment_name): Path<String>,
 ) -> ApiResult<Json<PlatformDeploymentResponse>> {
+    require_deployment_member_by_name(&state, &auth, &deployment_name).await?;
     let d = state
         .storage
         .get_deployment_by_name(&deployment_name)
@@ -433,10 +466,11 @@ pub(crate) async fn get_deployment(
     tag = "deployments",
 )]
 pub(crate) async fn delete_deployment(
-    _auth: AuthIdentity,
+    auth: AuthIdentity,
     State(state): State<OrchestratorState>,
     Path(deployment_name): Path<String>,
 ) -> ApiResult<StatusCode> {
+    require_deployment_member_by_name(&state, &auth, &deployment_name).await?;
     let d = state
         .storage
         .get_deployment_by_name(&deployment_name)
@@ -480,11 +514,12 @@ pub(crate) async fn delete_deployment(
     tag = "deployments",
 )]
 pub(crate) async fn transfer_deployment(
-    _auth: AuthIdentity,
+    auth: AuthIdentity,
     State(state): State<OrchestratorState>,
     Path(deployment_name): Path<String>,
     Json(args): Json<PlatformTransferDeploymentArgs>,
 ) -> ApiResult<StatusCode> {
+    require_deployment_member_by_name(&state, &auth, &deployment_name).await?;
     let d = state
         .storage
         .get_deployment_by_name(&deployment_name)
@@ -612,10 +647,11 @@ fn json_object_to_btree(v: &serde_json::Value) -> std::collections::BTreeMap<Str
     tag = "deployments",
 )]
 pub(crate) async fn get_deployment_settings(
-    _auth: AuthIdentity,
+    auth: AuthIdentity,
     State(state): State<OrchestratorState>,
     Path(deployment_name): Path<String>,
 ) -> ApiResult<Json<DeploymentSettingsResponse>> {
+    require_deployment_member_by_name(&state, &auth, &deployment_name).await?;
     let deployment = state
         .storage
         .get_deployment_by_name(&deployment_name)
@@ -656,11 +692,12 @@ pub(crate) async fn get_deployment_settings(
     tag = "deployments",
 )]
 pub(crate) async fn patch_deployment_settings(
-    _auth: AuthIdentity,
+    auth: AuthIdentity,
     State(state): State<OrchestratorState>,
     Path(deployment_name): Path<String>,
     Json(args): Json<UpdateDeploymentSettingsArgs>,
 ) -> ApiResult<Json<DeploymentSettingsResponse>> {
+    require_deployment_member_by_name(&state, &auth, &deployment_name).await?;
     let deployment = state
         .storage
         .get_deployment_by_name(&deployment_name)
@@ -743,11 +780,12 @@ pub(crate) async fn patch_deployment_settings(
     tag = "deployments",
 )]
 pub(crate) async fn restart_deployment(
-    _auth: AuthIdentity,
+    auth: AuthIdentity,
     State(state): State<OrchestratorState>,
     Path(deployment_name): Path<String>,
     Json(args): Json<RestartDeploymentArgs>,
 ) -> ApiResult<Json<PlatformDeploymentResponse>> {
+    require_deployment_member_by_name(&state, &auth, &deployment_name).await?;
     let deployment = state
         .storage
         .get_deployment_by_name(&deployment_name)

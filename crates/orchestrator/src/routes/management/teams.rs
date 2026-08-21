@@ -38,6 +38,7 @@ use crate::{
         random_id,
         slugify,
     },
+    routes::helpers::require_team_member,
     state::OrchestratorState,
     storage::{
         access_tokens::NewAccessToken,
@@ -100,10 +101,11 @@ pub(crate) async fn create_team(
     tag = "teams",
 )]
 pub(crate) async fn list_members(
-    _auth: AuthIdentity,
+    auth: AuthIdentity,
     State(state): State<OrchestratorState>,
     Path(team_id): Path<i64>,
 ) -> ApiResult<Json<PlatformListTeamMembersResponse>> {
+    require_team_member(&state, &auth, team_id).await?;
     let rows = state
         .storage
         .list_team_members(team_id)

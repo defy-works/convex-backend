@@ -40,7 +40,10 @@ use crate::{
         random_id,
         slugify,
     },
-    routes::helpers::team_to_response,
+    routes::helpers::{
+        require_team_member,
+        team_to_response,
+    },
     state::OrchestratorState,
     storage::TeamRole,
     stub_data,
@@ -53,7 +56,10 @@ pub fn router() -> Router<OrchestratorState> {
         .route("/teams/{team_id}/delete", post(delete_team))
         .route("/teams/{team_id}/members", get(list_members))
         .route("/teams/{team_id}/remove_member", post(remove_member))
-        .route("/teams/{team_id}/update_member_role", post(update_member_role))
+        .route(
+            "/teams/{team_id}/update_member_role",
+            post(update_member_role),
+        )
         .route(
             "/teams/{team_id}/get_entitlements",
             get(get_entitlements_stub),
@@ -65,10 +71,7 @@ pub fn router() -> Router<OrchestratorState> {
         )
         .route("/teams/{team_id}/invites/cancel", post(cancel_invite))
         .route("/invites/{code}/accept", post(accept_invite))
-        .route(
-            "/teams/{team_id}/get_project_roles",
-            get(get_project_roles),
-        )
+        .route("/teams/{team_id}/get_project_roles", get(get_project_roles))
         .route(
             "/teams/{team_id}/update_project_roles",
             post(update_project_roles),
@@ -330,9 +333,14 @@ pub(crate) async fn get_entitlements_stub(
     tag = "dashboard_stubs",
 )]
 pub(crate) async fn unpause_deployments(
-    _auth: AuthIdentity,
-    Path(_team_id): Path<i64>,
+    auth: AuthIdentity,
+    State(state): State<OrchestratorState>,
+    Path(team_id): Path<i64>,
 ) -> ApiResult<StatusCode> {
+    // A no-op stub (nothing here ever pauses a team for billing), but it
+    // still claims to act on a team, so it should not answer OK for a team
+    // the caller has nothing to do with.
+    require_team_member(&state, &auth, team_id).await?;
     Ok(StatusCode::OK)
 }
 
@@ -535,10 +543,11 @@ pub(crate) struct ProjectRoleEntry {
     tag = "dashboard",
 )]
 pub(crate) async fn get_project_roles(
-    _auth: AuthIdentity,
+    auth: AuthIdentity,
     State(state): State<OrchestratorState>,
     Path(team_id): Path<i64>,
 ) -> ApiResult<Json<Vec<ProjectRoleEntry>>> {
+    require_team_member(&state, &auth, team_id).await?;
     let pairs = state
         .storage
         .list_project_admins_for_team(team_id)
@@ -590,11 +599,7 @@ pub(crate) async fn update_project_roles(
     }
     state
         .storage
-        .set_project_admins(
-            args.project_id,
-            &args.admin_member_ids,
-            auth.member_id,
-        )
+        .set_project_admins(args.project_id, &args.admin_member_ids, auth.member_id)
         .await
         .map_err(ApiError::Internal)?;
     Ok(StatusCode::OK)
