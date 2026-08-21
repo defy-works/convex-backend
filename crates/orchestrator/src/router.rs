@@ -50,11 +50,14 @@ pub fn build_router(state: OrchestratorState) -> Router {
         .max_age(Duration::from_secs(3600));
 
     let api_router = routes::deployment_internal::router();
+    let admin_router = routes::admin::router();
     let dashboard_router = routes::dashboard::router();
     let internal_router = routes::internal::router();
     let management_router = routes::management::router();
 
     Router::new()
+        // Mounted before `/api` so the more specific prefix wins.
+        .nest("/api/admin", admin_router)
         .nest("/api/dashboard", dashboard_router)
         .nest("/api/internal", internal_router)
         .nest("/api", api_router)
@@ -309,6 +312,12 @@ async fn not_found() -> impl IntoResponse {
         // Service-key-gated internal endpoints (/api/internal/...)
         crate::routes::internal::exchange_session,
         crate::routes::internal::health,
+        // Instance-scoped operator API (/api/admin/...), SuperAdmin-gated
+        crate::routes::admin::health::admin_health,
+        crate::routes::admin::overview::overview,
+        crate::routes::admin::fleet::fleet,
+        crate::routes::admin::members::list_members,
+        crate::routes::admin::audit::instance_audit,
     ),
     tags(
         (name = "tokens", description = "/v1: personal access tokens"),
@@ -318,6 +327,7 @@ async fn not_found() -> impl IntoResponse {
         (name = "env_vars", description = "/v1: project-level default environment variables"),
         (name = "deployment_internal", description = "/api: load-bearing CLI / big_brain_client endpoints"),
         (name = "dashboard", description = "/api/dashboard: private dashboard API"),
+        (name = "admin", description = "/api/admin: instance-scoped operator API (super-admin only)"),
         (name = "dashboard_stubs", description = "/api/dashboard: stubbed Cloud-only endpoints (Orb, WorkOS, Vercel, Discord, cloud backups, usage analytics)"),
         (name = "internal", description = "/api/internal: service-key-gated endpoints used only by dashboard-orchestrator"),
     ),

@@ -63,8 +63,12 @@ const STARTUP_DELAY: Duration = Duration::from_secs(5);
 const SIDECAR_STORAGE_MODE: &str = "sidecar";
 
 /// What docker currently thinks of a container.
+///
+/// `pub` so the admin fleet route can report actual-vs-intended state using
+/// the same probe the reconciler acts on — two implementations would
+/// eventually disagree about what "drifted" means.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ContainerStatus {
+pub enum ContainerStatus {
     /// No container by that name.
     Missing,
     /// Exists and its state is `running`.
@@ -344,7 +348,7 @@ async fn start_container(name: &str) -> anyhow::Result<()> {
 
 /// Read a container's state via `docker inspect`. A non-zero exit means no
 /// such container, which is the `Missing` case rather than an error.
-async fn container_status(name: &str) -> anyhow::Result<ContainerStatus> {
+pub async fn container_status(name: &str) -> anyhow::Result<ContainerStatus> {
     let output = Command::new("docker")
         .args(["inspect", "--format", "{{.State.Status}}", name])
         .output()

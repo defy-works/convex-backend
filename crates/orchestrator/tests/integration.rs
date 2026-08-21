@@ -1490,3 +1490,302 @@ async fn health_and_ready_both_answer_against_a_live_database() {
         assert_eq!(resp.status(), StatusCode::OK, "GET {path} with a live DB");
     }
 }
+
+/// Drift is "the container is not doing what the database says". The
+/// load-bearing case is intended=running, actual=missing.
+#[test]
+fn drift_is_intended_versus_actual() {
+    use orchestrator::routes::admin::fleet::is_drifted;
+
+    // The case that matters: the DB says it should be up, it is gone.
+    assert!(is_drifted("running", "missing"));
+    assert!(is_drifted("running", "stopped"));
+
+    // Agreement in either direction is not drift.
+    assert!(!is_drifted("running", "running"));
+    assert!(!is_drifted("paused", "missing"));
+    assert!(!is_drifted("disabled", "stopped"));
+
+    // Should be down but is up is also drift.
+    assert!(is_drifted("paused", "running"));
+
+    // A probe we could not run is never drift.
+    assert!(!is_drifted("running", "unknown"));
+    assert!(!is_drifted("paused", "unknown"));
+}
+
+/// The admin surface must see across team boundaries - that is the entire
+/// point. Two teams with one member each; the admin queries return both.
+#[tokio::test]
+#[ignore = "needs TEST_ORCHESTRATOR_DATABASE_URL"]
+async fn admin_queries_span_all_teams() {
+    let database_url = std::env::var("TEST_ORCHESTRATOR_DATABASE_URL")
+        .expect("TEST_ORCHESTRATOR_DATABASE_URL not set (this test is `#[ignore]` by default)");
+    reset_public_schema(&database_url).await;
+
+    let storage = orchestrator::storage::Storage::connect(&database_url)
+        .await
+        .expect("connect storage");
+
+    let alice = storage
+        .upsert_member("auth-alice", "alice@example.com", Some("Alice"))
+        .await
+        .expect("alice");
+    let bob = storage
+        .upsert_member("auth-bob", "bob@example.com", Some("Bob"))
+        .await
+        .expect("bob");
+    // A member on no team at all: the LEFT JOIN still emits a row for them,
+    // and they must come back with an empty `teams` rather than being
+    // dropped or inheriting somebody else's.
+    let _carol = storage
+        .upsert_member("auth-carol", "carol@example.com", None)
+        .await
+        .expect("carol");
+
+    let t1 = storage
+        .create_team("One", "one", Some(alice.id))
+        .await
+        .expect("team one");
+    let t2 = storage
+        .create_team("Two", "two", Some(bob.id))
+        .await
+        .expect("team two");
+    storage
+        .add_team_member(t1.id, alice.id, orchestrator::storage::TeamRole::Admin)
+        .await
+        .expect("alice in one");
+    storage
+        .add_team_member(t2.id, bob.id, orchestrator::storage::TeamRole::Developer)
+        .await
+        .expect("bob in two");
+    // Alice is on both teams, so her row must carry two memberships.
+    storage
+        .add_team_member(t2.id, alice.id, orchestrator::storage::TeamRole::Developer)
+        .await
+        .expect("alice in two");
+
+    let teams = storage.list_all_teams().await.expect("all teams");
+    assert_eq!(teams.len(), 2, "must see both teams");
+
+    let members = storage.list_all_members().await.expect("all members");
+    assert_eq!(members.len(), 3, "must see all three members");
+
+    let alice_row = members
+        .iter()
+        .find(|m| m.primary_email == "alice@example.com")
+        .expect("alice present");
+    assert_eq!(alice_row.teams.len(), 2, "alice is on two teams");
+    assert_eq!(alice_row.teams[0].team_slug, "one");
+    assert_eq!(alice_row.teams[0].role, "admin");
+    assert_eq!(alice_row.teams[1].team_slug, "two");
+    assert_eq!(alice_row.teams[1].role, "developer");
+
+    let carol_row = members
+        .iter()
+        .find(|m| m.primary_email == "carol@example.com")
+        .expect("carol present");
+    assert!(
+        carol_row.teams.is_empty(),
+        "a member on no team must have no memberships, got {:?}",
+        carol_row.teams
+    );
+}
+
+/// Every `/api/admin` route must reject a non-super-admin identity.
+///
+/// Driven off `ADMIN_ROUTES` rather than a hand-maintained list here, so a
+/// route added without a `SuperAdmin` extractor fails this test instead of
+/// shipping open.
+#[tokio::test]
+#[ignore = "needs TEST_ORCHESTRATOR_DATABASE_URL"]
+async fn every_admin_route_rejects_non_super_admins() {
+    use std::sync::Arc;
+
+    use axum::{
+        body::Body,
+        http::{
+            header::AUTHORIZATION,
+            Request,
+            StatusCode,
+        },
+    };
+    use orchestrator::{
+        router::build_router,
+        routes::admin::ADMIN_ROUTES,
+        state::OrchestratorState,
+        storage::{
+            access_tokens::NewAccessToken,
+            AccessTokenKind,
+        },
+    };
+    use tower::ServiceExt;
+
+    let database_url = std::env::var("TEST_ORCHESTRATOR_DATABASE_URL")
+        .expect("TEST_ORCHESTRATOR_DATABASE_URL not set (this test is `#[ignore]` by default)");
+    reset_public_schema(&database_url).await;
+
+    let data_root = tempfile::tempdir().expect("tempdir for data root");
+    let config = test_config(database_url, data_root.path().to_path_buf());
+    let mut state = OrchestratorState::new(config).await.expect("state");
+    state.provisioner = Arc::new(StubProvisioner);
+    let app = build_router(state.clone());
+
+    // An ordinary member with an ordinary PAT.
+    let plain = state
+        .storage
+        .upsert_member("auth-plain", "plain@example.com", Some("Plain"))
+        .await
+        .expect("plain member");
+    let plain_secret = "plain-secret";
+    state
+        .storage
+        .create_access_token(NewAccessToken {
+            public_id: "plain-public",
+            kind: AccessTokenKind::Pat,
+            member_id: Some(plain.id),
+            team_id: None,
+            project_id: None,
+            deployment_id: None,
+            name: "plain-pat",
+            secret_hash: &orchestrator::auth::tokens::sha256_hex(plain_secret),
+            secret_suffix: "cret",
+            expiry: None,
+        })
+        .await
+        .expect("plain pat");
+    let plain_bearer = format!("Bearer pat:plain-public|{plain_secret}");
+
+    assert!(!ADMIN_ROUTES.is_empty(), "ADMIN_ROUTES must not be empty");
+
+    for (method, path) in ADMIN_ROUTES {
+        // Unauthenticated.
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(*method)
+                    .uri(*path)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap_or_else(|_| panic!("send {method} {path}"));
+        assert_eq!(
+            resp.status(),
+            StatusCode::UNAUTHORIZED,
+            "{method} {path} must be 401 without a token"
+        );
+
+        // Authenticated but not a super-admin.
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(*method)
+                    .uri(*path)
+                    .header(AUTHORIZATION, &plain_bearer)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap_or_else(|_| panic!("send {method} {path} as plain member"));
+        assert_eq!(
+            resp.status(),
+            StatusCode::FORBIDDEN,
+            "{method} {path} must be 403 for a non-super-admin"
+        );
+    }
+
+    // Granting the bit opens every route.
+    state
+        .storage
+        .set_super_admin(plain.id, true)
+        .await
+        .expect("grant");
+    for (method, path) in ADMIN_ROUTES {
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(*method)
+                    .uri(*path)
+                    .header(AUTHORIZATION, &plain_bearer)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap_or_else(|_| panic!("send {method} {path} as super-admin"));
+        assert_eq!(
+            resp.status(),
+            StatusCode::OK,
+            "{method} {path} must be 200 for a super-admin"
+        );
+    }
+}
+
+/// The route table and the router must not drift apart. `ADMIN_ROUTES` is
+/// what the authorization test iterates, so a route present in one and not
+/// the other is a hole rather than a cosmetic mismatch.
+#[test]
+fn admin_route_table_matches_the_openapi_surface() {
+    use orchestrator::{
+        router::OrchestratorOpenApi,
+        routes::admin::ADMIN_ROUTES,
+    };
+    use utoipa::OpenApi;
+
+    let spec =
+        serde_json::to_value(OrchestratorOpenApi::openapi()).expect("serialize openapi spec");
+    let paths = spec
+        .get("paths")
+        .and_then(|p| p.as_object())
+        .expect("openapi spec has a `paths` object");
+
+    // Every documented /api/admin operation is in the table.
+    let mut undocumented_in_table = Vec::new();
+    for (path, item) in paths {
+        if !path.starts_with("/api/admin/") {
+            continue;
+        }
+        let item = item.as_object().expect("path item must be an object");
+        for method in item.keys() {
+            if !matches!(
+                method.as_str(),
+                "get" | "post" | "put" | "patch" | "delete" | "head" | "options" | "trace"
+            ) {
+                continue;
+            }
+            let wanted = (method.to_uppercase(), path.to_string());
+            if !ADMIN_ROUTES
+                .iter()
+                .any(|(m, p)| *m == wanted.0 && *p == wanted.1)
+            {
+                undocumented_in_table.push(format!("{} {}", wanted.0, wanted.1));
+            }
+        }
+    }
+    assert!(
+        undocumented_in_table.is_empty(),
+        "these /api/admin operations are routed but missing from ADMIN_ROUTES, so the \
+         authorization test does not cover them:\n  {}",
+        undocumented_in_table.join("\n  ")
+    );
+
+    // And every table entry is actually documented.
+    let mut missing_from_spec = Vec::new();
+    for (method, path) in ADMIN_ROUTES {
+        let found = paths
+            .get(*path)
+            .and_then(|item| item.get(method.to_lowercase()))
+            .is_some();
+        if !found {
+            missing_from_spec.push(format!("{method} {path}"));
+        }
+    }
+    assert!(
+        missing_from_spec.is_empty(),
+        "these ADMIN_ROUTES entries are not in the OpenAPI spec:\n  {}",
+        missing_from_spec.join("\n  ")
+    );
+}

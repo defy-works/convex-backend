@@ -2,6 +2,7 @@
 
 pub mod access_tokens;
 mod acme;
+mod admin;
 mod audit_log;
 mod custom_domains;
 pub mod deployments;
@@ -23,6 +24,11 @@ pub use self::{
     access_tokens::{
         AccessToken,
         AccessTokenKind,
+    },
+    admin::{
+        AdminDeploymentRow,
+        AdminMemberRow,
+        MemberTeamRef,
     },
     audit_log::{
         AuditEntry,
