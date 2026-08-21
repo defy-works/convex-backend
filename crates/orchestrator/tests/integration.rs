@@ -4,10 +4,10 @@
 //! `docs/superpowers/specs/2026-05-02-convex-orchestrator-plan.md`:
 //!
 //! 1. **Default-run, no DB.** Asserts that the public Management API surface
-//!    (`/v1/...`) advertised by `--print-openapi` matches the wire contract
-//!    the dashboard's typed clients and `crates/big_brain_client` already
-//!    expect, and round-trips the load-bearing deployment-internal DTOs
-//!    through `serde_json` against their upstream definitions in
+//!    (`/v1/...`) advertised by `--print-openapi` matches the wire contract the
+//!    dashboard's typed clients and `crates/big_brain_client` already expect,
+//!    and round-trips the load-bearing deployment-internal DTOs through
+//!    `serde_json` against their upstream definitions in
 //!    `big_brain_private_api_types`.
 //!
 //! 2. **`#[ignore]`-gated, requires `TEST_ORCHESTRATOR_DATABASE_URL`.** Spins
@@ -62,7 +62,10 @@ const EXPECTED_MANAGEMENT_OPERATIONS: &[(&str, &str)] = &[
     ("get", "/v1/projects/{project_id}/list_deployments"),
     ("post", "/v1/projects/{project_id}/create_deployment"),
     ("get", "/v1/projects/{project_id}/deployment"),
-    ("get", "/v1/teams/{team_id_or_slug}/projects/{project_slug}/deployment"),
+    (
+        "get",
+        "/v1/teams/{team_id_or_slug}/projects/{project_slug}/deployment",
+    ),
     ("get", "/v1/teams/{team_id}/list_deployments"),
     ("get", "/v1/teams/{team_id}/list_local_deployments"),
     ("get", "/v1/teams/{team_id}/list_deployment_classes"),
@@ -74,15 +77,21 @@ const EXPECTED_MANAGEMENT_OPERATIONS: &[(&str, &str)] = &[
     ("patch", "/v1/deployments/{deployment_name}/settings"),
     ("post", "/v1/deployments/{deployment_name}/restart"),
     // env vars
-    ("get", "/v1/projects/{project_id}/list_default_environment_variables"),
-    ("post", "/v1/projects/{project_id}/update_default_environment_variables"),
+    (
+        "get",
+        "/v1/projects/{project_id}/list_default_environment_variables",
+    ),
+    (
+        "post",
+        "/v1/projects/{project_id}/update_default_environment_variables",
+    ),
 ];
 
 #[test]
 fn openapi_exposes_all_management_endpoints() {
     use utoipa::OpenApi;
-    let spec = serde_json::to_value(OrchestratorOpenApi::openapi())
-        .expect("serialize openapi spec");
+    let spec =
+        serde_json::to_value(OrchestratorOpenApi::openapi()).expect("serialize openapi spec");
     let paths = spec
         .get("paths")
         .and_then(|p| p.as_object())
@@ -105,8 +114,8 @@ fn openapi_exposes_all_management_endpoints() {
 #[test]
 fn openapi_does_not_expose_undocumented_management_endpoints() {
     use utoipa::OpenApi;
-    let spec = serde_json::to_value(OrchestratorOpenApi::openapi())
-        .expect("serialize openapi spec");
+    let spec =
+        serde_json::to_value(OrchestratorOpenApi::openapi()).expect("serialize openapi spec");
     let paths = spec
         .get("paths")
         .and_then(|p| p.as_object())
@@ -140,8 +149,8 @@ fn openapi_does_not_expose_undocumented_management_endpoints() {
     }
     assert!(
         extra.is_empty(),
-        "OpenAPI spec advertises /v1 operations not in the documented contract \
-         (add them to EXPECTED_MANAGEMENT_OPERATIONS):\n  {}",
+        "OpenAPI spec advertises /v1 operations not in the documented contract (add them to \
+         EXPECTED_MANAGEMENT_OPERATIONS):\n  {}",
         extra.join("\n  ")
     );
 }
@@ -159,10 +168,7 @@ fn deployment_internal_dto_wire_format() {
         UrlForKeyResponse,
     };
 
-    let v = serde_json::to_value(HasProjectsResponse {
-        has_projects: true,
-    })
-    .unwrap();
+    let v = serde_json::to_value(HasProjectsResponse { has_projects: true }).unwrap();
     assert_eq!(v, serde_json::json!({"hasProjects": true}));
 
     let v = serde_json::to_value(TeamSummary {
@@ -206,7 +212,10 @@ fn deployment_internal_dto_wire_format() {
         deploy_key: "prod:happy-otter-1|secret".into(),
     })
     .unwrap();
-    assert_eq!(v, serde_json::json!({"deployKey": "prod:happy-otter-1|secret"}));
+    assert_eq!(
+        v,
+        serde_json::json!({"deployKey": "prod:happy-otter-1|secret"})
+    );
 
     let v = serde_json::to_value(UrlForKeyResponse {
         url: "http://happy-otter-1.localhost:9000".into(),
@@ -241,7 +250,10 @@ fn deployment_auth_response_is_byte_identical_to_upstream() {
 
     let a = serde_json::to_value(&via_upstream).unwrap();
     let b = serde_json::to_value(&via_exported).unwrap();
-    assert_eq!(a, b, "DeploymentAuthResponse re-export drifted from upstream");
+    assert_eq!(
+        a, b,
+        "DeploymentAuthResponse re-export drifted from upstream"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -303,15 +315,17 @@ async fn deployment_internal_flow_against_real_db() {
         router::build_router,
         state::OrchestratorState,
     };
-    use orchestrator_api_types::dashboard::{
-        DeviceAuthorizeArgs,
-        DeviceAuthorizeResponse,
-    };
-    use orchestrator_api_types::deployment::{
-        CreateProjectArgs,
-        CreateProjectResponse,
-        HasProjectsResponse,
-        TeamSummary,
+    use orchestrator_api_types::{
+        dashboard::{
+            DeviceAuthorizeArgs,
+            DeviceAuthorizeResponse,
+        },
+        deployment::{
+            CreateProjectArgs,
+            CreateProjectResponse,
+            HasProjectsResponse,
+            TeamSummary,
+        },
     };
     use tower::ServiceExt;
 
@@ -354,7 +368,9 @@ async fn deployment_internal_flow_against_real_db() {
 
     // Construct OrchestratorState the public way, then swap in the stub
     // provisioner so we can exercise create_deployment without docker.
-    let mut state = OrchestratorState::new(config).await.expect("orchestrator state");
+    let mut state = OrchestratorState::new(config)
+        .await
+        .expect("orchestrator state");
     state.provisioner = Arc::new(StubProvisioner);
 
     let app = build_router(state.clone());
@@ -399,8 +415,7 @@ async fn deployment_internal_flow_against_real_db() {
         .expect("send /api/teams");
     assert_eq!(resp.status(), StatusCode::OK, "GET /api/teams");
     let body = resp.into_body().collect().await.unwrap().to_bytes();
-    let teams: Vec<TeamSummary> =
-        serde_json::from_slice(&body).expect("Vec<TeamSummary> shape");
+    let teams: Vec<TeamSummary> = serde_json::from_slice(&body).expect("Vec<TeamSummary> shape");
     assert!(!teams.is_empty(), "bootstrap team should be present");
     let team_slug = teams[0].slug.clone();
 
@@ -419,8 +434,7 @@ async fn deployment_internal_flow_against_real_db() {
         .expect("send /api/has_projects");
     assert_eq!(resp.status(), StatusCode::OK);
     let body = resp.into_body().collect().await.unwrap().to_bytes();
-    let _: HasProjectsResponse =
-        serde_json::from_slice(&body).expect("HasProjectsResponse shape");
+    let _: HasProjectsResponse = serde_json::from_slice(&body).expect("HasProjectsResponse shape");
 
     // 3. POST /api/create_project → CreateProjectResponse.
     let create_args = CreateProjectArgs {
@@ -467,7 +481,10 @@ async fn deployment_internal_flow_against_real_db() {
     assert_eq!(resp.status(), StatusCode::OK);
     let body = resp.into_body().collect().await.unwrap().to_bytes();
     let after: HasProjectsResponse = serde_json::from_slice(&body).unwrap();
-    assert!(after.has_projects, "has_projects should be true after create");
+    assert!(
+        after.has_projects,
+        "has_projects should be true after create"
+    );
 }
 
 #[tokio::test]
@@ -489,9 +506,7 @@ async fn allowlist_rejects_uninvited_non_admin_session_exchange() {
     .await;
     let app = orchestrator::router::build_router(state);
 
-    let resp = exchange_session(&app, "stranger@example.com", None)
-        .await
-        .0;
+    let resp = exchange_session(&app, "stranger@example.com", None).await.0;
 
     assert_eq!(resp, StatusCode::FORBIDDEN);
 }
@@ -615,10 +630,10 @@ async fn non_members_cannot_list_team_invite_codes() {
 // Authorization on the access-token routes.
 //
 // These routes used to take `_auth: AuthIdentity` and discard it, which
-// authenticated the caller but never authorized them. `create_team_access_token`
-// took no identity at all — and `team_id` is a sequential BIGSERIAL, so anyone
-// who could reach the API could mint a team-wide token by guessing a small
-// integer.
+// authenticated the caller but never authorized them.
+// `create_team_access_token` took no identity at all — and `team_id` is a
+// sequential BIGSERIAL, so anyone who could reach the API could mint a
+// team-wide token by guessing a small integer.
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -788,7 +803,10 @@ async fn a_member_cannot_revoke_another_members_personal_access_token() {
         .await
         .expect("load token")
         .expect("token row exists");
-    assert!(revoked.revoked_time.is_some(), "own revoke must take effect");
+    assert!(
+        revoked.revoked_time.is_some(),
+        "own revoke must take effect"
+    );
 }
 
 #[tokio::test]
@@ -1042,11 +1060,7 @@ async fn post_without_auth(
 }
 
 #[cfg(test)]
-async fn get_with_bearer(
-    app: &axum::Router,
-    uri: &str,
-    token: &str,
-) -> axum::http::StatusCode {
+async fn get_with_bearer(app: &axum::Router, uri: &str, token: &str) -> axum::http::StatusCode {
     use axum::{
         body::Body,
         http::{
@@ -1088,4 +1102,317 @@ async fn reset_public_schema(database_url: &str) {
         .batch_execute("DROP SCHEMA IF EXISTS public CASCADE; CREATE SCHEMA public;")
         .await
         .expect("reset public schema");
+}
+
+// ---------------------------------------------------------------------------
+// Admin console, Phase 1
+// ---------------------------------------------------------------------------
+
+/// The P1 migration must add the super-admin/suspension columns and make
+/// audit events instance-scopable. Asserts against `information_schema` so
+/// it fails loudly if a later migration drops one.
+#[tokio::test]
+#[ignore = "needs TEST_ORCHESTRATOR_DATABASE_URL"]
+async fn p1_migration_adds_admin_columns() {
+    let database_url = std::env::var("TEST_ORCHESTRATOR_DATABASE_URL")
+        .expect("TEST_ORCHESTRATOR_DATABASE_URL not set (this test is `#[ignore]` by default)");
+    reset_public_schema(&database_url).await;
+
+    let pool = orchestrator::storage::pool::PgPool::connect(&database_url)
+        .await
+        .expect("connect test pool");
+    orchestrator::storage::migrations::run(&pool)
+        .await
+        .expect("run migrations");
+
+    let conn = pool.acquire().await.expect("acquire");
+    let rows = conn
+        .client()
+        .query(
+            "SELECT table_name, column_name, is_nullable
+               FROM information_schema.columns
+              WHERE table_schema = 'public'
+                AND (   (table_name = 'members' AND column_name IN ('is_super_admin','suspended'))
+                     OR (table_name = 'audit_log_events' AND column_name IN ('scope','team_id')))",
+            &[],
+        )
+        .await
+        .expect("query information_schema");
+
+    let found: Vec<(String, String, String)> = rows
+        .iter()
+        .map(|r| (r.get(0), r.get(1), r.get(2)))
+        .collect();
+
+    assert!(
+        found
+            .iter()
+            .any(|(t, c, _)| t == "members" && c == "is_super_admin"),
+        "members.is_super_admin missing: {found:?}"
+    );
+    assert!(
+        found
+            .iter()
+            .any(|(t, c, _)| t == "members" && c == "suspended"),
+        "members.suspended missing: {found:?}"
+    );
+    assert!(
+        found
+            .iter()
+            .any(|(t, c, _)| t == "audit_log_events" && c == "scope"),
+        "audit_log_events.scope missing: {found:?}"
+    );
+    assert!(
+        found
+            .iter()
+            .any(|(t, c, n)| t == "audit_log_events" && c == "team_id" && n == "YES"),
+        "audit_log_events.team_id must be nullable: {found:?}"
+    );
+
+    // Idempotence: running migrations twice must not error.
+    orchestrator::storage::migrations::run(&pool)
+        .await
+        .expect("migrations are idempotent");
+}
+
+/// `set_super_admin` must refuse to clear the last remaining super-admin,
+/// and must do so atomically rather than as a read-then-write.
+#[tokio::test]
+#[ignore = "needs TEST_ORCHESTRATOR_DATABASE_URL"]
+async fn cannot_revoke_last_super_admin() {
+    let database_url = std::env::var("TEST_ORCHESTRATOR_DATABASE_URL")
+        .expect("TEST_ORCHESTRATOR_DATABASE_URL not set (this test is `#[ignore]` by default)");
+    reset_public_schema(&database_url).await;
+
+    let storage = orchestrator::storage::Storage::connect(&database_url)
+        .await
+        .expect("connect storage");
+
+    let a = storage
+        .upsert_member("auth-a", "a@example.com", Some("A"))
+        .await
+        .expect("member a");
+    let b = storage
+        .upsert_member("auth-b", "b@example.com", Some("B"))
+        .await
+        .expect("member b");
+
+    storage.set_super_admin(a.id, true).await.expect("grant a");
+    storage.set_super_admin(b.id, true).await.expect("grant b");
+
+    // Two admins: revoking one is fine.
+    storage
+        .set_super_admin(b.id, false)
+        .await
+        .expect("revoke b");
+
+    // One admin left: revoking is refused.
+    let err = storage
+        .set_super_admin(a.id, false)
+        .await
+        .expect_err("revoking the last super-admin must fail");
+    assert!(
+        err.to_string().contains("last super-admin"),
+        "unexpected error: {err}"
+    );
+
+    let reloaded = storage
+        .get_member(a.id)
+        .await
+        .expect("get a")
+        .expect("a exists");
+    assert!(reloaded.is_super_admin, "a must still be a super-admin");
+    assert!(!reloaded.suspended, "suspension defaults to false");
+}
+
+/// Elevation must ride only `Session` and `Pat` tokens, and a suspended
+/// member must stop authenticating entirely.
+///
+/// The ineligible case is exercised with a `Team` token rather than a deploy
+/// key because both sit in the same `matches!` arm in `resolve_with_storage`
+/// and a team token needs no deployment row to construct. The deploy-key
+/// kinds are the reason the gate exists - a key checked into CI must not be
+/// an instance-wide credential - so a dedicated deploy-key case is still
+/// worth adding once the fixtures for one are cheap.
+#[tokio::test]
+#[ignore = "needs TEST_ORCHESTRATOR_DATABASE_URL"]
+async fn elevation_is_limited_to_session_and_pat_tokens() {
+    use orchestrator::storage::{
+        access_tokens::NewAccessToken,
+        AccessTokenKind,
+    };
+
+    let database_url = std::env::var("TEST_ORCHESTRATOR_DATABASE_URL")
+        .expect("TEST_ORCHESTRATOR_DATABASE_URL not set (this test is `#[ignore]` by default)");
+    reset_public_schema(&database_url).await;
+
+    let storage = orchestrator::storage::Storage::connect(&database_url)
+        .await
+        .expect("connect storage");
+    let member = storage
+        .upsert_member("auth-admin", "admin@example.com", Some("Admin"))
+        .await
+        .expect("member");
+    let team = storage
+        .create_team("Ops", "ops", Some(member.id))
+        .await
+        .expect("team");
+    storage
+        .set_super_admin(member.id, true)
+        .await
+        .expect("grant");
+
+    // A PAT for that member elevates.
+    let pat_secret = "pat-secret-for-test";
+    storage
+        .create_access_token(NewAccessToken {
+            public_id: "pat-public",
+            kind: AccessTokenKind::Pat,
+            member_id: Some(member.id),
+            team_id: None,
+            project_id: None,
+            deployment_id: None,
+            name: "test-pat",
+            secret_hash: &orchestrator::auth::tokens::sha256_hex(pat_secret),
+            secret_suffix: "test",
+            expiry: None,
+        })
+        .await
+        .expect("create pat");
+
+    let identity = orchestrator::auth::identity::resolve_for_test(
+        &storage,
+        &format!("pat:pat-public|{pat_secret}"),
+    )
+    .await
+    .expect("resolve pat");
+    assert!(
+        identity.is_super_admin,
+        "a PAT for a super-admin must elevate"
+    );
+    assert!(
+        !identity.is_bootstrap,
+        "an ordinary member is not the bootstrap identity"
+    );
+
+    // A team token for the same member does not.
+    let team_secret = "team-secret-for-test";
+    storage
+        .create_access_token(NewAccessToken {
+            public_id: "team-public",
+            kind: AccessTokenKind::Team,
+            member_id: Some(member.id),
+            team_id: Some(team.id),
+            project_id: None,
+            deployment_id: None,
+            name: "test-team-token",
+            secret_hash: &orchestrator::auth::tokens::sha256_hex(team_secret),
+            secret_suffix: "test",
+            expiry: None,
+        })
+        .await
+        .expect("create team token");
+
+    let identity = orchestrator::auth::identity::resolve_for_test(
+        &storage,
+        &format!("team:team-public|{team_secret}"),
+    )
+    .await
+    .expect("resolve team token");
+    assert!(
+        !identity.is_super_admin,
+        "a non-session/PAT token must never elevate, even for an operator"
+    );
+
+    // A suspended member's token stops resolving entirely.
+    storage
+        .set_member_suspended(member.id, true)
+        .await
+        .expect("suspend");
+    let err = orchestrator::auth::identity::resolve_for_test(
+        &storage,
+        &format!("pat:pat-public|{pat_secret}"),
+    )
+    .await
+    .expect_err("a suspended member must not authenticate");
+    assert!(
+        matches!(err, orchestrator::errors::ApiError::Unauthorized),
+        "expected Unauthorized, got {err:?}"
+    );
+}
+
+/// Instance-scoped audit events must not leak into per-team audit queries,
+/// and team-scoped queries must be unaffected by team_id becoming nullable.
+#[tokio::test]
+#[ignore = "needs TEST_ORCHESTRATOR_DATABASE_URL"]
+async fn instance_audit_events_are_isolated_from_team_queries() {
+    use orchestrator::storage::AuditQuery;
+
+    let database_url = std::env::var("TEST_ORCHESTRATOR_DATABASE_URL")
+        .expect("TEST_ORCHESTRATOR_DATABASE_URL not set (this test is `#[ignore]` by default)");
+    reset_public_schema(&database_url).await;
+
+    let storage = orchestrator::storage::Storage::connect(&database_url)
+        .await
+        .expect("connect storage");
+    let member = storage
+        .upsert_member("auth-op", "op@example.com", Some("Op"))
+        .await
+        .expect("member");
+    let team = storage
+        .create_team("Test Team", "test-team", Some(member.id))
+        .await
+        .expect("team");
+
+    storage
+        .append_audit(
+            team.id,
+            Some(member.id),
+            "teamThing",
+            &serde_json::json!({ "k": "v" }),
+        )
+        .await
+        .expect("team event");
+    storage
+        .append_instance_audit(
+            Some(member.id),
+            "instanceThing",
+            &serde_json::json!({ "k": "v" }),
+        )
+        .await
+        .expect("instance event");
+    // Break-glass events carry no member attribution.
+    storage
+        .append_instance_audit(None, "bootstrapThing", &serde_json::json!({}))
+        .await
+        .expect("bootstrap event");
+
+    let team_events = storage
+        .query_audit(&AuditQuery {
+            team_id: team.id,
+            ..Default::default()
+        })
+        .await
+        .expect("query team audit");
+    assert_eq!(
+        team_events.len(),
+        1,
+        "team query must see only its own event, got {team_events:?}"
+    );
+    assert_eq!(team_events[0].action, "teamThing");
+
+    let instance_events = storage
+        .list_instance_audit(100)
+        .await
+        .expect("list instance audit");
+    assert_eq!(
+        instance_events.len(),
+        2,
+        "instance query sees only instance events"
+    );
+    // Newest first.
+    assert_eq!(instance_events[0].action, "bootstrapThing");
+    assert_eq!(instance_events[0].member_id, None);
+    assert_eq!(instance_events[1].action, "instanceThing");
+    assert_eq!(instance_events[1].member_id, Some(member.id));
 }
