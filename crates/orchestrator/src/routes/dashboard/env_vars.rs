@@ -22,6 +22,7 @@ use crate::{
         ApiError,
         ApiResult,
     },
+    routes::helpers::require_project_member,
     state::OrchestratorState,
 };
 
@@ -45,10 +46,14 @@ pub fn router() -> Router<OrchestratorState> {
     tag = "dashboard",
 )]
 pub(crate) async fn list_env_vars(
-    _auth: AuthIdentity,
+    auth: AuthIdentity,
     State(state): State<OrchestratorState>,
     Path(project_id): Path<i64>,
 ) -> ApiResult<Json<ListEnvironmentVariables>> {
+    // Default env vars routinely hold secrets, and this route previously
+    // discarded the identity — any signed-in member could read any
+    // project's by id.
+    require_project_member(&state, &auth, project_id).await?;
     let vars = state
         .storage
         .list_default_env_vars(project_id)
@@ -75,11 +80,12 @@ pub(crate) async fn list_env_vars(
     tag = "dashboard",
 )]
 pub(crate) async fn update_env_vars(
-    _auth: AuthIdentity,
+    auth: AuthIdentity,
     State(state): State<OrchestratorState>,
     Path(project_id): Path<i64>,
     Json(args): Json<UpdateDefaultEnvVarsArgs>,
 ) -> ApiResult<StatusCode> {
+    require_project_member(&state, &auth, project_id).await?;
     for v in args.variables {
         state
             .storage

@@ -1,13 +1,15 @@
 //! Shared helpers used by route handlers.
 
-use orchestrator_api_types::dashboard::{
-    DeploymentResponse,
-    ProjectResponse,
-    TeamResponse,
-};
-use orchestrator_api_types::management::{
-    PlatformDeploymentResponse,
-    PlatformProjectDetails,
+use orchestrator_api_types::{
+    dashboard::{
+        DeploymentResponse,
+        ProjectResponse,
+        TeamResponse,
+    },
+    management::{
+        PlatformDeploymentResponse,
+        PlatformProjectDetails,
+    },
 };
 
 use crate::{
@@ -22,15 +24,16 @@ use crate::{
         DeploymentRecord,
         ProjectRecord,
         TeamRecord,
+        TeamRole,
     },
 };
 
 /// Resolve the caller to a member and confirm they belong to `team_id`.
 ///
 /// Every route that reads or mutates team-owned state has to do this. Several
-/// token routes took `_auth: AuthIdentity` and threw it away, which authenticated
-/// the caller but never authorized them — any valid token in the system could
-/// read or revoke another team's tokens.
+/// token routes took `_auth: AuthIdentity` and threw it away, which
+/// authenticated the caller but never authorized them — any valid token in the
+/// system could read or revoke another team's tokens.
 pub async fn require_team_member(
     state: &OrchestratorState,
     auth: &AuthIdentity,
@@ -62,6 +65,91 @@ pub async fn require_project_member(
         .map_err(ApiError::Internal)?
         .ok_or_else(|| ApiError::NotFound(format!("project {project_id}")))?;
     require_team_member(state, auth, project.team_id).await
+}
+
+/// Same, but for a deployment id: resolves project then team.
+pub async fn require_deployment_member(
+    state: &OrchestratorState,
+    auth: &AuthIdentity,
+    deployment_id: i64,
+) -> ApiResult<i64> {
+    let deployment = state
+        .storage
+        .get_deployment(deployment_id)
+        .await
+        .map_err(ApiError::Internal)?
+        .ok_or_else(|| ApiError::NotFound(format!("deployment {deployment_id}")))?;
+    require_project_member(state, auth, deployment.project_id).await
+}
+
+/// Same, keyed by the deployment's unique name.
+///
+/// The name is the identifier the CLI and the dashboard's embedded iframe
+/// use, so several routes only ever see it.
+pub async fn require_deployment_member_by_name(
+    state: &OrchestratorState,
+    auth: &AuthIdentity,
+    deployment_name: &str,
+) -> ApiResult<i64> {
+    let deployment = state
+        .storage
+        .get_deployment_by_name(deployment_name)
+        .await
+        .map_err(ApiError::Internal)?
+        .ok_or_else(|| ApiError::NotFound(format!("deployment {deployment_name}")))?;
+    require_project_member(state, auth, deployment.project_id).await
+}
+
+/// Membership is not enough: the caller must be an admin of `team_id`.
+///
+/// For destructive or governance actions — deleting a team, removing a
+/// member, changing someone's role — where a developer-role teammate should
+/// be refused.
+pub async fn require_team_admin(
+    state: &OrchestratorState,
+    auth: &AuthIdentity,
+    team_id: i64,
+) -> ApiResult<i64> {
+    let member_id = auth.require_member()?;
+    match state
+        .storage
+        .get_team_role(team_id, member_id)
+        .await
+        .map_err(ApiError::Internal)?
+    {
+        Some(TeamRole::Admin) => Ok(member_id),
+        // A developer is still a member, so this is a genuine 403 rather
+        // than a 404 — hiding the team's existence from its own teammate
+        // would be confusing, not safer.
+        Some(_) | None => Err(ApiError::Forbidden),
+    }
+}
+
+/// A deploy key may only act on the deployment it was minted for.
+///
+/// Deploy keys carry their binding on the identity, so membership is the
+/// wrong question for them: a key committed to CI must have the blast
+/// radius of its own deployment and nothing more. A PAT or session token is
+/// not bound to one deployment, so it falls back to team membership.
+pub async fn require_deployment_scope(
+    state: &OrchestratorState,
+    auth: &AuthIdentity,
+    deployment: &DeploymentRecord,
+) -> ApiResult<()> {
+    if let Some(bound) = auth.deployment_id {
+        if bound != deployment.id {
+            tracing::debug!(
+                bound,
+                requested = deployment.id,
+                "auth: deploy key used against a different deployment"
+            );
+            return Err(ApiError::Forbidden);
+        }
+        return Ok(());
+    }
+    require_project_member(state, auth, deployment.project_id)
+        .await
+        .map(|_| ())
 }
 
 /// The team that ultimately owns an access token, whichever scope it carries.
