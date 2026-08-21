@@ -3588,6 +3588,122 @@
           }
         ]
       }
+    },
+    "/api/admin/health": {
+      "get": {
+        "tags": ["admin"],
+        "operationId": "admin_health",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminHealthResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "not a super-admin"
+          }
+        }
+      }
+    },
+    "/api/admin/overview": {
+      "get": {
+        "tags": ["admin"],
+        "operationId": "overview",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OverviewResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "not a super-admin"
+          }
+        }
+      }
+    },
+    "/api/admin/fleet": {
+      "get": {
+        "tags": ["admin"],
+        "operationId": "fleet",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FleetResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "not a super-admin"
+          }
+        }
+      }
+    },
+    "/api/admin/members": {
+      "get": {
+        "tags": ["admin"],
+        "operationId": "list_members",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminMembersResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "not a super-admin"
+          }
+        }
+      }
+    },
+    "/api/admin/audit": {
+      "get": {
+        "tags": ["admin"],
+        "operationId": "instance_audit",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": ["integer", "null"],
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminAuditResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "not a super-admin"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -3614,6 +3730,151 @@
           },
           "keySuffix": {
             "type": "string"
+          }
+        }
+      },
+      "AdminAuditResponse": {
+        "type": "object",
+        "required": ["events"],
+        "properties": {
+          "events": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/InstanceAuditEvent"
+            }
+          }
+        }
+      },
+      "AdminDeploymentRow": {
+        "type": "object",
+        "description": "A deployment as the admin console sees it, with its owning team and\nproject resolved.\n\n`intended_state` is what the database says should be running. What is\n*actually* running is a docker question, filled in by the fleet route —\nthis query cannot know it.",
+        "required": [
+          "id",
+          "name",
+          "deploymentType",
+          "intendedState",
+          "tier",
+          "url",
+          "creationTime",
+          "teamId",
+          "teamSlug",
+          "projectId",
+          "projectSlug"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "name": {
+            "type": "string"
+          },
+          "deploymentType": {
+            "type": "string"
+          },
+          "intendedState": {
+            "type": "string"
+          },
+          "tier": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          },
+          "creationTime": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "teamId": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "teamSlug": {
+            "type": "string"
+          },
+          "projectId": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "projectSlug": {
+            "type": "string"
+          }
+        }
+      },
+      "AdminHealthResponse": {
+        "type": "object",
+        "required": [
+          "version",
+          "database",
+          "provisioner",
+          "reconcileIntervalSecs"
+        ],
+        "properties": {
+          "version": {
+            "type": "string"
+          },
+          "database": {
+            "$ref": "#/components/schemas/DatabaseHealth"
+          },
+          "provisioner": {
+            "$ref": "#/components/schemas/ProvisionerHealth"
+          },
+          "reconcileIntervalSecs": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "AdminMemberRow": {
+        "type": "object",
+        "description": "A member as the admin console sees them: identity, flags, and every team\nthey belong to.",
+        "required": [
+          "id",
+          "primaryEmail",
+          "creationTime",
+          "isSuperAdmin",
+          "suspended",
+          "teams"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "primaryEmail": {
+            "type": "string"
+          },
+          "name": {
+            "type": ["string", "null"]
+          },
+          "creationTime": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "isSuperAdmin": {
+            "type": "boolean"
+          },
+          "suspended": {
+            "type": "boolean"
+          },
+          "teams": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MemberTeamRef"
+            }
+          }
+        }
+      },
+      "AdminMembersResponse": {
+        "type": "object",
+        "required": ["members"],
+        "properties": {
+          "members": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminMemberRow"
+            }
           }
         }
       },
@@ -3940,6 +4201,23 @@
           }
         }
       },
+      "DatabaseHealth": {
+        "type": "object",
+        "required": ["reachable"],
+        "properties": {
+          "reachable": {
+            "type": "boolean"
+          },
+          "pingMs": {
+            "type": ["integer", "null"],
+            "format": "int64",
+            "minimum": 0
+          },
+          "error": {
+            "type": ["string", "null"]
+          }
+        }
+      },
       "DeleteArgs": {
         "type": "object",
         "required": ["id"],
@@ -4206,7 +4484,13 @@
       },
       "ExchangeSessionResponse": {
         "type": "object",
-        "required": ["accessToken", "memberId", "teamSlug", "role"],
+        "required": [
+          "accessToken",
+          "memberId",
+          "teamSlug",
+          "role",
+          "isSuperAdmin"
+        ],
         "properties": {
           "accessToken": {
             "type": "string"
@@ -4221,6 +4505,52 @@
           },
           "role": {
             "type": "string"
+          },
+          "isSuperAdmin": {
+            "type": "boolean",
+            "description": "Instance-wide operator. The dashboard uses this only to decide\nwhether to render the admin nav; the server-side gate is the\n`SuperAdmin` extractor, so a client that lies about it gains\nnothing."
+          }
+        }
+      },
+      "FleetEntry": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/AdminDeploymentRow"
+          },
+          {
+            "type": "object",
+            "required": ["actualState", "drifted"],
+            "properties": {
+              "actualState": {
+                "type": "string",
+                "description": "`running` / `stopped` / `missing`, or `unknown` when there was\nnothing to inspect or the inspection failed."
+              },
+              "drifted": {
+                "type": "boolean",
+                "description": "True when the container is not doing what the database says it\nshould. Always false when `actual_state` is `unknown` — we do not\nreport drift we could not observe."
+              }
+            }
+          }
+        ]
+      },
+      "FleetResponse": {
+        "type": "object",
+        "required": ["deployments", "driftCount", "containerStatesAvailable"],
+        "properties": {
+          "deployments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FleetEntry"
+            }
+          },
+          "driftCount": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "containerStatesAvailable": {
+            "type": "boolean",
+            "description": "False when the provisioner does not manage containers, so the UI can\nsay \"not applicable\" rather than rendering a column of `unknown`."
           }
         }
       },
@@ -4296,6 +4626,30 @@
             "type": "integer",
             "format": "int32",
             "minimum": 0
+          }
+        }
+      },
+      "InstanceAuditEvent": {
+        "type": "object",
+        "description": "One instance-scoped event on the wire.\n\nNamed distinctly from `storage::AuditEntry`, which is the team-scoped\nrow type and carries a `team_id` this surface has no use for.",
+        "required": ["id", "action", "metadata", "creationTime"],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "memberId": {
+            "type": ["integer", "null"],
+            "format": "int64",
+            "description": "`None` for actions taken through the break-glass bootstrap\ncredential, which has no human behind it."
+          },
+          "action": {
+            "type": "string"
+          },
+          "metadata": {},
+          "creationTime": {
+            "type": "integer",
+            "format": "int64"
           }
         }
       },
@@ -4471,12 +4825,93 @@
           }
         }
       },
+      "MemberTeamRef": {
+        "type": "object",
+        "description": "One team membership, flattened for the admin member table.",
+        "required": ["teamId", "teamSlug", "teamName", "role"],
+        "properties": {
+          "teamId": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "teamSlug": {
+            "type": "string"
+          },
+          "teamName": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          }
+        }
+      },
       "OptIn": {
         "type": "object",
         "required": ["name"],
         "properties": {
           "name": {
             "type": "string"
+          }
+        }
+      },
+      "OverviewResponse": {
+        "type": "object",
+        "required": [
+          "totalMemoryMb",
+          "totalCpus",
+          "allocatedMemoryMb",
+          "allocatedCpus",
+          "deploymentCount",
+          "deploymentsByState",
+          "teamCount",
+          "memberCount"
+        ],
+        "properties": {
+          "totalMemoryMb": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "totalCpus": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "allocatedMemoryMb": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "allocatedCpus": {
+            "type": "number",
+            "format": "float"
+          },
+          "deploymentCount": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "deploymentsByState": {
+            "type": "object",
+            "description": "Deployment counts keyed by the intended state recorded in the\ndatabase: `running`, `paused`, `disabled`, `provisioning`.",
+            "additionalProperties": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "teamCount": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "memberCount": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
           }
         }
       },
@@ -4991,6 +5426,22 @@
           },
           "deploymentType": {
             "type": "string"
+          }
+        }
+      },
+      "ProvisionerHealth": {
+        "type": "object",
+        "required": ["mode"],
+        "properties": {
+          "mode": {
+            "type": "string"
+          },
+          "dockerReachable": {
+            "type": ["boolean", "null"],
+            "description": "`None` when the mode does not own containers, so there is no socket\nto check. Reporting `false` there would read as a fault when nothing\nis wrong."
+          },
+          "error": {
+            "type": ["string", "null"]
           }
         }
       },
@@ -5525,6 +5976,10 @@
     {
       "name": "dashboard",
       "description": "/api/dashboard: private dashboard API"
+    },
+    {
+      "name": "admin",
+      "description": "/api/admin: instance-scoped operator API (super-admin only)"
     },
     {
       "name": "dashboard_stubs",

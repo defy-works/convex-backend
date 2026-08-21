@@ -1789,3 +1789,174 @@ fn admin_route_table_matches_the_openapi_surface() {
         missing_from_spec.join("\n  ")
     );
 }
+
+/// The fleet response's wire shape must match what `adminApi.ts`'s zod
+/// schema parses.
+///
+/// `FleetEntry` puts `#[serde(flatten)]` on its `AdminDeploymentRow`, so the
+/// deployment's fields have to land as flat camelCase siblings of
+/// `actualState` and `drifted`. If serde nested them under a `deployment`
+/// key instead, every fleet request would fail zod parsing in the browser
+/// and no status-code assertion would notice.
+#[tokio::test]
+#[ignore = "needs TEST_ORCHESTRATOR_DATABASE_URL"]
+async fn fleet_response_wire_shape_is_flat_camel_case() {
+    use std::sync::Arc;
+
+    use axum::{
+        body::Body,
+        http::{
+            header::AUTHORIZATION,
+            Request,
+            StatusCode,
+        },
+    };
+    use http_body_util::BodyExt;
+    use orchestrator::{
+        router::build_router,
+        state::OrchestratorState,
+        storage::{
+            access_tokens::NewAccessToken,
+            AccessTokenKind,
+        },
+    };
+    use tower::ServiceExt;
+
+    let database_url = std::env::var("TEST_ORCHESTRATOR_DATABASE_URL")
+        .expect("TEST_ORCHESTRATOR_DATABASE_URL not set (this test is `#[ignore]` by default)");
+    reset_public_schema(&database_url).await;
+
+    let data_root = tempfile::tempdir().expect("tempdir for data root");
+    let config = test_config(database_url, data_root.path().to_path_buf());
+    let mut state = OrchestratorState::new(config).await.expect("state");
+    state.provisioner = Arc::new(StubProvisioner);
+    let app = build_router(state.clone());
+
+    let op = state
+        .storage
+        .upsert_member("auth-op", "op@example.com", Some("Op"))
+        .await
+        .expect("member");
+    state
+        .storage
+        .set_super_admin(op.id, true)
+        .await
+        .expect("grant");
+    let secret = "fleet-secret";
+    state
+        .storage
+        .create_access_token(NewAccessToken {
+            public_id: "fleet-public",
+            kind: AccessTokenKind::Pat,
+            member_id: Some(op.id),
+            team_id: None,
+            project_id: None,
+            deployment_id: None,
+            name: "fleet-pat",
+            secret_hash: &orchestrator::auth::tokens::sha256_hex(secret),
+            secret_suffix: "cret",
+            expiry: None,
+        })
+        .await
+        .expect("pat");
+
+    // A team, project, and deployment so the fleet has a row to serialize.
+    let team = state
+        .storage
+        .create_team("Ops", "ops", Some(op.id))
+        .await
+        .expect("team");
+    let project = state
+        .storage
+        .create_project(team.id, "Demo", "demo", false)
+        .await
+        .expect("project");
+    let empty_knobs = serde_json::json!({});
+    state
+        .storage
+        .create_deployment(orchestrator::storage::deployments::NewDeployment {
+            project_id: project.id,
+            name: "happy-otter-123",
+            deployment_type: orchestrator::storage::DeploymentType::Prod,
+            deployment_class: orchestrator::storage::DeploymentClass::Standard,
+            region: None,
+            url: "http://happy-otter-123.localhost",
+            site_url: "http://happy-otter-123-site.localhost",
+            backend_pid: None,
+            backend_port: 3210,
+            creator_id: Some(op.id),
+            preview_identifier: None,
+            instance_secret: "",
+            tier: "S16",
+            knob_overrides: &empty_knobs,
+            storage_mode: "volume-sqlite",
+            pg_password: None,
+            minio_root_user: None,
+            minio_root_password: None,
+            backend_instance_secret: None,
+        })
+        .await
+        .expect("deployment");
+
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/api/admin/fleet")
+                .header(AUTHORIZATION, format!("Bearer pat:fleet-public|{secret}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("send GET /api/admin/fleet");
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let body = resp.into_body().collect().await.unwrap().to_bytes();
+    let v: serde_json::Value = serde_json::from_slice(&body).expect("fleet response is JSON");
+
+    assert!(
+        v.get("containerStatesAvailable").is_some(),
+        "top level must be camelCase, got {v}"
+    );
+    let entry = v
+        .get("deployments")
+        .and_then(|d| d.get(0))
+        .unwrap_or_else(|| panic!("expected one fleet entry, got {v}"));
+
+    assert!(
+        entry.get("deployment").is_none(),
+        "the deployment must be flattened, not nested under `deployment`: {entry}"
+    );
+
+    // Exactly the keys `fleetEntrySchema` in adminApi.ts declares.
+    for key in [
+        "id",
+        "name",
+        "deploymentType",
+        "intendedState",
+        "tier",
+        "url",
+        "creationTime",
+        "teamId",
+        "teamSlug",
+        "projectId",
+        "projectSlug",
+        "actualState",
+        "drifted",
+    ] {
+        assert!(
+            entry.get(key).is_some(),
+            "fleet entry is missing `{key}`, which adminApi.ts requires: {entry}"
+        );
+    }
+
+    assert_eq!(entry["name"], "happy-otter-123");
+    assert_eq!(entry["teamSlug"], "ops");
+    assert_eq!(entry["projectSlug"], "demo");
+    // External provisioner owns no containers, so state is unknown and
+    // nothing is reported as drifted.
+    assert_eq!(entry["actualState"], "unknown");
+    assert_eq!(entry["drifted"], false);
+    assert_eq!(v["containerStatesAvailable"], false);
+    assert_eq!(v["driftCount"], 0);
+}
