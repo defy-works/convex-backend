@@ -1,4 +1,4 @@
-//! Boot-time reconcile of tenant backends.
+//! Periodic reconcile of tenant backends.
 //!
 //! Spawned backends are created with `--restart unless-stopped`, so a host
 //! reboot or docker-daemon restart normally brings them back on its own. What
@@ -10,8 +10,9 @@
 //! API happily while every tenant deployment stayed dark until somebody hit
 //! Restart in the dashboard, one deployment at a time.
 //!
-//! This module closes that gap: on boot, for every deployment row, make the
-//! container match what the database says should be running.
+//! This module closes that gap: on boot and every `reconcile_interval_secs`
+//! thereafter, for every deployment row, make the container match what the
+//! database says should be running.
 //!
 //! Deliberately narrow: it **starts containers that already exist** and does
 //! not create missing ones. Recreating a container goes through
@@ -113,10 +114,22 @@ fn plan(state: DeploymentState, status: ContainerStatus) -> ReconcileAction {
     }
 }
 
-/// Reconcile once in the background, then exit. Mirrors
-/// `acme::renewal::spawn`: never blocks the API from coming up, and a failure
-/// is logged rather than propagated — a tenant that won't start must not stop
-/// the orchestrator from serving the dashboard that reports it.
+/// Whether a given interval means "keep reconciling".
+///
+/// `0` restores the original boot-only behaviour, which is the escape hatch
+/// for an operator who wants to drive reconciliation by hand.
+pub fn periodic_enabled(interval_secs: u64) -> bool {
+    interval_secs > 0
+}
+
+/// Reconcile on an interval in the background.
+///
+/// This used to run once at boot and exit, which left any drift after
+/// startup both invisible and uncorrected — a container stopped by hand at
+/// 09:00 stayed down until somebody noticed. Mirrors `acme::renewal::spawn`:
+/// never blocks the API from coming up, and a failure is logged rather than
+/// propagated — a tenant that won't start must not stop the orchestrator
+/// from serving the dashboard that reports it.
 pub fn spawn(state: OrchestratorState) {
     if !matches!(state.config.provisioner_mode, ProvisionerMode::Docker) {
         // `External` (the default) and `Process` don't own containers, so
@@ -127,10 +140,18 @@ pub fn spawn(state: OrchestratorState) {
         );
         return;
     }
+    let interval_secs = state.config.reconcile_interval_secs;
     tokio::spawn(async move {
         tokio::time::sleep(STARTUP_DELAY).await;
-        if let Err(e) = reconcile_all(&state).await {
-            tracing::error!(error = %e, "deployment reconcile failed");
+        loop {
+            if let Err(e) = reconcile_all(&state).await {
+                tracing::error!(error = %e, "deployment reconcile failed");
+            }
+            if !periodic_enabled(interval_secs) {
+                tracing::info!("periodic reconcile disabled; ran once at boot");
+                return;
+            }
+            tokio::time::sleep(Duration::from_secs(interval_secs)).await;
         }
     });
 }
@@ -173,11 +194,7 @@ pub async fn reconcile_all(state: &OrchestratorState) -> anyhow::Result<()> {
             },
         }
     }
-    tracing::info!(
-        started,
-        failed,
-        "deployment reconcile: finished"
-    );
+    tracing::info!(started, failed, "deployment reconcile: finished");
     Ok(())
 }
 
@@ -291,8 +308,8 @@ async fn ensure_sidecars_ready(
                 // Deliberately fatal for this deployment: bringing a backend up
                 // with no database behind it is worse than leaving it down.
                 anyhow::bail!(
-                    "{kind} sidecar {container} does not exist; deployment \
-                     {deployment_name} needs a full restart to re-provision it"
+                    "{kind} sidecar {container} does not exist; deployment {deployment_name} \
+                     needs a full restart to re-provision it"
                 );
             },
         }

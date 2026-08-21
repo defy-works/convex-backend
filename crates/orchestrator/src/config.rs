@@ -79,6 +79,10 @@ pub struct OrchestratorConfig {
     /// ACME directory to use. Defaults to Let's Encrypt production; point at
     /// the staging directory to exercise the flow without burning rate limit.
     pub acme_directory_url: Option<String>,
+    /// Seconds between reconcile passes over tenant containers. `0` disables
+    /// the periodic loop and restores boot-only behaviour. Docker provisioner
+    /// mode only — the other modes do not own containers.
+    pub reconcile_interval_secs: u64,
 }
 
 impl OrchestratorConfig {
@@ -129,8 +133,7 @@ impl FromStr for ProvisionerMode {
             "process" => Ok(Self::Process),
             "docker" => Ok(Self::Docker),
             other => Err(anyhow::anyhow!(
-                "unknown provisioner mode {other:?} (expected `external`, `process`, or \
-                 `docker`)"
+                "unknown provisioner mode {other:?} (expected `external`, `process`, or `docker`)"
             )),
         }
     }
@@ -194,6 +197,8 @@ mod tests {
             traefik_cert_dir: "/dynamic".into(),
             acme_contact_email: None,
             acme_directory_url: None,
+            // Tests must never start a background reconcile loop.
+            reconcile_interval_secs: 0,
         }
     }
 

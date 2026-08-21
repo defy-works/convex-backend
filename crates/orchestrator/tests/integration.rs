@@ -307,11 +307,6 @@ async fn deployment_internal_flow_against_real_db() {
     };
     use http_body_util::BodyExt;
     use orchestrator::{
-        config::{
-            OrchestratorConfig,
-            ProvisionerMode,
-            RegistrationMode,
-        },
         router::build_router,
         state::OrchestratorState,
     };
@@ -338,33 +333,8 @@ async fn deployment_internal_flow_against_real_db() {
     reset_public_schema(&database_url).await;
 
     let data_root = tempfile::tempdir().expect("tempdir for data root");
-    let config = OrchestratorConfig {
-        database_url,
-        data_root: data_root.path().to_path_buf(),
-        public_origin: "http://localhost".into(),
-        bootstrap_token: Some(bootstrap_token.clone()),
-        provisioner_mode: ProvisionerMode::External,
-        service_key: None,
-        admin_emails: Vec::new(),
-        default_team_name: "Self-Hosted".into(),
-        registration_mode: RegistrationMode::Allowlist,
-        backend_image: "irrelevant".into(),
-        backend_network: None,
-        backend_container_prefix: "test-".into(),
-        router_host: "localhost".into(),
-        site_router_host: None,
-        router_public_port: 9000,
-        router_public_scheme: "http".into(),
-        direct_backend_routing: true,
-        enable_sidecars: false,
-        postgres_image: "postgres:16-alpine".into(),
-        minio_image: "quay.io/minio/minio:latest".into(),
-        traefik_dynamic_dir: None,
-        orchestrator_upstream: "orchestrator:8050".into(),
-        traefik_cert_dir: "/dynamic".into(),
-        acme_contact_email: None,
-        acme_directory_url: None,
-    };
+    let mut config = test_config(database_url, data_root.path().to_path_buf());
+    config.bootstrap_token = Some(bootstrap_token.clone());
 
     // Construct OrchestratorState the public way, then swap in the stub
     // provisioner so we can exercise create_deployment without docker.
@@ -873,32 +843,36 @@ fn uuid_like() -> String {
     format!("{nanos:032x}")
 }
 
+/// Build a config for tests.
+///
+/// The single place a new `OrchestratorConfig` field has to be added, rather
+/// than every test growing its own struct literal. Callers that need a
+/// different value mutate the returned struct.
+///
+/// Defaults are deliberately inert: `External` provisioner so nothing tries
+/// to reach docker, and `reconcile_interval_secs: 0` so no test starts a
+/// background loop that outlives it.
 #[cfg(test)]
-async fn test_state(
+fn test_config(
     database_url: String,
-    registration_mode: orchestrator::config::RegistrationMode,
-    admin_emails: Vec<String>,
-    service_key: &str,
-) -> orchestrator::state::OrchestratorState {
-    use orchestrator::{
-        config::{
-            OrchestratorConfig,
-            ProvisionerMode,
-        },
-        state::OrchestratorState,
+    data_root: std::path::PathBuf,
+) -> orchestrator::config::OrchestratorConfig {
+    use orchestrator::config::{
+        OrchestratorConfig,
+        ProvisionerMode,
+        RegistrationMode,
     };
 
-    let data_root = tempfile::tempdir().expect("tempdir for data root");
-    let config = OrchestratorConfig {
+    OrchestratorConfig {
         database_url,
-        data_root: data_root.path().to_path_buf(),
+        data_root,
         public_origin: "http://localhost".into(),
         bootstrap_token: None,
         provisioner_mode: ProvisionerMode::External,
-        service_key: Some(service_key.into()),
-        admin_emails,
+        service_key: None,
+        admin_emails: Vec::new(),
         default_team_name: "Self-Hosted".into(),
-        registration_mode,
+        registration_mode: RegistrationMode::Allowlist,
         backend_image: "irrelevant".into(),
         backend_network: None,
         backend_container_prefix: "test-".into(),
@@ -915,7 +889,24 @@ async fn test_state(
         traefik_cert_dir: "/dynamic".into(),
         acme_contact_email: None,
         acme_directory_url: None,
-    };
+        reconcile_interval_secs: 0,
+    }
+}
+
+#[cfg(test)]
+async fn test_state(
+    database_url: String,
+    registration_mode: orchestrator::config::RegistrationMode,
+    admin_emails: Vec<String>,
+    service_key: &str,
+) -> orchestrator::state::OrchestratorState {
+    use orchestrator::state::OrchestratorState;
+
+    let data_root = tempfile::tempdir().expect("tempdir for data root");
+    let mut config = test_config(database_url, data_root.path().to_path_buf());
+    config.service_key = Some(service_key.into());
+    config.admin_emails = admin_emails;
+    config.registration_mode = registration_mode;
 
     OrchestratorState::new(config)
         .await
@@ -1415,4 +1406,87 @@ async fn instance_audit_events_are_isolated_from_team_queries() {
     assert_eq!(instance_events[0].member_id, None);
     assert_eq!(instance_events[1].action, "instanceThing");
     assert_eq!(instance_events[1].member_id, Some(member.id));
+}
+
+/// The readiness response must actually differ by probe result.
+///
+/// Asserts on the pure mapping rather than end to end, because a `PgPool`
+/// cannot be constructed against a dead host - `connect` probes and fails -
+/// so there is no way to hold a live state whose database is down.
+#[test]
+fn ready_response_maps_probe_result_to_status() {
+    use axum::http::StatusCode;
+
+    let (status, body) = orchestrator::router::ready_response(true);
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body.0["status"], "ready");
+
+    let (status, body) = orchestrator::router::ready_response(false);
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(body.0["status"], "not_ready");
+    assert!(
+        body.0.get("error").is_none(),
+        "the unauthenticated readiness body must not carry error detail"
+    );
+}
+
+/// `0` means boot-only, anything positive means keep going.
+#[test]
+fn reconcile_interval_zero_disables_the_loop() {
+    assert!(
+        !orchestrator::reconcile::periodic_enabled(0),
+        "0 must disable the periodic loop"
+    );
+    assert!(
+        orchestrator::reconcile::periodic_enabled(60),
+        "a positive interval must enable it"
+    );
+}
+
+/// `/health` is liveness and must never depend on Postgres. `/ready` is
+/// readiness and must. Both answer 200 against a live database; the
+/// distinction between them is asserted by
+/// `ready_response_maps_probe_result_to_status`, which does not need one.
+#[tokio::test]
+#[ignore = "needs TEST_ORCHESTRATOR_DATABASE_URL"]
+async fn health_and_ready_both_answer_against_a_live_database() {
+    use std::sync::Arc;
+
+    use axum::{
+        body::Body,
+        http::{
+            Request,
+            StatusCode,
+        },
+    };
+    use orchestrator::{
+        router::build_router,
+        state::OrchestratorState,
+    };
+    use tower::ServiceExt;
+
+    let database_url = std::env::var("TEST_ORCHESTRATOR_DATABASE_URL")
+        .expect("TEST_ORCHESTRATOR_DATABASE_URL not set (this test is `#[ignore]` by default)");
+    reset_public_schema(&database_url).await;
+
+    let data_root = tempfile::tempdir().expect("tempdir for data root");
+    let config = test_config(database_url, data_root.path().to_path_buf());
+    let mut state = OrchestratorState::new(config).await.expect("state");
+    state.provisioner = Arc::new(StubProvisioner);
+    let app = build_router(state.clone());
+
+    for path in ["/health", "/ready"] {
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(path)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap_or_else(|_| panic!("send GET {path}"));
+        assert_eq!(resp.status(), StatusCode::OK, "GET {path} with a live DB");
+    }
 }
