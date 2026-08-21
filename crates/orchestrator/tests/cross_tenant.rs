@@ -428,3 +428,95 @@ async fn one_tenant_cannot_touch_another() {
         leaks.join("\n  ")
     );
 }
+
+/// A deploy key is bound to one deployment. It must not act on another,
+/// even one belonging to a different tenant — a key committed to CI has the
+/// blast radius of its own deployment and nothing more.
+#[tokio::test]
+#[ignore = "needs TEST_ORCHESTRATOR_DATABASE_URL"]
+async fn a_deploy_key_cannot_act_on_another_deployment() {
+    use std::sync::Arc;
+
+    let database_url = std::env::var("TEST_ORCHESTRATOR_DATABASE_URL")
+        .expect("TEST_ORCHESTRATOR_DATABASE_URL not set (this test is `#[ignore]` by default)");
+    reset_public_schema(&database_url).await;
+
+    let data_root = tempfile::tempdir().expect("tempdir");
+    let config = test_config(database_url, data_root.path().to_path_buf());
+    let mut state = OrchestratorState::new(config).await.expect("state");
+    state.provisioner = Arc::new(StubProvisioner);
+    let app = build_router(state.clone());
+
+    let owner = make_tenant(&state.storage, "keyowner").await;
+    let victim = make_tenant(&state.storage, "keyvictim").await;
+
+    // A prod deploy key bound to the owner's deployment. Its wire form
+    // carries the deployment name in the middle slot.
+    let secret = "deploy-secret";
+    state
+        .storage
+        .create_access_token(NewAccessToken {
+            public_id: &owner.deployment_name,
+            kind: AccessTokenKind::DeployProd,
+            member_id: Some(owner.member_id),
+            team_id: Some(owner.team_id),
+            project_id: Some(owner.project_id),
+            deployment_id: Some(owner.deployment_id),
+            name: "prod-key",
+            secret_hash: &orchestrator::auth::tokens::sha256_hex(secret),
+            secret_suffix: "cret",
+            expiry: None,
+        })
+        .await
+        .expect("deploy key");
+    let bearer = format!("Bearer prod:{}|{secret}", owner.deployment_name);
+
+    let foreign = send(
+        &app,
+        "GET",
+        &format!(
+            "/api/deployment/{}/team_and_project",
+            victim.deployment_name
+        ),
+        &bearer,
+        None,
+    )
+    .await;
+    assert!(
+        !foreign.is_success(),
+        "a deploy key reached another deployment's team_and_project: {foreign}"
+    );
+
+    // Minting an admin key for a deployment outside the key's own project
+    // must be refused too — this route returns a real admin key.
+    let foreign_auth = send(
+        &app,
+        "POST",
+        "/api/deployment/authorize_within_current_project",
+        &bearer,
+        Some(serde_json::json!({
+            "selectedDeploymentName": victim.deployment_name,
+            "selectedDeploymentType": "prod",
+        })),
+    )
+    .await;
+    assert!(
+        !foreign_auth.is_success(),
+        "a deploy key minted an admin key for another tenant's deployment: {foreign_auth}"
+    );
+
+    // ...and it must still work against its own deployment, or the CLI is
+    // broken rather than secured.
+    let own = send(
+        &app,
+        "GET",
+        &format!("/api/deployment/{}/team_and_project", owner.deployment_name),
+        &bearer,
+        None,
+    )
+    .await;
+    assert!(
+        own.is_success(),
+        "a deploy key must still reach its own deployment, got {own}"
+    );
+}
