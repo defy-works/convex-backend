@@ -90,10 +90,14 @@ impl Storage {
         let rows = conn
             .client()
             .query(
+                // Tie-break on `id`: creation_time is millisecond precision,
+                // so two events written in the same millisecond would
+                // otherwise come back in arbitrary order. `id` is a
+                // BIGSERIAL, so it is monotonic and makes the sort stable.
                 "SELECT id, member_id, action, metadata, creation_time
                    FROM audit_log_events
                   WHERE scope = 'instance'
-                  ORDER BY creation_time DESC
+                  ORDER BY creation_time DESC, id DESC
                   LIMIT $1",
                 &[&limit],
             )
@@ -137,10 +141,7 @@ impl Storage {
             params.push(Box::new(to));
             sql.push_str(&format!(" AND creation_time <= ${}", params.len()));
         }
-        // Tie-break on `id`: creation_time is millisecond precision, so two
-        // events written in the same millisecond would otherwise come back
-        // in arbitrary order. `id` is a BIGSERIAL, so it is monotonic and
-        // makes the sort stable.
+        // Same millisecond-collision tie-break as `list_instance_audit`.
         sql.push_str(" ORDER BY creation_time DESC, id DESC LIMIT ");
         sql.push_str(&limit.to_string());
 
