@@ -107,5 +107,32 @@ pub async fn run(pool: &PgPool) -> anyhow::Result<()> {
             "#,
         )
         .await?;
+    // P1 admin-console migration. `is_super_admin` is the runtime authority
+    // for instance-wide operators (ADMIN_EMAILS only seeds it at sign-in).
+    // `suspended` is a reversible block, distinct from the permanent
+    // `deleted`. Both default FALSE so every existing row is unaffected.
+    //
+    // The audit change makes `team_id` nullable so instance-scoped events
+    // have somewhere to live. Existing per-team queries filter on
+    // `team_id = $1` and so continue to exclude them without modification.
+    //
+    // The `CHECK (scope IN ('team','instance'))` in schema.rs applies only to
+    // fresh inits, matching the convention already used for `storage_mode`
+    // above; orchestrator-side code is what enforces the invariant on
+    // ALTERed databases.
+    conn.client()
+        .batch_execute(
+            r#"
+            ALTER TABLE members
+              ADD COLUMN IF NOT EXISTS is_super_admin BOOLEAN NOT NULL DEFAULT FALSE,
+              ADD COLUMN IF NOT EXISTS suspended BOOLEAN NOT NULL DEFAULT FALSE;
+            ALTER TABLE audit_log_events
+              ALTER COLUMN team_id DROP NOT NULL,
+              ADD COLUMN IF NOT EXISTS scope TEXT NOT NULL DEFAULT 'team';
+            CREATE INDEX IF NOT EXISTS audit_instance_time_idx
+              ON audit_log_events(creation_time) WHERE scope = 'instance';
+            "#,
+        )
+        .await?;
     Ok(())
 }

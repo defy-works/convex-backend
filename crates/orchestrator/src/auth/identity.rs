@@ -31,6 +31,24 @@ pub struct AuthIdentity {
     pub team_id: Option<i64>,
     pub deployment_id: Option<i64>,
     pub project_id: Option<i64>,
+    /// Instance-wide operator rights.
+    ///
+    /// Only ever `true` for `Session` and `Pat` tokens. A deploy key
+    /// belonging to a super-admin member resolves to `false` — deploy keys
+    /// live in CI config and `.env` files, and a member being an operator
+    /// must not turn every key they ever minted into an instance-wide
+    /// credential.
+    pub is_super_admin: bool,
+    /// This token belongs to the synthetic bootstrap member — the
+    /// break-glass path for an instance whose operator accounts are all
+    /// locked out.
+    ///
+    /// Keyed on `auth_user_id == SYSTEM_AUTH_USER_ID`, not on the token's
+    /// name: members can name their own PATs, so a name check would let
+    /// anyone mint themselves instance root. Only `bootstrap_if_empty`
+    /// creates that member, and `exchange_session` rejects any
+    /// `authUserId` in the `system:` namespace, so it cannot be forged.
+    pub is_bootstrap: bool,
 }
 
 impl AuthIdentity {
@@ -55,6 +73,25 @@ fn extract_bearer(parts: &Parts) -> Option<String> {
 }
 
 async fn resolve(state: &OrchestratorState, raw: &str) -> Result<AuthIdentity, ApiError> {
+    resolve_with_storage(&state.storage, raw).await
+}
+
+/// Resolve a raw bearer token against storage without an HTTP request.
+///
+/// Exists so the integration suite can assert on elevation and suspension
+/// without standing up a router. Delegates to the identical code path the
+/// extractors use, so a test that passes here is not testing a copy.
+pub async fn resolve_for_test(
+    storage: &crate::storage::Storage,
+    raw: &str,
+) -> Result<AuthIdentity, ApiError> {
+    resolve_with_storage(storage, raw).await
+}
+
+async fn resolve_with_storage(
+    storage: &crate::storage::Storage,
+    raw: &str,
+) -> Result<AuthIdentity, ApiError> {
     let parsed = parse_token(raw).map_err(|e| {
         tracing::debug!(
             error = %e,
@@ -65,8 +102,7 @@ async fn resolve(state: &OrchestratorState, raw: &str) -> Result<AuthIdentity, A
         ApiError::Unauthorized
     })?;
     let hash = sha256_hex(parsed.secret);
-    let token = state
-        .storage
+    let token = storage
         .get_access_token_by_hash(&hash)
         .await
         .map_err(ApiError::Internal)?
@@ -104,8 +140,7 @@ async fn resolve(state: &OrchestratorState, raw: &str) -> Result<AuthIdentity, A
                 );
                 ApiError::Unauthorized
             })?;
-            let project = state
-                .storage
+            let project = storage
                 .get_project(project_id)
                 .await
                 .map_err(ApiError::Internal)?
@@ -116,8 +151,7 @@ async fn resolve(state: &OrchestratorState, raw: &str) -> Result<AuthIdentity, A
                     );
                     ApiError::Unauthorized
                 })?;
-            let team = state
-                .storage
+            let team = storage
                 .get_team(project.team_id)
                 .await
                 .map_err(ApiError::Internal)?
@@ -138,8 +172,7 @@ async fn resolve(state: &OrchestratorState, raw: &str) -> Result<AuthIdentity, A
                 );
                 ApiError::Unauthorized
             })?;
-            let dep = state
-                .storage
+            let dep = storage
                 .get_deployment(deployment_id)
                 .await
                 .map_err(ApiError::Internal)?
@@ -201,11 +234,44 @@ async fn resolve(state: &OrchestratorState, raw: &str) -> Result<AuthIdentity, A
         AccessTokenKind::Admin => "admin",
     };
 
+    // Elevation is deliberately narrow. Deploy keys live in CI config and
+    // `.env` files; a member being an operator must not make every key they
+    // ever minted an instance-wide credential.
+    let elevation_eligible = matches!(token.kind, AccessTokenKind::Session | AccessTokenKind::Pat);
+    let mut is_super_admin = false;
+    let mut is_bootstrap = false;
+    if let Some(member_id) = token.member_id {
+        match storage
+            .get_member(member_id)
+            .await
+            .map_err(ApiError::Internal)?
+        {
+            // A suspended or deleted member cannot authenticate at all,
+            // which revokes every live session and PAT without deleting
+            // anything — the point of suspension being reversible.
+            Some(m) if m.suspended || m.deleted => {
+                tracing::debug!(member_id, "auth: member is suspended or deleted");
+                return Err(ApiError::Unauthorized);
+            },
+            Some(m) => {
+                is_bootstrap =
+                    elevation_eligible && m.auth_user_id == crate::state::SYSTEM_AUTH_USER_ID;
+                is_super_admin = elevation_eligible && m.is_super_admin;
+            },
+            None => {
+                tracing::debug!(member_id, "auth: token references a missing member");
+                return Err(ApiError::Unauthorized);
+            },
+        }
+    }
+
     Ok(AuthIdentity {
         member_id: token.member_id,
         team_id: token.team_id,
         deployment_id: token.deployment_id,
         project_id: token.project_id,
+        is_super_admin,
+        is_bootstrap,
         token,
     })
 }

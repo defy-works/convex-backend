@@ -8,9 +8,11 @@ pub mod deployments;
 mod env_vars;
 mod invitations;
 mod members;
-mod migrations;
+// `pub` so the integration suite can run migrations against a throwaway
+// database without going through `Storage::connect`.
+pub mod migrations;
 mod opt_ins;
-mod pool;
+pub mod pool;
 mod projects;
 mod schema;
 mod teams;
@@ -25,6 +27,7 @@ pub use self::{
     audit_log::{
         AuditEntry,
         AuditQuery,
+        InstanceAuditEntry,
     },
     acme::{
         AcmeAccountRecord,
