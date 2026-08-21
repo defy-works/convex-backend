@@ -140,6 +140,9 @@ pub(crate) async fn create_deployment(
     Json(args): Json<PlatformCreateDeploymentArgs>,
 ) -> ApiResult<Json<PlatformDeploymentResponse>> {
     let member_id = auth.require_member()?;
+    // require_member only authenticates; without this anyone could create a
+    // deployment inside another tenant's project.
+    require_project_member(&state, &auth, project_id).await?;
     let dt: DeploymentType = args
         .kind
         .parse()
@@ -296,7 +299,7 @@ pub(crate) async fn get_default_deployment_for_project(
     tag = "deployments",
 )]
 pub(crate) async fn get_default_deployment_by_slug(
-    _auth: AuthIdentity,
+    auth: AuthIdentity,
     State(state): State<OrchestratorState>,
     Path((team_id_or_slug, project_slug)): Path<(String, String)>,
     Query(q): Query<DeploymentQuery>,
@@ -312,6 +315,7 @@ pub(crate) async fn get_default_deployment_by_slug(
             .ok_or_else(|| ApiError::NotFound("team".into()))?
             .id
     };
+    require_team_member(&state, &auth, team_id).await?;
     let project = state
         .storage
         .get_project_by_slug(team_id, &project_slug)

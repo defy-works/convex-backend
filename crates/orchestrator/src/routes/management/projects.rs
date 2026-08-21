@@ -68,7 +68,7 @@ pub(crate) async fn create_project(
     Path(team_id): Path<i64>,
     Json(args): Json<PlatformCreateProjectArgs>,
 ) -> ApiResult<Json<PlatformCreateProjectResponse>> {
-    let _ = auth;
+    require_team_member(&state, &auth, team_id).await?;
     let slug = args.slug.unwrap_or_else(|| slugify(&args.project_name));
     let project = state
         .storage
@@ -154,7 +154,7 @@ pub(crate) async fn get_project(
     tag = "projects",
 )]
 pub(crate) async fn get_project_by_slug(
-    _auth: AuthIdentity,
+    auth: AuthIdentity,
     State(state): State<OrchestratorState>,
     Path((team_id_or_slug, project_slug)): Path<(String, String)>,
 ) -> ApiResult<Json<PlatformProjectDetails>> {
@@ -170,6 +170,7 @@ pub(crate) async fn get_project_by_slug(
             .ok_or_else(|| ApiError::NotFound(format!("team {team_id_or_slug}")))?
             .id
     };
+    require_team_member(&state, &auth, team_id).await?;
     let p = state
         .storage
         .get_project_by_slug(team_id, &project_slug)

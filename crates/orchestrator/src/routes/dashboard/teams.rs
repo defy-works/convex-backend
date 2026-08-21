@@ -41,6 +41,7 @@ use crate::{
         slugify,
     },
     routes::helpers::{
+        require_team_admin,
         require_team_member,
         team_to_response,
     },
@@ -319,9 +320,11 @@ pub(crate) async fn update_member_role(
     tag = "dashboard_stubs",
 )]
 pub(crate) async fn get_entitlements_stub(
-    _auth: AuthIdentity,
-    Path(_team_id): Path<i64>,
+    auth: AuthIdentity,
+    State(state): State<OrchestratorState>,
+    Path(team_id): Path<i64>,
 ) -> ApiResult<Json<StubTeamEntitlementsResponse>> {
+    require_team_member(&state, &auth, team_id).await?;
     Ok(Json(stub_data::entitlements_unlimited()))
 }
 
@@ -586,6 +589,11 @@ pub(crate) async fn update_project_roles(
     Path(team_id): Path<i64>,
     Json(args): Json<UpdateProjectRolesArgs>,
 ) -> ApiResult<StatusCode> {
+    // Membership was never checked here: the handler confirmed the project
+    // belonged to the path's team, but not that the caller did, so anyone
+    // could set project admins on any team. Granting admin rights is a
+    // governance action, so require the admin role rather than membership.
+    require_team_admin(&state, &auth, team_id).await?;
     // Verify the project actually belongs to this team — without this a
     // team admin could promote members on another team's project.
     let project = state
@@ -613,10 +621,12 @@ pub(crate) async fn update_project_roles(
     tag = "dashboard_stubs",
 )]
 pub(crate) async fn apply_referral_code(
-    _auth: AuthIdentity,
-    Path(_team_id): Path<i64>,
+    auth: AuthIdentity,
+    State(state): State<OrchestratorState>,
+    Path(team_id): Path<i64>,
     Json(_body): Json<serde_json::Value>,
 ) -> ApiResult<StatusCode> {
+    require_team_member(&state, &auth, team_id).await?;
     Ok(StatusCode::OK)
 }
 
@@ -628,10 +638,11 @@ pub(crate) async fn apply_referral_code(
     tag = "dashboard_stubs",
 )]
 pub(crate) async fn get_referral_state_stub(
-    _auth: AuthIdentity,
+    auth: AuthIdentity,
     State(state): State<OrchestratorState>,
     Path(team_id): Path<i64>,
 ) -> ApiResult<Json<StubReferralState>> {
+    require_team_member(&state, &auth, team_id).await?;
     let team = state
         .storage
         .get_team(team_id)

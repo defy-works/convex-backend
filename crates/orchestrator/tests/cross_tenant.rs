@@ -238,7 +238,6 @@ fn test_config(database_url: String, data_root: std::path::PathBuf) -> Orchestra
         traefik_cert_dir: "/dynamic".into(),
         acme_contact_email: None,
         acme_directory_url: None,
-        reconcile_interval_secs: 0,
     }
 }
 
@@ -518,5 +517,141 @@ async fn a_deploy_key_cannot_act_on_another_deployment() {
     assert!(
         own.is_success(),
         "a deploy key must still reach its own deployment, got {own}"
+    );
+}
+
+/// Every path-scoped handler must reference an authorization guard.
+///
+/// A source-level check rather than a runtime one, because the failure mode
+/// it catches is a *new* route that nobody added to `CROSS_TENANT_ROUTES` —
+/// exactly the case a table cannot see. Deliberately crude: it only proves
+/// the author thought about authorization, not that the guard is the right
+/// one. The route table above is what covers correctness; read the two as a
+/// pair.
+///
+/// To add a deliberate exception, put the handler in `ALLOWED_UNGUARDED`
+/// with a comment saying why.
+#[test]
+fn every_path_scoped_handler_references_a_guard() {
+    /// Handlers that legitimately need no ownership guard.
+    const ALLOWED_UNGUARDED: &[(&str, &str)] = &[
+        // The invite code IS the authorization; the caller is by definition
+        // not yet a member of the team they are joining.
+        ("teams.rs", "accept_invite"),
+        // The emailed verification code is the capability. Requiring
+        // membership would make the link unusable.
+        ("profile.rs", "verify_email"),
+        // Returns 501 unconditionally; there is nothing to authorize until
+        // project transfer is actually implemented, and whoever implements
+        // it will have to guard both the source and destination team.
+        ("projects.rs", "transfer_project"),
+    ];
+
+    /// The route files that hold tenant state.
+    ///
+    /// The `*_stub.rs` files are omitted rather than allow-listed: they
+    /// return canned responses and own nothing, so there is no ownership to
+    /// check. If a stub ever starts serving real data, add it here and this
+    /// test will demand a guard.
+    const SOURCES: &[(&str, &str)] = &[
+        (
+            "audit_log.rs",
+            include_str!("../src/routes/dashboard/audit_log.rs"),
+        ),
+        (
+            "custom_domains.rs",
+            include_str!("../src/routes/dashboard/custom_domains.rs"),
+        ),
+        (
+            "deployments.rs",
+            include_str!("../src/routes/dashboard/deployments.rs"),
+        ),
+        (
+            "env_vars.rs",
+            include_str!("../src/routes/dashboard/env_vars.rs"),
+        ),
+        (
+            "profile.rs",
+            include_str!("../src/routes/dashboard/profile.rs"),
+        ),
+        (
+            "projects.rs",
+            include_str!("../src/routes/dashboard/projects.rs"),
+        ),
+        ("teams.rs", include_str!("../src/routes/dashboard/teams.rs")),
+        (
+            "mgmt_deployments.rs",
+            include_str!("../src/routes/management/deployments.rs"),
+        ),
+        (
+            "mgmt_env_vars.rs",
+            include_str!("../src/routes/management/env_vars.rs"),
+        ),
+        (
+            "mgmt_projects.rs",
+            include_str!("../src/routes/management/projects.rs"),
+        ),
+        (
+            "mgmt_teams.rs",
+            include_str!("../src/routes/management/teams.rs"),
+        ),
+        (
+            "deployment_internal.rs",
+            include_str!("../src/routes/deployment_internal.rs"),
+        ),
+    ];
+
+    /// Anything that establishes the caller may act on the resource. The
+    /// inline `get_team_role` check is here because several handlers in
+    /// teams.rs authorize that way rather than via a helper.
+    const GUARDS: &[&str] = &[
+        "require_team_member",
+        "require_project_member",
+        "require_deployment_member",
+        "require_deployment_member_by_name",
+        "require_team_admin",
+        "require_can_revoke_token",
+        "require_deployment_scope",
+        "require_same_project",
+        "require_domain_owner",
+        "get_team_role",
+    ];
+
+    let mut unguarded = Vec::new();
+    for (file, src) in SOURCES {
+        let mut parts = src.split("async fn ");
+        let _ = parts.next(); // preamble before the first handler
+        for part in parts {
+            let name: String = part
+                .chars()
+                .take_while(|c| c.is_alphanumeric() || *c == '_')
+                .collect();
+            if ALLOWED_UNGUARDED
+                .iter()
+                .any(|(f, h)| f == file && *h == name)
+            {
+                continue;
+            }
+            let Some(sig_end) = part.find("->") else {
+                continue;
+            };
+            let (sig, body) = part.split_at(sig_end);
+            let takes_identity = sig.contains("AuthIdentity") || sig.contains("SuperAdmin");
+            // `SuperAdmin` is itself the guard.
+            if !takes_identity || sig.contains("SuperAdmin") || !sig.contains("Path(") {
+                continue;
+            }
+            if !GUARDS.iter().any(|g| body.contains(g)) {
+                unguarded.push(format!("{file}::{name}"));
+            }
+        }
+    }
+
+    assert!(
+        unguarded.is_empty(),
+        "{} path-scoped handler(s) take an identity but never call an authorization guard. Add a \
+         guard, or add the handler to ALLOWED_UNGUARDED with a reason:\n  {}",
+        unguarded.len(),
+        unguarded.join("\n  ")
     );
 }
