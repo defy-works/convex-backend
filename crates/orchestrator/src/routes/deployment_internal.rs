@@ -5,32 +5,70 @@
 //! and the CLI's `bigBrainAPI` calls.
 
 use axum::{
-    extract::{Path, State},
+    extract::{
+        Path,
+        State,
+    },
     http::StatusCode,
     response::IntoResponse,
-    routing::{get, post},
-    Json, Router,
+    routing::{
+        get,
+        post,
+    },
+    Json,
+    Router,
 };
 use orchestrator_api_types::{
-    dashboard::{DeviceAuthorizeArgs, DeviceAuthorizeResponse, OptIn},
+    dashboard::{
+        DeviceAuthorizeArgs,
+        DeviceAuthorizeResponse,
+        OptIn,
+    },
     deployment::{
-        ClaimPreviewDeploymentArgs, ClaimPreviewDeploymentResponse, CreateProjectArgs,
-        CreateProjectResponse, DeploymentAuthResponse, DeploymentAuthWithinCurrentProjectArgs,
-        HasProjectsResponse, ProjectSelectionArgs, ProvisionAndAuthorizeArgs,
-        TeamAndProjectForDeploymentResponse, TeamSummary,
+        ClaimPreviewDeploymentArgs,
+        ClaimPreviewDeploymentResponse,
+        CreateProjectArgs,
+        CreateProjectResponse,
+        DeploymentAuthResponse,
+        DeploymentAuthWithinCurrentProjectArgs,
+        HasProjectsResponse,
+        ProjectSelectionArgs,
+        ProvisionAndAuthorizeArgs,
+        TeamAndProjectForDeploymentResponse,
+        TeamSummary,
     },
 };
 
 use crate::{
     auth::{
-        identity::{AuthIdentity, OptionalAuth},
-        tokens::{encode_pat, mint_token_secret, parse_token, sha256_hex, suffix_of},
+        identity::{
+            AuthIdentity,
+            OptionalAuth,
+        },
+        tokens::{
+            encode_pat,
+            mint_token_secret,
+            parse_token,
+            sha256_hex,
+            suffix_of,
+        },
     },
-    errors::{ApiError, ApiResult},
+    errors::{
+        ApiError,
+        ApiResult,
+    },
     ids::random_id,
-    routes::helpers::{deployment_to_response, require_deployment_scope},
+    routes::helpers::{
+        deployment_to_response,
+        require_deployment_scope,
+    },
     state::OrchestratorState,
-    storage::{access_tokens::NewAccessToken, AccessTokenKind, DeploymentClass, DeploymentType},
+    storage::{
+        access_tokens::NewAccessToken,
+        AccessTokenKind,
+        DeploymentClass,
+        DeploymentType,
+    },
 };
 
 pub fn router() -> Router<OrchestratorState> {
@@ -78,7 +116,8 @@ pub(crate) async fn orchestrator_version() -> impl IntoResponse {
 }
 
 /// CLI auth endpoint. Accepts only a bootstrap token in v1. Human users
-/// authenticate through the dashboard (BetterAuth → /api/internal/exchange_session).
+/// authenticate through the dashboard (BetterAuth →
+/// /api/internal/exchange_session).
 #[utoipa::path(
     post,
     path = "/api/authorize",
@@ -605,6 +644,10 @@ pub(crate) async fn provision_and_authorize(
         .await
         .map_err(ApiError::Internal)?
         .ok_or_else(|| ApiError::NotFound(format!("project {project_slug}")))?;
+    // require_member above only authenticates. Without this, any signed-in
+    // user could name another tenant's team and project slugs and be handed
+    // that project's existing admin key below.
+    require_same_project(&state, &auth, project.id).await?;
     let dt: DeploymentType = args.deployment_type.parse().map_err(|_| {
         ApiError::BadRequest(format!("unknown deployment type {}", args.deployment_type))
     })?;
@@ -744,6 +787,11 @@ pub(crate) async fn claim_preview_deployment(
 ) -> ApiResult<Json<ClaimPreviewDeploymentResponse>> {
     let member_id = auth.require_member()?;
     let project = resolve_project_for_selection(&state, &args.project_selection).await?;
+    // The project comes from the request body and resolve_* does not
+    // authorize, so without this any signed-in user could provision a
+    // preview deployment inside another tenant's project — spending host
+    // capacity and receiving its admin key.
+    require_same_project(&state, &auth, project.id).await?;
     // Reuse existing preview if identifier matches; otherwise create.
     let existing = state
         .storage

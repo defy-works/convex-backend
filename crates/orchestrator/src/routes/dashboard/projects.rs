@@ -142,10 +142,20 @@ pub(crate) async fn update_project(
     tag = "dashboard",
 )]
 pub(crate) async fn delete_projects(
-    _auth: AuthIdentity,
+    auth: AuthIdentity,
     State(state): State<OrchestratorState>,
     Json(ids): Json<Vec<i64>>,
 ) -> ApiResult<StatusCode> {
+    // Authorize every id before destroying anything. This discarded the
+    // identity entirely, so any signed-in user could delete every project on
+    // the instance by posting a list of ids.
+    //
+    // Checked in a first pass rather than inside the loop: a partial delete
+    // that stops halfway through because id 7 was not theirs still destroyed
+    // ids 1 through 6.
+    for id in &ids {
+        require_project_member(&state, &auth, *id).await?;
+    }
     for id in ids {
         crate::routes::helpers::cascade_delete_project(&state, id)
             .await

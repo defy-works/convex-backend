@@ -1075,7 +1075,7 @@
     "/api/authorize": {
       "post": {
         "tags": ["deployment_internal"],
-        "summary": "CLI auth endpoint. Accepts only a bootstrap token in v1. Human users\nauthenticate through the dashboard (BetterAuth → /api/internal/exchange_session).",
+        "summary": "CLI auth endpoint. Accepts only a bootstrap token in v1. Human users\nauthenticate through the dashboard (BetterAuth →\n/api/internal/exchange_session).",
         "operationId": "authorize",
         "requestBody": {
           "content": {
