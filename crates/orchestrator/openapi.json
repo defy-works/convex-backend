@@ -4040,10 +4040,96 @@
           }
         }
       }
+    },
+    "/api/admin/deployments/{deployment_id}/access": {
+      "post": {
+        "tags": ["admin"],
+        "operationId": "grant_access",
+        "parameters": [
+          {
+            "name": "deployment_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AccessArgs"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccessResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "a reason is required"
+          },
+          "403": {
+            "description": "not a super-admin"
+          }
+        }
+      }
     }
   },
   "components": {
     "schemas": {
+      "AccessArgs": {
+        "type": "object",
+        "required": ["reason"],
+        "properties": {
+          "reason": {
+            "type": "string",
+            "description": "Why this access is being taken. Recorded verbatim in both audit logs."
+          }
+        }
+      },
+      "AccessResponse": {
+        "type": "object",
+        "required": [
+          "deployment",
+          "url",
+          "adminKey",
+          "expiresAt",
+          "tenantNotified"
+        ],
+        "properties": {
+          "deployment": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          },
+          "adminKey": {
+            "type": "string",
+            "description": "A freshly minted, short-lived admin key. Shown once."
+          },
+          "expiresAt": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Unix ms. The UI counts down to this so an operator with a dashboard\nopen is not surprised by everything failing at once."
+          },
+          "tenantNotified": {
+            "type": "boolean",
+            "description": "Restates, in the response, that this was recorded where the tenant\ncan see it — so it is visible even to an API caller who never saw\nthe modal."
+          }
+        }
+      },
       "AccessToken": {
         "type": "string"
       },

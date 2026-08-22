@@ -327,6 +327,7 @@ async fn not_found() -> impl IntoResponse {
         crate::routes::admin::member_actions::unsuspend,
         crate::routes::admin::member_actions::set_super_admin,
         crate::routes::admin::member_actions::delete,
+        crate::routes::admin::break_glass::grant_access,
     ),
     tags(
         (name = "tokens", description = "/v1: personal access tokens"),

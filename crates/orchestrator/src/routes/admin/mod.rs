@@ -5,6 +5,7 @@
 //! questions about the instance as a whole, which no other surface can.
 
 pub(crate) mod audit;
+pub(crate) mod break_glass;
 pub(crate) mod deployment_actions;
 pub mod fleet;
 pub(crate) mod health;
@@ -76,6 +77,7 @@ pub const ADMIN_ROUTES: &[(&str, &str)] = &[
     ("POST", "/api/admin/members/{member_id}/unsuspend"),
     ("POST", "/api/admin/members/{member_id}/super_admin"),
     ("POST", "/api/admin/members/{member_id}/delete"),
+    ("POST", "/api/admin/deployments/{deployment_id}/access"),
 ];
 
 pub fn router() -> Router<OrchestratorState> {
@@ -118,4 +120,8 @@ pub fn router() -> Router<OrchestratorState> {
             post(member_actions::set_super_admin),
         )
         .route("/members/{member_id}/delete", post(member_actions::delete))
+        .route(
+            "/deployments/{deployment_id}/access",
+            post(break_glass::grant_access),
+        )
 }

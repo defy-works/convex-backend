@@ -1609,6 +1609,8 @@ fn concrete_admin_route(
         .replace("{member_id}", &member_id.to_string());
     let body = if template.ends_with("/tier") {
         Some(serde_json::json!({ "tier": "S16" }))
+    } else if template.ends_with("/access") {
+        Some(serde_json::json!({ "reason": "route table coverage" }))
     } else if template.ends_with("/super_admin") {
         // Grant rather than revoke: revoking would trip the
         // last-super-admin guard against the very account this test
@@ -2346,5 +2348,206 @@ async fn revoking_the_last_super_admin_is_a_client_error() {
         events.iter().any(|e| e.action == "superAdminRevoked"),
         "the revoke must be audited, got {:?}",
         events.iter().map(|e| &e.action).collect::<Vec<_>>()
+    );
+}
+
+/// Break-glass must mint a fresh short-lived key and write the reason to
+/// BOTH audit logs — the instance's and the tenant's own.
+///
+/// The tenant-visible copy is the point of the whole design: an operator
+/// opening somebody's deployment should be visible to that somebody. An
+/// audit trail only the operator can read is not accountability.
+#[tokio::test]
+#[ignore = "needs TEST_ORCHESTRATOR_DATABASE_URL"]
+async fn break_glass_mints_a_fresh_key_and_writes_both_audit_logs() {
+    use std::sync::Arc;
+
+    use axum::{
+        body::Body,
+        http::{
+            header::AUTHORIZATION,
+            Request,
+            StatusCode,
+        },
+    };
+    use http_body_util::BodyExt;
+    use orchestrator::{
+        router::build_router,
+        state::OrchestratorState,
+        storage::{
+            access_tokens::NewAccessToken,
+            AccessTokenKind,
+            AuditQuery,
+        },
+    };
+    use tower::ServiceExt;
+
+    let database_url = std::env::var("TEST_ORCHESTRATOR_DATABASE_URL")
+        .expect("TEST_ORCHESTRATOR_DATABASE_URL not set (this test is `#[ignore]` by default)");
+    reset_public_schema(&database_url).await;
+
+    let data_root = tempfile::tempdir().expect("tempdir");
+    let config = test_config(database_url, data_root.path().to_path_buf());
+    let mut state = OrchestratorState::new(config).await.expect("state");
+    state.provisioner = Arc::new(StubProvisioner);
+    let app = build_router(state.clone());
+
+    // The operator.
+    let op = state
+        .storage
+        .upsert_member("auth-op", "op@example.com", Some("Op"))
+        .await
+        .expect("member");
+    state
+        .storage
+        .set_super_admin(op.id, true)
+        .await
+        .expect("grant");
+    let secret = "op-secret";
+    state
+        .storage
+        .create_access_token(NewAccessToken {
+            public_id: "op-public",
+            kind: AccessTokenKind::Pat,
+            member_id: Some(op.id),
+            team_id: None,
+            project_id: None,
+            deployment_id: None,
+            name: "op-pat",
+            secret_hash: &orchestrator::auth::tokens::sha256_hex(secret),
+            secret_suffix: "cret",
+            expiry: None,
+        })
+        .await
+        .expect("pat");
+    let bearer = format!("Bearer pat:op-public|{secret}");
+
+    // A tenant the operator has nothing to do with.
+    let tenant = state
+        .storage
+        .upsert_member("auth-tenant", "tenant@example.com", Some("Tenant"))
+        .await
+        .expect("tenant");
+    let team = state
+        .storage
+        .create_team("Tenant", "tenant", Some(tenant.id))
+        .await
+        .expect("team");
+    let project = state
+        .storage
+        .create_project(team.id, "App", "app", false)
+        .await
+        .expect("project");
+    let empty = serde_json::json!({});
+    let d = state
+        .storage
+        .create_deployment(orchestrator::storage::deployments::NewDeployment {
+            project_id: project.id,
+            name: "tenant-prod",
+            deployment_type: orchestrator::storage::DeploymentType::Prod,
+            deployment_class: orchestrator::storage::DeploymentClass::Standard,
+            region: None,
+            url: "http://tenant-prod.localhost",
+            site_url: "http://tenant-prod-site.localhost",
+            backend_pid: None,
+            backend_port: 3210,
+            creator_id: Some(tenant.id),
+            preview_identifier: None,
+            // A stored permanent admin key, which is what makes the
+            // "must not hand this back" assertion below meaningful.
+            instance_secret: "tenant-prod|permanent-admin-key",
+            tier: "S16",
+            knob_overrides: &empty,
+            storage_mode: "volume-sqlite",
+            pg_password: None,
+            minio_root_user: None,
+            minio_root_password: None,
+            backend_instance_secret: None,
+        })
+        .await
+        .expect("deployment");
+
+    // A blank reason is refused.
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/admin/deployments/{}/access", d.id))
+                .header(AUTHORIZATION, &bearer)
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"reason":"   "}"#))
+                .unwrap(),
+        )
+        .await
+        .expect("send blank reason");
+    assert_eq!(
+        resp.status(),
+        StatusCode::BAD_REQUEST,
+        "a whitespace-only reason must be refused"
+    );
+
+    // A real one succeeds.
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/admin/deployments/{}/access", d.id))
+                .header(AUTHORIZATION, &bearer)
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"reason":"investigating ticket 4711"}"#))
+                .unwrap(),
+        )
+        .await
+        .expect("send access");
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = resp.into_body().collect().await.unwrap().to_bytes();
+    let v: serde_json::Value = serde_json::from_slice(&body).expect("json");
+
+    let key = v["adminKey"].as_str().expect("adminKey");
+    assert_ne!(
+        key, "tenant-prod|permanent-admin-key",
+        "break-glass must not hand back the deployment's permanent admin key"
+    );
+    assert!(v["tenantNotified"].as_bool().unwrap_or(false));
+
+    // The TTL is real and short.
+    let expires_at = v["expiresAt"].as_i64().expect("expiresAt");
+    let ttl_ms = expires_at - orchestrator::time::now_unix_ms();
+    assert!(
+        ttl_ms > 0 && ttl_ms <= 15 * 60_000,
+        "break-glass TTL out of range: {ttl_ms}ms"
+    );
+
+    // Instance audit records it, with the reason verbatim.
+    let instance = state
+        .storage
+        .list_instance_audit(10)
+        .await
+        .expect("instance audit");
+    let granted = instance
+        .iter()
+        .find(|e| e.action == "deploymentAccessGranted")
+        .expect("instance audit records the access");
+    assert_eq!(granted.metadata["reason"], "investigating ticket 4711");
+    assert_eq!(granted.member_id, Some(op.id));
+
+    // ...and so does the tenant's own team audit log.
+    let team_events = state
+        .storage
+        .query_audit(&AuditQuery {
+            team_id: team.id,
+            ..Default::default()
+        })
+        .await
+        .expect("team audit");
+    let tenant_visible = team_events
+        .iter()
+        .find(|e| e.action == "deploymentAccessGranted")
+        .expect("the tenant must be able to see that an operator opened their deployment");
+    assert_eq!(
+        tenant_visible.metadata["reason"], "investigating ticket 4711",
+        "the tenant sees the reason too, not just that something happened"
     );
 }
