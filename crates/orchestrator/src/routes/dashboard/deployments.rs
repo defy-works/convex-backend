@@ -30,7 +30,11 @@ use crate::{
         ApiResult,
     },
     ids::random_id,
-    routes::helpers::deployment_to_response,
+    routes::helpers::{
+        deployment_to_response,
+        require_deployment_member,
+        require_deployment_member_by_name,
+    },
     state::OrchestratorState,
     storage::{
         access_tokens::NewAccessToken,
@@ -65,10 +69,14 @@ pub fn router() -> Router<OrchestratorState> {
     tag = "dashboard",
 )]
 pub(crate) async fn get_deployment_by_id(
-    _auth: AuthIdentity,
+    auth: AuthIdentity,
     State(state): State<OrchestratorState>,
     Path((_team_id, deployment_id)): Path<(i64, i64)>,
 ) -> ApiResult<Json<DeploymentResponse>> {
+    // Authorize against the deployment's real owner rather than the
+    // `team_id` in the path, which the caller controls and this handler
+    // otherwise ignores.
+    require_deployment_member(&state, &auth, deployment_id).await?;
     let d = state
         .storage
         .get_deployment(deployment_id)
@@ -94,7 +102,10 @@ pub(crate) async fn get_deployment_auth_dashboard(
     State(state): State<OrchestratorState>,
     Path(deployment_name): Path<String>,
 ) -> ApiResult<Json<GetDeploymentAuthDashboardResponse>> {
-    let _ = auth;
+    // This mints an admin key — full read/write on the deployment's data.
+    // It previously discarded the identity entirely, so any signed-in user
+    // could mint one for any deployment just by knowing its name.
+    require_deployment_member_by_name(&state, &auth, &deployment_name).await?;
     let d = state
         .storage
         .get_deployment_by_name(&deployment_name)

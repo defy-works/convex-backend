@@ -28,7 +28,7 @@ use crate::{
     },
     errors::{ApiError, ApiResult},
     ids::random_id,
-    routes::helpers::deployment_to_response,
+    routes::helpers::{deployment_to_response, require_deployment_scope},
     state::OrchestratorState,
     storage::{access_tokens::NewAccessToken, AccessTokenKind, DeploymentClass, DeploymentType},
 };
@@ -470,8 +470,54 @@ pub(crate) async fn team_and_project(
     State(state): State<OrchestratorState>,
     Path(deployment_name): Path<String>,
 ) -> ApiResult<Json<TeamAndProjectForDeploymentResponse>> {
-    let _ = auth;
+    // A deploy key is bound to one deployment; a PAT falls back to team
+    // membership. Previously this discarded the identity, so any token
+    // could map any deployment name to its owning team and project.
+    let deployment = state
+        .storage
+        .get_deployment_by_name(&deployment_name)
+        .await
+        .map_err(ApiError::Internal)?
+        .ok_or_else(|| ApiError::NotFound(format!("deployment {deployment_name}")))?;
+    require_deployment_scope(&state, &auth, &deployment).await?;
     resolve_team_and_project(&state, &deployment_name).await
+}
+
+/// Confirm the caller is scoped to `project_id`.
+///
+/// Deploy keys carry their binding on the identity, so for them this is a
+/// containment check rather than a membership lookup: a key bound to a
+/// deployment must belong to the same project, and a project-scoped preview
+/// key must name that project. A PAT or session token carries no such
+/// binding, so it falls back to team membership.
+async fn require_same_project(
+    state: &OrchestratorState,
+    auth: &AuthIdentity,
+    project_id: i64,
+) -> ApiResult<()> {
+    if let Some(bound_deployment) = auth.deployment_id {
+        let bound = state
+            .storage
+            .get_deployment(bound_deployment)
+            .await
+            .map_err(ApiError::Internal)?
+            .ok_or(ApiError::Unauthorized)?;
+        return if bound.project_id == project_id {
+            Ok(())
+        } else {
+            Err(ApiError::Forbidden)
+        };
+    }
+    if let Some(bound_project) = auth.project_id {
+        return if bound_project == project_id {
+            Ok(())
+        } else {
+            Err(ApiError::Forbidden)
+        };
+    }
+    crate::routes::helpers::require_project_member(state, auth, project_id)
+        .await
+        .map(|_| ())
 }
 
 #[utoipa::path(
@@ -489,7 +535,6 @@ pub(crate) async fn authorize_within_current_project(
     State(state): State<OrchestratorState>,
     Json(args): Json<DeploymentAuthWithinCurrentProjectArgs>,
 ) -> ApiResult<Json<DeploymentAuthResponse>> {
-    let _ = auth;
     let deployment = state
         .storage
         .get_deployment_by_name(&args.selected_deployment_name)
@@ -498,6 +543,14 @@ pub(crate) async fn authorize_within_current_project(
         .ok_or_else(|| {
             ApiError::NotFound(format!("deployment {}", args.selected_deployment_name))
         })?;
+    // This returns an admin key, and previously discarded the identity — any
+    // token could mint one for any deployment by name.
+    //
+    // The scope here is the *project*, not the deployment: the whole point
+    // of this route is selecting among sibling deployments (dev, preview,
+    // prod) within the current project, so a key bound to one of them must
+    // still reach the others. Anything outside that project is refused.
+    require_same_project(&state, &auth, deployment.project_id).await?;
     let dt = to_common_deployment_type(deployment.deployment_type);
     let admin_key = admin_key_for_deployment(&state, &deployment)
         .await

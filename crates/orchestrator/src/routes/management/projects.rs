@@ -26,16 +26,17 @@ use crate::{
         ApiResult,
     },
     ids::slugify,
-    routes::helpers::project_to_platform,
+    routes::helpers::{
+        project_to_platform,
+        require_project_member,
+        require_team_member,
+    },
     state::OrchestratorState,
 };
 
 pub fn router() -> Router<OrchestratorState> {
     Router::new()
-        .route(
-            "/teams/{team_id}/create_project",
-            post(create_project),
-        )
+        .route("/teams/{team_id}/create_project", post(create_project))
         .route("/teams/{team_id}/list_projects", get(list_projects))
         .route("/projects/{project_id}", get(get_project))
         .route(
@@ -67,7 +68,7 @@ pub(crate) async fn create_project(
     Path(team_id): Path<i64>,
     Json(args): Json<PlatformCreateProjectArgs>,
 ) -> ApiResult<Json<PlatformCreateProjectResponse>> {
-    let _ = auth;
+    require_team_member(&state, &auth, team_id).await?;
     let slug = args.slug.unwrap_or_else(|| slugify(&args.project_name));
     let project = state
         .storage
@@ -101,10 +102,11 @@ pub(crate) async fn create_project(
     tag = "projects",
 )]
 pub(crate) async fn list_projects(
-    _auth: AuthIdentity,
+    auth: AuthIdentity,
     State(state): State<OrchestratorState>,
     Path(team_id): Path<i64>,
 ) -> ApiResult<Json<Vec<PlatformProjectDetails>>> {
+    require_team_member(&state, &auth, team_id).await?;
     let rows = state
         .storage
         .list_projects(team_id)
@@ -124,10 +126,11 @@ pub(crate) async fn list_projects(
     tag = "projects",
 )]
 pub(crate) async fn get_project(
-    _auth: AuthIdentity,
+    auth: AuthIdentity,
     State(state): State<OrchestratorState>,
     Path(project_id): Path<i64>,
 ) -> ApiResult<Json<PlatformProjectDetails>> {
+    require_project_member(&state, &auth, project_id).await?;
     let p = state
         .storage
         .get_project(project_id)
@@ -151,7 +154,7 @@ pub(crate) async fn get_project(
     tag = "projects",
 )]
 pub(crate) async fn get_project_by_slug(
-    _auth: AuthIdentity,
+    auth: AuthIdentity,
     State(state): State<OrchestratorState>,
     Path((team_id_or_slug, project_slug)): Path<(String, String)>,
 ) -> ApiResult<Json<PlatformProjectDetails>> {
@@ -167,6 +170,7 @@ pub(crate) async fn get_project_by_slug(
             .ok_or_else(|| ApiError::NotFound(format!("team {team_id_or_slug}")))?
             .id
     };
+    require_team_member(&state, &auth, team_id).await?;
     let p = state
         .storage
         .get_project_by_slug(team_id, &project_slug)
@@ -186,10 +190,11 @@ pub(crate) async fn get_project_by_slug(
     tag = "projects",
 )]
 pub(crate) async fn delete_project(
-    _auth: AuthIdentity,
+    auth: AuthIdentity,
     State(state): State<OrchestratorState>,
     Path(project_id): Path<i64>,
 ) -> ApiResult<StatusCode> {
+    require_project_member(&state, &auth, project_id).await?;
     crate::routes::helpers::cascade_delete_project(&state, project_id)
         .await
         .map_err(ApiError::Internal)?;
@@ -207,10 +212,11 @@ pub(crate) async fn delete_project(
     tag = "projects",
 )]
 pub(crate) async fn get_project_settings(
-    _auth: AuthIdentity,
+    auth: AuthIdentity,
     State(state): State<OrchestratorState>,
     Path(project_id): Path<i64>,
 ) -> ApiResult<Json<ProjectSettingsResponse>> {
+    require_project_member(&state, &auth, project_id).await?;
     let project = state
         .storage
         .get_project(project_id)
@@ -237,11 +243,12 @@ pub(crate) async fn get_project_settings(
     tag = "projects",
 )]
 pub(crate) async fn patch_project_settings(
-    _auth: AuthIdentity,
+    auth: AuthIdentity,
     State(state): State<OrchestratorState>,
     Path(project_id): Path<i64>,
     Json(args): Json<UpdateProjectSettingsArgs>,
 ) -> ApiResult<Json<ProjectSettingsResponse>> {
+    require_project_member(&state, &auth, project_id).await?;
     if let Some(tier) = args.tier.as_deref() {
         crate::routes::management::deployments::ensure_host_capacity(&state, tier, false).await?;
     }

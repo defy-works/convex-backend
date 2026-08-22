@@ -43,8 +43,30 @@ use crate::{
         ApiError,
         ApiResult,
     },
+    routes::helpers::require_deployment_member,
     state::OrchestratorState,
 };
+
+/// Authorize a caller against the deployment that owns `domain`.
+///
+/// Several handlers here take a `deployment_id` in the path but actually
+/// operate on the domain in the body, so guarding the path id alone would
+/// still let a caller pass *their own* deployment id with *someone else's*
+/// domain. Resolve ownership from the domain itself.
+async fn require_domain_owner(
+    state: &OrchestratorState,
+    auth: &AuthIdentity,
+    domain: &str,
+) -> ApiResult<i64> {
+    let record = state
+        .storage
+        .get_custom_domain(domain)
+        .await
+        .map_err(ApiError::Internal)?
+        .ok_or_else(|| ApiError::BadRequest(format!("{domain} is not configured")))?;
+    require_deployment_member(state, auth, record.deployment_id).await?;
+    Ok(record.deployment_id)
+}
 
 pub fn router() -> Router<OrchestratorState> {
     Router::new()
@@ -99,7 +121,10 @@ async fn canonical_urls_for(
     );
 
     // What the deployment *would* get if recreated right now.
-    let effective_url = deployment.desired_url.clone().unwrap_or_else(|| default_url.clone());
+    let effective_url = deployment
+        .desired_url
+        .clone()
+        .unwrap_or_else(|| default_url.clone());
     let effective_site_url = deployment
         .desired_site_url
         .clone()
@@ -125,10 +150,11 @@ async fn canonical_urls_for(
     tag = "dashboard",
 )]
 pub(crate) async fn get_canonical_urls(
-    _auth: AuthIdentity,
+    auth: AuthIdentity,
     State(state): State<OrchestratorState>,
     Path(deployment_id): Path<i64>,
 ) -> ApiResult<Json<CanonicalUrls>> {
+    require_deployment_member(&state, &auth, deployment_id).await?;
     Ok(Json(canonical_urls_for(&state, deployment_id).await?))
 }
 
@@ -141,11 +167,12 @@ pub(crate) async fn get_canonical_urls(
     tag = "dashboard",
 )]
 pub(crate) async fn set_canonical_urls(
-    _auth: AuthIdentity,
+    auth: AuthIdentity,
     State(state): State<OrchestratorState>,
     Path(deployment_id): Path<i64>,
     Json(args): Json<SetCanonicalUrlsArgs>,
 ) -> ApiResult<Json<CanonicalUrls>> {
+    require_deployment_member(&state, &auth, deployment_id).await?;
     let current = canonical_urls_for(&state, deployment_id).await?;
     let domains = state
         .storage
@@ -176,9 +203,9 @@ pub(crate) async fn set_canonical_urls(
             return Ok(());
         }
         Err(ApiError::BadRequest(format!(
-            "{host} has not been verified yet (state `{}`). Use Check on the \
-             domain until it reports active — that confirms a request to {host} \
-             actually reaches this deployment — then set it as canonical.{}",
+            "{host} has not been verified yet (state `{}`). Use Check on the domain until it \
+             reports active — that confirms a request to {host} actually reaches this deployment \
+             — then set it as canonical.{}",
             domain.cert_state,
             domain
                 .last_error
@@ -209,7 +236,6 @@ pub(crate) async fn set_canonical_urls(
     Ok(Json(canonical_urls_for(&state, deployment_id).await?))
 }
 
-
 fn to_api(record: crate::storage::CustomDomainRecord) -> CustomDomain {
     CustomDomain {
         id: record.id,
@@ -233,10 +259,11 @@ fn to_api(record: crate::storage::CustomDomainRecord) -> CustomDomain {
     tag = "dashboard",
 )]
 pub(crate) async fn list_custom_domains(
-    _auth: AuthIdentity,
+    auth: AuthIdentity,
     State(state): State<OrchestratorState>,
     Path(deployment_id): Path<i64>,
 ) -> ApiResult<Json<ListCustomDomains>> {
+    require_deployment_member(&state, &auth, deployment_id).await?;
     let domains = state
         .storage
         .list_custom_domains(deployment_id)
@@ -259,17 +286,17 @@ pub(crate) async fn list_custom_domains(
     tag = "dashboard",
 )]
 pub(crate) async fn create_custom_domain(
-    _auth: AuthIdentity,
+    auth: AuthIdentity,
     State(state): State<OrchestratorState>,
     Path(deployment_id): Path<i64>,
     Json(args): Json<CreateCustomDomainArgs>,
 ) -> ApiResult<Json<CustomDomain>> {
+    require_deployment_member(&state, &auth, deployment_id).await?;
     let domain = custom_domains::validate_domain(&args.domain)
         .map_err(|e| ApiError::BadRequest(e.to_string()))?;
-    let kind = custom_domains::validate_kind(
-        args.kind.as_deref().unwrap_or(custom_domains::KIND_API),
-    )
-    .map_err(|e| ApiError::BadRequest(e.to_string()))?;
+    let kind =
+        custom_domains::validate_kind(args.kind.as_deref().unwrap_or(custom_domains::KIND_API))
+            .map_err(|e| ApiError::BadRequest(e.to_string()))?;
     let tls_mode = custom_domains::validate_tls_mode(
         args.tls_mode
             .as_deref()
@@ -321,8 +348,7 @@ fn spawn_detect_and_provision(state: OrchestratorState, domain: String) {
         let Ok(Some(record)) = state.storage.get_custom_domain(&domain).await else {
             return;
         };
-        let Ok(Some(deployment)) = state.storage.get_deployment(record.deployment_id).await
-        else {
+        let Ok(Some(deployment)) = state.storage.get_deployment(record.deployment_id).await else {
             return;
         };
 
@@ -344,11 +370,7 @@ fn spawn_detect_and_provision(state: OrchestratorState, domain: String) {
         }
         if let Err(e) = state
             .storage
-            .set_custom_domain_status(
-                &domain,
-                &detection.cert_state,
-                detection.error.as_deref(),
-            )
+            .set_custom_domain_status(&domain, &detection.cert_state, detection.error.as_deref())
             .await
         {
             tracing::warn!(error = %e, %domain, "could not record detected domain state");
@@ -380,15 +402,23 @@ fn spawn_detect_and_provision(state: OrchestratorState, domain: String) {
     tag = "dashboard",
 )]
 pub(crate) async fn delete_custom_domain(
-    _auth: AuthIdentity,
+    auth: AuthIdentity,
     State(state): State<OrchestratorState>,
     Path(deployment_id): Path<i64>,
     Json(args): Json<CustomDomainArgs>,
 ) -> ApiResult<StatusCode> {
+    require_deployment_member(&state, &auth, deployment_id).await?;
     // Normalize so a domain stored lowercase is still matched when the caller
     // sends it back with different casing.
     let domain = custom_domains::validate_domain(&args.domain)
         .map_err(|e| ApiError::BadRequest(e.to_string()))?;
+
+    // `delete_custom_domain` is scoped to (deployment_id, domain), but
+    // `delete_certificate` below is keyed on the domain alone. Without this
+    // check a caller could pass their own deployment_id with someone else's
+    // domain: the row delete would no-op, and the certificate delete would
+    // still take out a deployment they do not own.
+    require_domain_owner(&state, &auth, &domain).await?;
 
     state
         .storage
@@ -451,13 +481,17 @@ pub(crate) async fn delete_custom_domain(
     tag = "dashboard",
 )]
 pub(crate) async fn retry_custom_domain(
-    _auth: AuthIdentity,
+    auth: AuthIdentity,
     State(state): State<OrchestratorState>,
     Path(_deployment_id): Path<i64>,
     Json(args): Json<CustomDomainArgs>,
 ) -> ApiResult<StatusCode> {
     let domain = custom_domains::validate_domain(&args.domain)
         .map_err(|e| ApiError::BadRequest(e.to_string()))?;
+
+    // The path's deployment_id is ignored by this handler, so ownership
+    // has to come from the domain itself.
+    require_domain_owner(&state, &auth, &domain).await?;
 
     // Retrying issuance for a domain whose TLS is terminated upstream would
     // order a certificate that is never served, and burn ACME rate limit
@@ -487,13 +521,17 @@ pub(crate) async fn retry_custom_domain(
     tag = "dashboard",
 )]
 pub(crate) async fn verify_custom_domain(
-    _auth: AuthIdentity,
+    auth: AuthIdentity,
     State(state): State<OrchestratorState>,
     Path(_deployment_id): Path<i64>,
     Json(args): Json<CustomDomainArgs>,
 ) -> ApiResult<Json<VerifyCustomDomainResponse>> {
     let domain = custom_domains::validate_domain(&args.domain)
         .map_err(|e| ApiError::BadRequest(e.to_string()))?;
+
+    // The path's deployment_id is ignored by this handler, so ownership
+    // has to come from the domain itself.
+    require_domain_owner(&state, &auth, &domain).await?;
 
     let deployment_name = deployment_name_for_domain(&state, &domain).await?;
     let record = state
@@ -562,10 +600,7 @@ pub(crate) async fn verify_custom_domain(
 ///
 /// `probe_domain` needs it to tell "this deployment answered" apart from
 /// "something answered", which is the whole basis of the `active` state.
-async fn deployment_name_for_domain(
-    state: &OrchestratorState,
-    domain: &str,
-) -> ApiResult<String> {
+async fn deployment_name_for_domain(state: &OrchestratorState, domain: &str) -> ApiResult<String> {
     let record = state
         .storage
         .get_custom_domain(domain)
@@ -696,4 +731,3 @@ async fn issue_now(state: &OrchestratorState, domain: &str) -> anyhow::Result<()
 
     Ok(())
 }
-

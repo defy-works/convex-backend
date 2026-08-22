@@ -23,6 +23,28 @@ use crate::{
 /// with a BetterAuth-issued ID.
 pub const SYSTEM_AUTH_USER_ID: &str = "system:bootstrap";
 
+/// Time-boxed cache for the readiness probe result.
+///
+/// A load balancer polling `/ready` every few seconds across N targets would
+/// otherwise turn health checking into database load. The window is short
+/// enough that a real outage is still reported promptly.
+#[derive(Default)]
+pub struct ReadinessCache {
+    inner: parking_lot::Mutex<Option<(std::time::Instant, bool)>>,
+}
+
+impl ReadinessCache {
+    pub fn get(&self, ttl: std::time::Duration) -> Option<bool> {
+        let guard = self.inner.lock();
+        let (at, value) = (*guard)?;
+        (at.elapsed() < ttl).then_some(value)
+    }
+
+    pub fn set(&self, value: bool) {
+        *self.inner.lock() = Some((std::time::Instant::now(), value));
+    }
+}
+
 #[derive(Clone)]
 pub struct OrchestratorState {
     pub storage: Storage,
@@ -35,6 +57,9 @@ pub struct OrchestratorState {
     /// In-flight HTTP-01 challenge tokens, served by the orchestrator's
     /// `/.well-known/acme-challenge/` route.
     pub challenges: crate::acme::ChallengeStore,
+    /// Caches the last `/ready` probe so load-balancer polling does not
+    /// become database load.
+    pub readiness: Arc<ReadinessCache>,
 }
 
 impl OrchestratorState {
@@ -94,6 +119,7 @@ impl OrchestratorState {
             host_capacity: Arc::new(crate::host_capacity::HostCapacityReader::new()),
             secrets,
             challenges: crate::acme::ChallengeStore::new(),
+            readiness: Arc::new(ReadinessCache::default()),
         };
 
         state.bootstrap_if_empty().await?;

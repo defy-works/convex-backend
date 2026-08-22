@@ -1,6 +1,7 @@
 //! HTTP route handlers grouped by API surface.
 
 pub mod acme_challenge;
+pub mod admin;
 pub mod dashboard;
 pub mod deployment_internal;
 pub mod helpers;

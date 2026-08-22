@@ -14,6 +14,7 @@ export const Primary: Story = {
     hasSubscription: true,
     showEntitlements: true,
     isBusinessPlan: false,
+    aiGatewayCost: 1.2345,
     summary: [
       {
         deploymentClass: "s16",
@@ -67,6 +68,7 @@ export const Primary: Story = {
       maxTeamMembers: 50000,
       logStreamingEnabled: true,
       customDomainsEnabled: true,
+      maxCustomDomains: 100,
       customRolesEnabled: true,
       customAuditLogsInLogStreamsConfigEnabled: true,
       streamingExportEnabled: true,

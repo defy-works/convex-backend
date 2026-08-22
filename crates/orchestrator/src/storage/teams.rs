@@ -83,10 +83,7 @@ impl Storage {
         Ok(row.map(map_team))
     }
 
-    pub async fn get_team_by_slug(
-        &self,
-        slug: &str,
-    ) -> anyhow::Result<Option<TeamRecord>> {
+    pub async fn get_team_by_slug(&self, slug: &str) -> anyhow::Result<Option<TeamRecord>> {
         let conn = self.pool().acquire().await?;
         let row = conn
             .client()
@@ -99,10 +96,7 @@ impl Storage {
         Ok(row.map(map_team))
     }
 
-    pub async fn list_teams_for_member(
-        &self,
-        member_id: i64,
-    ) -> anyhow::Result<Vec<TeamRecord>> {
+    pub async fn list_teams_for_member(&self, member_id: i64) -> anyhow::Result<Vec<TeamRecord>> {
         let conn = self.pool().acquire().await?;
         let rows = conn
             .client()
@@ -127,18 +121,12 @@ impl Storage {
         let conn = self.pool().acquire().await?;
         if let Some(name) = name {
             conn.client()
-                .execute(
-                    "UPDATE teams SET name = $1 WHERE id = $2",
-                    &[&name, &id],
-                )
+                .execute("UPDATE teams SET name = $1 WHERE id = $2", &[&name, &id])
                 .await?;
         }
         if let Some(slug) = slug {
             conn.client()
-                .execute(
-                    "UPDATE teams SET slug = $1 WHERE id = $2",
-                    &[&slug, &id],
-                )
+                .execute("UPDATE teams SET slug = $1 WHERE id = $2", &[&slug, &id])
                 .await?;
         }
         Ok(())
@@ -152,10 +140,7 @@ impl Storage {
         Ok(())
     }
 
-    pub async fn list_team_members(
-        &self,
-        team_id: i64,
-    ) -> anyhow::Result<Vec<TeamMemberRecord>> {
+    pub async fn list_team_members(&self, team_id: i64) -> anyhow::Result<Vec<TeamMemberRecord>> {
         let conn = self.pool().acquire().await?;
         let rows = conn
             .client()
@@ -169,10 +154,7 @@ impl Storage {
             .map(|r| TeamMemberRecord {
                 team_id: r.get(0),
                 member_id: r.get(1),
-                role: r
-                    .get::<_, String>(2)
-                    .parse()
-                    .unwrap_or(TeamRole::Developer),
+                role: r.get::<_, String>(2).parse().unwrap_or(TeamRole::Developer),
             })
             .collect())
     }
@@ -194,11 +176,7 @@ impl Storage {
         Ok(())
     }
 
-    pub async fn remove_team_member(
-        &self,
-        team_id: i64,
-        member_id: i64,
-    ) -> anyhow::Result<()> {
+    pub async fn remove_team_member(&self, team_id: i64, member_id: i64) -> anyhow::Result<()> {
         let conn = self.pool().acquire().await?;
         conn.client()
             .execute(
@@ -222,12 +200,11 @@ impl Storage {
                 &[&team_id, &member_id],
             )
             .await?;
-        Ok(row
-            .and_then(|r| r.get::<_, String>(0).parse().ok()))
+        Ok(row.and_then(|r| r.get::<_, String>(0).parse().ok()))
     }
 }
 
-fn map_team(row: Row) -> TeamRecord {
+pub(super) fn map_team(row: Row) -> TeamRecord {
     TeamRecord {
         id: row.get(0),
         name: row.get(1),

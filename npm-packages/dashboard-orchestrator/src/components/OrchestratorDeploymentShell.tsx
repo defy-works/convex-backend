@@ -227,15 +227,17 @@ export function OrchestratorDeploymentShell({
     // links and break the chrome).
     deploymentBackendOwnsAdminKeys: true,
     workosIntegrationEnabled: false,
-    // `logStreamTopicFiltersEnabled` and `usageLimitsEnabled` used to be set
-    // here. Upstream removed each from DeploymentInfo once its feature shipped
-    // (bb97ce4f8 "remove launched LaunchDarkly flags", and the Usage Limits
-    // launch), so the behaviour is now unconditional and neither flag exists
-    // to set any more.
+    // `logStreamTopicFiltersEnabled`, `usageLimitsEnabled` and
+    // `copyEnvVarNameAndValueEnabled` used to be set here. Upstream removes
+    // each from DeploymentInfo once its feature ships (bb97ce4f8 "remove
+    // launched LaunchDarkly flags", the Usage Limits launch, and now
+    // env-var copying), so the behaviour is unconditional and none of them
+    // exists to set any more.
     //
-    // Gated off until the feature ships; the orchestrator has no LaunchDarkly,
-    // so flip this to true at launch. Matches dashboard-self-hosted.
-    copyEnvVarNameAndValueEnabled: false,
+    // This recurs every time upstream launches a flag we had gated off, and it
+    // surfaces as a `next build` type error naming this file rather than as a
+    // merge conflict, because the property is fork-only and the type that
+    // rejects it is upstream's. Deleting the line is the whole fix.
     connectionStateCheckIntervalMs: 2500,
   };
 

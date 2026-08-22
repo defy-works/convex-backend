@@ -23,6 +23,7 @@ use crate::{
         ApiError,
         ApiResult,
     },
+    routes::helpers::require_project_member,
     state::OrchestratorState,
 };
 
@@ -48,10 +49,11 @@ pub fn router() -> Router<OrchestratorState> {
     tag = "env_vars",
 )]
 pub(crate) async fn list(
-    _auth: AuthIdentity,
+    auth: AuthIdentity,
     State(state): State<OrchestratorState>,
     Path(project_id): Path<i64>,
 ) -> ApiResult<Json<PaginatedDefaultEnvironmentVariablesResponse>> {
+    require_project_member(&state, &auth, project_id).await?;
     let rows = state
         .storage
         .list_default_env_vars(project_id)
@@ -81,11 +83,12 @@ pub(crate) async fn list(
     tag = "env_vars",
 )]
 pub(crate) async fn update(
-    _auth: AuthIdentity,
+    auth: AuthIdentity,
     State(state): State<OrchestratorState>,
     Path(project_id): Path<i64>,
     Json(args): Json<UpdateDefaultEnvironmentVariablesArgs>,
 ) -> ApiResult<StatusCode> {
+    require_project_member(&state, &auth, project_id).await?;
     for v in args.variables {
         state
             .storage

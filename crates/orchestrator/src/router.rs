@@ -3,6 +3,7 @@
 use std::time::Duration;
 
 use axum::{
+    extract::State,
     http::{
         header,
         HeaderName,
@@ -11,6 +12,7 @@ use axum::{
     },
     response::IntoResponse,
     routing::get,
+    Json,
     Router,
 };
 use tower::ServiceBuilder;
@@ -48,11 +50,14 @@ pub fn build_router(state: OrchestratorState) -> Router {
         .max_age(Duration::from_secs(3600));
 
     let api_router = routes::deployment_internal::router();
+    let admin_router = routes::admin::router();
     let dashboard_router = routes::dashboard::router();
     let internal_router = routes::internal::router();
     let management_router = routes::management::router();
 
     Router::new()
+        // Mounted before `/api` so the more specific prefix wins.
+        .nest("/api/admin", admin_router)
         .nest("/api/dashboard", dashboard_router)
         .nest("/api/internal", internal_router)
         .nest("/api", api_router)
@@ -62,6 +67,7 @@ pub fn build_router(state: OrchestratorState) -> Router {
         .merge(routes::acme_challenge::router())
         .route("/version", get(version))
         .route("/health", get(health))
+        .route("/ready", get(ready))
         .fallback(not_found)
         .with_state(state)
         .layer(ServiceBuilder::new().layer(cors))
@@ -77,8 +83,67 @@ async fn version() -> impl IntoResponse {
     )
 }
 
+/// Liveness: is this process running?
+///
+/// Deliberately dependency-free. A liveness probe that failed on a database
+/// blip would get the process killed and restarted, which does not fix a
+/// database problem and, behind a load balancer, cycles every target at
+/// once. Point healthchecks at `/ready` instead.
 async fn health() -> impl IntoResponse {
     StatusCode::OK
+}
+
+/// How long a readiness result is reused.
+const READY_CACHE_TTL: Duration = Duration::from_secs(1);
+
+/// Upper bound on the readiness probe itself. A probe that hangs is a
+/// failure — the point is to answer quickly, not to answer eventually.
+const READY_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// Readiness: can this process actually serve requests?
+async fn ready(State(state): State<OrchestratorState>) -> impl IntoResponse {
+    ready_response(probe_ready(&state).await)
+}
+
+/// Map a probe result to its wire response.
+///
+/// Split out from `ready` so the 503 path is testable without standing up a
+/// broken database: `PgPool::connect` probes at construction and refuses to
+/// build against a dead host, so there is no way to hold a live
+/// `OrchestratorState` whose pool is down.
+///
+/// The body carries status only. This endpoint is unauthenticated, so it
+/// must not leak connection strings or driver errors — that detail lives
+/// behind `GET /api/admin/health`.
+pub fn ready_response(ok: bool) -> (StatusCode, Json<serde_json::Value>) {
+    if ok {
+        (
+            StatusCode::OK,
+            Json(serde_json::json!({ "status": "ready" })),
+        )
+    } else {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({ "status": "not_ready" })),
+        )
+    }
+}
+
+async fn probe_ready(state: &OrchestratorState) -> bool {
+    if let Some(cached) = state.readiness.get(READY_CACHE_TTL) {
+        return cached;
+    }
+    let probe = async {
+        let conn = state.storage.pool().acquire().await.ok()?;
+        conn.client().simple_query("SELECT 1").await.ok()?;
+        Some(())
+    };
+    let ok = matches!(
+        tokio::time::timeout(READY_PROBE_TIMEOUT, probe).await,
+        Ok(Some(()))
+    );
+    state.readiness.set(ok);
+    ok
 }
 
 async fn not_found() -> impl IntoResponse {
@@ -100,9 +165,9 @@ async fn not_found() -> impl IntoResponse {
 ///   external clients (CLI codegen, third-party integrations).
 /// - **`/api/...`** (deployment-internal) — load-bearing endpoints used by
 ///   `crates/big_brain_client` and the CLI's `bigBrainAPI` calls.
-/// - **`/api/dashboard/...`** — private dashboard API. The `_stubs` tag
-///   marks endpoints that intentionally return canned data because the
-///   underlying feature is Cloud-only (Orb billing, WorkOS, Vercel, etc.).
+/// - **`/api/dashboard/...`** — private dashboard API. The `_stubs` tag marks
+///   endpoints that intentionally return canned data because the underlying
+///   feature is Cloud-only (Orb billing, WorkOS, Vercel, etc.).
 /// - **`/api/internal/...`** — service-key-gated endpoints used only by
 ///   `dashboard-orchestrator`'s server side.
 ///
@@ -247,6 +312,26 @@ async fn not_found() -> impl IntoResponse {
         // Service-key-gated internal endpoints (/api/internal/...)
         crate::routes::internal::exchange_session,
         crate::routes::internal::health,
+        // Instance-scoped operator API (/api/admin/...), SuperAdmin-gated
+        crate::routes::admin::health::admin_health,
+        crate::routes::admin::overview::overview,
+        crate::routes::admin::fleet::fleet,
+        crate::routes::admin::members::list_members,
+        crate::routes::admin::audit::instance_audit,
+        crate::routes::admin::deployment_actions::pause,
+        crate::routes::admin::deployment_actions::resume,
+        crate::routes::admin::deployment_actions::restart,
+        crate::routes::admin::deployment_actions::set_tier,
+        crate::routes::admin::deployment_actions::delete,
+        crate::routes::admin::member_actions::suspend,
+        crate::routes::admin::member_actions::unsuspend,
+        crate::routes::admin::member_actions::set_super_admin,
+        crate::routes::admin::member_actions::delete,
+        crate::routes::admin::break_glass::grant_access,
+        crate::routes::admin::team_actions::list_teams,
+        crate::routes::admin::team_actions::create_team,
+        crate::routes::admin::team_actions::rename_team,
+        crate::routes::admin::team_actions::delete_team,
     ),
     tags(
         (name = "tokens", description = "/v1: personal access tokens"),
@@ -256,6 +341,7 @@ async fn not_found() -> impl IntoResponse {
         (name = "env_vars", description = "/v1: project-level default environment variables"),
         (name = "deployment_internal", description = "/api: load-bearing CLI / big_brain_client endpoints"),
         (name = "dashboard", description = "/api/dashboard: private dashboard API"),
+        (name = "admin", description = "/api/admin: instance-scoped operator API (super-admin only)"),
         (name = "dashboard_stubs", description = "/api/dashboard: stubbed Cloud-only endpoints (Orb, WorkOS, Vercel, Discord, cloud backups, usage analytics)"),
         (name = "internal", description = "/api/internal: service-key-gated endpoints used only by dashboard-orchestrator"),
     ),
@@ -293,14 +379,14 @@ mod openapi_tests {
     /// reformatting the fixture) don't trip the test. To regenerate after
     /// intentional changes:
     /// `cargo run -p orchestrator --bin convex-orchestrator -- --print-openapi
-    ///   > crates/orchestrator/openapi.json && dprint fmt crates/orchestrator/openapi.json`
+    ///   > crates/orchestrator/openapi.json && dprint fmt
+    ///   > crates/orchestrator/openapi.json`
     #[test]
     fn openapi_fixture_matches() {
         let generated = super::openapi_spec().expect("openapi_spec()");
 
-        let fixture: serde_json::Value =
-            serde_json::from_str(include_str!("../openapi.json"))
-                .expect("openapi.json parses as JSON");
+        let fixture: serde_json::Value = serde_json::from_str(include_str!("../openapi.json"))
+            .expect("openapi.json parses as JSON");
 
         assert_eq!(
             generated, fixture,

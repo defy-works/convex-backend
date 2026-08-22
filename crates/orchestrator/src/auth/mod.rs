@@ -2,6 +2,7 @@
 
 pub mod deploy_keys;
 pub mod identity;
+pub mod super_admin;
 pub mod tokens;
 
 pub use deploy_keys::{

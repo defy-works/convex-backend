@@ -4,10 +4,10 @@
 //! `docs/superpowers/specs/2026-05-02-convex-orchestrator-plan.md`:
 //!
 //! 1. **Default-run, no DB.** Asserts that the public Management API surface
-//!    (`/v1/...`) advertised by `--print-openapi` matches the wire contract
-//!    the dashboard's typed clients and `crates/big_brain_client` already
-//!    expect, and round-trips the load-bearing deployment-internal DTOs
-//!    through `serde_json` against their upstream definitions in
+//!    (`/v1/...`) advertised by `--print-openapi` matches the wire contract the
+//!    dashboard's typed clients and `crates/big_brain_client` already expect,
+//!    and round-trips the load-bearing deployment-internal DTOs through
+//!    `serde_json` against their upstream definitions in
 //!    `big_brain_private_api_types`.
 //!
 //! 2. **`#[ignore]`-gated, requires `TEST_ORCHESTRATOR_DATABASE_URL`.** Spins
@@ -62,7 +62,10 @@ const EXPECTED_MANAGEMENT_OPERATIONS: &[(&str, &str)] = &[
     ("get", "/v1/projects/{project_id}/list_deployments"),
     ("post", "/v1/projects/{project_id}/create_deployment"),
     ("get", "/v1/projects/{project_id}/deployment"),
-    ("get", "/v1/teams/{team_id_or_slug}/projects/{project_slug}/deployment"),
+    (
+        "get",
+        "/v1/teams/{team_id_or_slug}/projects/{project_slug}/deployment",
+    ),
     ("get", "/v1/teams/{team_id}/list_deployments"),
     ("get", "/v1/teams/{team_id}/list_local_deployments"),
     ("get", "/v1/teams/{team_id}/list_deployment_classes"),
@@ -74,15 +77,21 @@ const EXPECTED_MANAGEMENT_OPERATIONS: &[(&str, &str)] = &[
     ("patch", "/v1/deployments/{deployment_name}/settings"),
     ("post", "/v1/deployments/{deployment_name}/restart"),
     // env vars
-    ("get", "/v1/projects/{project_id}/list_default_environment_variables"),
-    ("post", "/v1/projects/{project_id}/update_default_environment_variables"),
+    (
+        "get",
+        "/v1/projects/{project_id}/list_default_environment_variables",
+    ),
+    (
+        "post",
+        "/v1/projects/{project_id}/update_default_environment_variables",
+    ),
 ];
 
 #[test]
 fn openapi_exposes_all_management_endpoints() {
     use utoipa::OpenApi;
-    let spec = serde_json::to_value(OrchestratorOpenApi::openapi())
-        .expect("serialize openapi spec");
+    let spec =
+        serde_json::to_value(OrchestratorOpenApi::openapi()).expect("serialize openapi spec");
     let paths = spec
         .get("paths")
         .and_then(|p| p.as_object())
@@ -105,8 +114,8 @@ fn openapi_exposes_all_management_endpoints() {
 #[test]
 fn openapi_does_not_expose_undocumented_management_endpoints() {
     use utoipa::OpenApi;
-    let spec = serde_json::to_value(OrchestratorOpenApi::openapi())
-        .expect("serialize openapi spec");
+    let spec =
+        serde_json::to_value(OrchestratorOpenApi::openapi()).expect("serialize openapi spec");
     let paths = spec
         .get("paths")
         .and_then(|p| p.as_object())
@@ -140,8 +149,8 @@ fn openapi_does_not_expose_undocumented_management_endpoints() {
     }
     assert!(
         extra.is_empty(),
-        "OpenAPI spec advertises /v1 operations not in the documented contract \
-         (add them to EXPECTED_MANAGEMENT_OPERATIONS):\n  {}",
+        "OpenAPI spec advertises /v1 operations not in the documented contract (add them to \
+         EXPECTED_MANAGEMENT_OPERATIONS):\n  {}",
         extra.join("\n  ")
     );
 }
@@ -159,10 +168,7 @@ fn deployment_internal_dto_wire_format() {
         UrlForKeyResponse,
     };
 
-    let v = serde_json::to_value(HasProjectsResponse {
-        has_projects: true,
-    })
-    .unwrap();
+    let v = serde_json::to_value(HasProjectsResponse { has_projects: true }).unwrap();
     assert_eq!(v, serde_json::json!({"hasProjects": true}));
 
     let v = serde_json::to_value(TeamSummary {
@@ -206,7 +212,10 @@ fn deployment_internal_dto_wire_format() {
         deploy_key: "prod:happy-otter-1|secret".into(),
     })
     .unwrap();
-    assert_eq!(v, serde_json::json!({"deployKey": "prod:happy-otter-1|secret"}));
+    assert_eq!(
+        v,
+        serde_json::json!({"deployKey": "prod:happy-otter-1|secret"})
+    );
 
     let v = serde_json::to_value(UrlForKeyResponse {
         url: "http://happy-otter-1.localhost:9000".into(),
@@ -241,7 +250,10 @@ fn deployment_auth_response_is_byte_identical_to_upstream() {
 
     let a = serde_json::to_value(&via_upstream).unwrap();
     let b = serde_json::to_value(&via_exported).unwrap();
-    assert_eq!(a, b, "DeploymentAuthResponse re-export drifted from upstream");
+    assert_eq!(
+        a, b,
+        "DeploymentAuthResponse re-export drifted from upstream"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -295,23 +307,20 @@ async fn deployment_internal_flow_against_real_db() {
     };
     use http_body_util::BodyExt;
     use orchestrator::{
-        config::{
-            OrchestratorConfig,
-            ProvisionerMode,
-            RegistrationMode,
-        },
         router::build_router,
         state::OrchestratorState,
     };
-    use orchestrator_api_types::dashboard::{
-        DeviceAuthorizeArgs,
-        DeviceAuthorizeResponse,
-    };
-    use orchestrator_api_types::deployment::{
-        CreateProjectArgs,
-        CreateProjectResponse,
-        HasProjectsResponse,
-        TeamSummary,
+    use orchestrator_api_types::{
+        dashboard::{
+            DeviceAuthorizeArgs,
+            DeviceAuthorizeResponse,
+        },
+        deployment::{
+            CreateProjectArgs,
+            CreateProjectResponse,
+            HasProjectsResponse,
+            TeamSummary,
+        },
     };
     use tower::ServiceExt;
 
@@ -324,37 +333,14 @@ async fn deployment_internal_flow_against_real_db() {
     reset_public_schema(&database_url).await;
 
     let data_root = tempfile::tempdir().expect("tempdir for data root");
-    let config = OrchestratorConfig {
-        database_url,
-        data_root: data_root.path().to_path_buf(),
-        public_origin: "http://localhost".into(),
-        bootstrap_token: Some(bootstrap_token.clone()),
-        provisioner_mode: ProvisionerMode::External,
-        service_key: None,
-        admin_emails: Vec::new(),
-        default_team_name: "Self-Hosted".into(),
-        registration_mode: RegistrationMode::Allowlist,
-        backend_image: "irrelevant".into(),
-        backend_network: None,
-        backend_container_prefix: "test-".into(),
-        router_host: "localhost".into(),
-        site_router_host: None,
-        router_public_port: 9000,
-        router_public_scheme: "http".into(),
-        direct_backend_routing: true,
-        enable_sidecars: false,
-        postgres_image: "postgres:16-alpine".into(),
-        minio_image: "quay.io/minio/minio:latest".into(),
-        traefik_dynamic_dir: None,
-        orchestrator_upstream: "orchestrator:8050".into(),
-        traefik_cert_dir: "/dynamic".into(),
-        acme_contact_email: None,
-        acme_directory_url: None,
-    };
+    let mut config = test_config(database_url, data_root.path().to_path_buf());
+    config.bootstrap_token = Some(bootstrap_token.clone());
 
     // Construct OrchestratorState the public way, then swap in the stub
     // provisioner so we can exercise create_deployment without docker.
-    let mut state = OrchestratorState::new(config).await.expect("orchestrator state");
+    let mut state = OrchestratorState::new(config)
+        .await
+        .expect("orchestrator state");
     state.provisioner = Arc::new(StubProvisioner);
 
     let app = build_router(state.clone());
@@ -399,8 +385,7 @@ async fn deployment_internal_flow_against_real_db() {
         .expect("send /api/teams");
     assert_eq!(resp.status(), StatusCode::OK, "GET /api/teams");
     let body = resp.into_body().collect().await.unwrap().to_bytes();
-    let teams: Vec<TeamSummary> =
-        serde_json::from_slice(&body).expect("Vec<TeamSummary> shape");
+    let teams: Vec<TeamSummary> = serde_json::from_slice(&body).expect("Vec<TeamSummary> shape");
     assert!(!teams.is_empty(), "bootstrap team should be present");
     let team_slug = teams[0].slug.clone();
 
@@ -419,8 +404,7 @@ async fn deployment_internal_flow_against_real_db() {
         .expect("send /api/has_projects");
     assert_eq!(resp.status(), StatusCode::OK);
     let body = resp.into_body().collect().await.unwrap().to_bytes();
-    let _: HasProjectsResponse =
-        serde_json::from_slice(&body).expect("HasProjectsResponse shape");
+    let _: HasProjectsResponse = serde_json::from_slice(&body).expect("HasProjectsResponse shape");
 
     // 3. POST /api/create_project → CreateProjectResponse.
     let create_args = CreateProjectArgs {
@@ -467,7 +451,10 @@ async fn deployment_internal_flow_against_real_db() {
     assert_eq!(resp.status(), StatusCode::OK);
     let body = resp.into_body().collect().await.unwrap().to_bytes();
     let after: HasProjectsResponse = serde_json::from_slice(&body).unwrap();
-    assert!(after.has_projects, "has_projects should be true after create");
+    assert!(
+        after.has_projects,
+        "has_projects should be true after create"
+    );
 }
 
 #[tokio::test]
@@ -489,9 +476,7 @@ async fn allowlist_rejects_uninvited_non_admin_session_exchange() {
     .await;
     let app = orchestrator::router::build_router(state);
 
-    let resp = exchange_session(&app, "stranger@example.com", None)
-        .await
-        .0;
+    let resp = exchange_session(&app, "stranger@example.com", None).await.0;
 
     assert_eq!(resp, StatusCode::FORBIDDEN);
 }
@@ -615,10 +600,10 @@ async fn non_members_cannot_list_team_invite_codes() {
 // Authorization on the access-token routes.
 //
 // These routes used to take `_auth: AuthIdentity` and discard it, which
-// authenticated the caller but never authorized them. `create_team_access_token`
-// took no identity at all — and `team_id` is a sequential BIGSERIAL, so anyone
-// who could reach the API could mint a team-wide token by guessing a small
-// integer.
+// authenticated the caller but never authorized them.
+// `create_team_access_token` took no identity at all — and `team_id` is a
+// sequential BIGSERIAL, so anyone who could reach the API could mint a
+// team-wide token by guessing a small integer.
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -788,7 +773,10 @@ async fn a_member_cannot_revoke_another_members_personal_access_token() {
         .await
         .expect("load token")
         .expect("token row exists");
-    assert!(revoked.revoked_time.is_some(), "own revoke must take effect");
+    assert!(
+        revoked.revoked_time.is_some(),
+        "own revoke must take effect"
+    );
 }
 
 #[tokio::test]
@@ -855,32 +843,36 @@ fn uuid_like() -> String {
     format!("{nanos:032x}")
 }
 
+/// Build a config for tests.
+///
+/// The single place a new `OrchestratorConfig` field has to be added, rather
+/// than every test growing its own struct literal. Callers that need a
+/// different value mutate the returned struct.
+///
+/// Defaults are deliberately inert: `External` provisioner so nothing tries
+/// to reach docker, and `reconcile_interval_secs: 0` so no test starts a
+/// background loop that outlives it.
 #[cfg(test)]
-async fn test_state(
+fn test_config(
     database_url: String,
-    registration_mode: orchestrator::config::RegistrationMode,
-    admin_emails: Vec<String>,
-    service_key: &str,
-) -> orchestrator::state::OrchestratorState {
-    use orchestrator::{
-        config::{
-            OrchestratorConfig,
-            ProvisionerMode,
-        },
-        state::OrchestratorState,
+    data_root: std::path::PathBuf,
+) -> orchestrator::config::OrchestratorConfig {
+    use orchestrator::config::{
+        OrchestratorConfig,
+        ProvisionerMode,
+        RegistrationMode,
     };
 
-    let data_root = tempfile::tempdir().expect("tempdir for data root");
-    let config = OrchestratorConfig {
+    OrchestratorConfig {
         database_url,
-        data_root: data_root.path().to_path_buf(),
+        data_root,
         public_origin: "http://localhost".into(),
         bootstrap_token: None,
         provisioner_mode: ProvisionerMode::External,
-        service_key: Some(service_key.into()),
-        admin_emails,
+        service_key: None,
+        admin_emails: Vec::new(),
         default_team_name: "Self-Hosted".into(),
-        registration_mode,
+        registration_mode: RegistrationMode::Allowlist,
         backend_image: "irrelevant".into(),
         backend_network: None,
         backend_container_prefix: "test-".into(),
@@ -897,7 +889,24 @@ async fn test_state(
         traefik_cert_dir: "/dynamic".into(),
         acme_contact_email: None,
         acme_directory_url: None,
-    };
+        reconcile_interval_secs: 0,
+    }
+}
+
+#[cfg(test)]
+async fn test_state(
+    database_url: String,
+    registration_mode: orchestrator::config::RegistrationMode,
+    admin_emails: Vec<String>,
+    service_key: &str,
+) -> orchestrator::state::OrchestratorState {
+    use orchestrator::state::OrchestratorState;
+
+    let data_root = tempfile::tempdir().expect("tempdir for data root");
+    let mut config = test_config(database_url, data_root.path().to_path_buf());
+    config.service_key = Some(service_key.into());
+    config.admin_emails = admin_emails;
+    config.registration_mode = registration_mode;
 
     OrchestratorState::new(config)
         .await
@@ -1042,11 +1051,7 @@ async fn post_without_auth(
 }
 
 #[cfg(test)]
-async fn get_with_bearer(
-    app: &axum::Router,
-    uri: &str,
-    token: &str,
-) -> axum::http::StatusCode {
+async fn get_with_bearer(app: &axum::Router, uri: &str, token: &str) -> axum::http::StatusCode {
     use axum::{
         body::Body,
         http::{
@@ -1088,4 +1093,1478 @@ async fn reset_public_schema(database_url: &str) {
         .batch_execute("DROP SCHEMA IF EXISTS public CASCADE; CREATE SCHEMA public;")
         .await
         .expect("reset public schema");
+}
+
+// ---------------------------------------------------------------------------
+// Admin console, Phase 1
+// ---------------------------------------------------------------------------
+
+/// The P1 migration must add the super-admin/suspension columns and make
+/// audit events instance-scopable. Asserts against `information_schema` so
+/// it fails loudly if a later migration drops one.
+#[tokio::test]
+#[ignore = "needs TEST_ORCHESTRATOR_DATABASE_URL"]
+async fn p1_migration_adds_admin_columns() {
+    let database_url = std::env::var("TEST_ORCHESTRATOR_DATABASE_URL")
+        .expect("TEST_ORCHESTRATOR_DATABASE_URL not set (this test is `#[ignore]` by default)");
+    reset_public_schema(&database_url).await;
+
+    let pool = orchestrator::storage::pool::PgPool::connect(&database_url)
+        .await
+        .expect("connect test pool");
+    orchestrator::storage::migrations::run(&pool)
+        .await
+        .expect("run migrations");
+
+    let conn = pool.acquire().await.expect("acquire");
+    let rows = conn
+        .client()
+        .query(
+            "SELECT table_name, column_name, is_nullable
+               FROM information_schema.columns
+              WHERE table_schema = 'public'
+                AND (   (table_name = 'members' AND column_name IN ('is_super_admin','suspended'))
+                     OR (table_name = 'audit_log_events' AND column_name IN ('scope','team_id')))",
+            &[],
+        )
+        .await
+        .expect("query information_schema");
+
+    let found: Vec<(String, String, String)> = rows
+        .iter()
+        .map(|r| (r.get(0), r.get(1), r.get(2)))
+        .collect();
+
+    assert!(
+        found
+            .iter()
+            .any(|(t, c, _)| t == "members" && c == "is_super_admin"),
+        "members.is_super_admin missing: {found:?}"
+    );
+    assert!(
+        found
+            .iter()
+            .any(|(t, c, _)| t == "members" && c == "suspended"),
+        "members.suspended missing: {found:?}"
+    );
+    assert!(
+        found
+            .iter()
+            .any(|(t, c, _)| t == "audit_log_events" && c == "scope"),
+        "audit_log_events.scope missing: {found:?}"
+    );
+    assert!(
+        found
+            .iter()
+            .any(|(t, c, n)| t == "audit_log_events" && c == "team_id" && n == "YES"),
+        "audit_log_events.team_id must be nullable: {found:?}"
+    );
+
+    // Idempotence: running migrations twice must not error.
+    orchestrator::storage::migrations::run(&pool)
+        .await
+        .expect("migrations are idempotent");
+}
+
+/// `set_super_admin` must refuse to clear the last remaining super-admin,
+/// and must do so atomically rather than as a read-then-write.
+#[tokio::test]
+#[ignore = "needs TEST_ORCHESTRATOR_DATABASE_URL"]
+async fn cannot_revoke_last_super_admin() {
+    let database_url = std::env::var("TEST_ORCHESTRATOR_DATABASE_URL")
+        .expect("TEST_ORCHESTRATOR_DATABASE_URL not set (this test is `#[ignore]` by default)");
+    reset_public_schema(&database_url).await;
+
+    let storage = orchestrator::storage::Storage::connect(&database_url)
+        .await
+        .expect("connect storage");
+
+    let a = storage
+        .upsert_member("auth-a", "a@example.com", Some("A"))
+        .await
+        .expect("member a");
+    let b = storage
+        .upsert_member("auth-b", "b@example.com", Some("B"))
+        .await
+        .expect("member b");
+
+    storage.set_super_admin(a.id, true).await.expect("grant a");
+    storage.set_super_admin(b.id, true).await.expect("grant b");
+
+    // Two admins: revoking one is fine.
+    storage
+        .set_super_admin(b.id, false)
+        .await
+        .expect("revoke b");
+
+    // One admin left: revoking is refused.
+    let err = storage
+        .set_super_admin(a.id, false)
+        .await
+        .expect_err("revoking the last super-admin must fail");
+    assert!(
+        err.to_string().contains("last super-admin"),
+        "unexpected error: {err}"
+    );
+
+    let reloaded = storage
+        .get_member(a.id)
+        .await
+        .expect("get a")
+        .expect("a exists");
+    assert!(reloaded.is_super_admin, "a must still be a super-admin");
+    assert!(!reloaded.suspended, "suspension defaults to false");
+}
+
+/// Elevation must ride only `Session` and `Pat` tokens, and a suspended
+/// member must stop authenticating entirely.
+///
+/// The ineligible case is exercised with a `Team` token rather than a deploy
+/// key because both sit in the same `matches!` arm in `resolve_with_storage`
+/// and a team token needs no deployment row to construct. The deploy-key
+/// kinds are the reason the gate exists - a key checked into CI must not be
+/// an instance-wide credential - so a dedicated deploy-key case is still
+/// worth adding once the fixtures for one are cheap.
+#[tokio::test]
+#[ignore = "needs TEST_ORCHESTRATOR_DATABASE_URL"]
+async fn elevation_is_limited_to_session_and_pat_tokens() {
+    use orchestrator::storage::{
+        access_tokens::NewAccessToken,
+        AccessTokenKind,
+    };
+
+    let database_url = std::env::var("TEST_ORCHESTRATOR_DATABASE_URL")
+        .expect("TEST_ORCHESTRATOR_DATABASE_URL not set (this test is `#[ignore]` by default)");
+    reset_public_schema(&database_url).await;
+
+    let storage = orchestrator::storage::Storage::connect(&database_url)
+        .await
+        .expect("connect storage");
+    let member = storage
+        .upsert_member("auth-admin", "admin@example.com", Some("Admin"))
+        .await
+        .expect("member");
+    let team = storage
+        .create_team("Ops", "ops", Some(member.id))
+        .await
+        .expect("team");
+    storage
+        .set_super_admin(member.id, true)
+        .await
+        .expect("grant");
+
+    // A PAT for that member elevates.
+    let pat_secret = "pat-secret-for-test";
+    storage
+        .create_access_token(NewAccessToken {
+            public_id: "pat-public",
+            kind: AccessTokenKind::Pat,
+            member_id: Some(member.id),
+            team_id: None,
+            project_id: None,
+            deployment_id: None,
+            name: "test-pat",
+            secret_hash: &orchestrator::auth::tokens::sha256_hex(pat_secret),
+            secret_suffix: "test",
+            expiry: None,
+        })
+        .await
+        .expect("create pat");
+
+    let identity = orchestrator::auth::identity::resolve_for_test(
+        &storage,
+        &format!("pat:pat-public|{pat_secret}"),
+    )
+    .await
+    .expect("resolve pat");
+    assert!(
+        identity.is_super_admin,
+        "a PAT for a super-admin must elevate"
+    );
+    assert!(
+        !identity.is_bootstrap,
+        "an ordinary member is not the bootstrap identity"
+    );
+
+    // A team token for the same member does not.
+    let team_secret = "team-secret-for-test";
+    storage
+        .create_access_token(NewAccessToken {
+            public_id: "team-public",
+            kind: AccessTokenKind::Team,
+            member_id: Some(member.id),
+            team_id: Some(team.id),
+            project_id: None,
+            deployment_id: None,
+            name: "test-team-token",
+            secret_hash: &orchestrator::auth::tokens::sha256_hex(team_secret),
+            secret_suffix: "test",
+            expiry: None,
+        })
+        .await
+        .expect("create team token");
+
+    let identity = orchestrator::auth::identity::resolve_for_test(
+        &storage,
+        &format!("team:team-public|{team_secret}"),
+    )
+    .await
+    .expect("resolve team token");
+    assert!(
+        !identity.is_super_admin,
+        "a non-session/PAT token must never elevate, even for an operator"
+    );
+
+    // A suspended member's token stops resolving entirely.
+    storage
+        .set_member_suspended(member.id, true)
+        .await
+        .expect("suspend");
+    let err = orchestrator::auth::identity::resolve_for_test(
+        &storage,
+        &format!("pat:pat-public|{pat_secret}"),
+    )
+    .await
+    .expect_err("a suspended member must not authenticate");
+    assert!(
+        matches!(err, orchestrator::errors::ApiError::Unauthorized),
+        "expected Unauthorized, got {err:?}"
+    );
+}
+
+/// Instance-scoped audit events must not leak into per-team audit queries,
+/// and team-scoped queries must be unaffected by team_id becoming nullable.
+#[tokio::test]
+#[ignore = "needs TEST_ORCHESTRATOR_DATABASE_URL"]
+async fn instance_audit_events_are_isolated_from_team_queries() {
+    use orchestrator::storage::AuditQuery;
+
+    let database_url = std::env::var("TEST_ORCHESTRATOR_DATABASE_URL")
+        .expect("TEST_ORCHESTRATOR_DATABASE_URL not set (this test is `#[ignore]` by default)");
+    reset_public_schema(&database_url).await;
+
+    let storage = orchestrator::storage::Storage::connect(&database_url)
+        .await
+        .expect("connect storage");
+    let member = storage
+        .upsert_member("auth-op", "op@example.com", Some("Op"))
+        .await
+        .expect("member");
+    let team = storage
+        .create_team("Test Team", "test-team", Some(member.id))
+        .await
+        .expect("team");
+
+    storage
+        .append_audit(
+            team.id,
+            Some(member.id),
+            "teamThing",
+            &serde_json::json!({ "k": "v" }),
+        )
+        .await
+        .expect("team event");
+    storage
+        .append_instance_audit(
+            Some(member.id),
+            "instanceThing",
+            &serde_json::json!({ "k": "v" }),
+        )
+        .await
+        .expect("instance event");
+    // Break-glass events carry no member attribution.
+    storage
+        .append_instance_audit(None, "bootstrapThing", &serde_json::json!({}))
+        .await
+        .expect("bootstrap event");
+
+    let team_events = storage
+        .query_audit(&AuditQuery {
+            team_id: team.id,
+            ..Default::default()
+        })
+        .await
+        .expect("query team audit");
+    assert_eq!(
+        team_events.len(),
+        1,
+        "team query must see only its own event, got {team_events:?}"
+    );
+    assert_eq!(team_events[0].action, "teamThing");
+
+    let instance_events = storage
+        .list_instance_audit(100)
+        .await
+        .expect("list instance audit");
+    assert_eq!(
+        instance_events.len(),
+        2,
+        "instance query sees only instance events"
+    );
+    // Newest first.
+    assert_eq!(instance_events[0].action, "bootstrapThing");
+    assert_eq!(instance_events[0].member_id, None);
+    assert_eq!(instance_events[1].action, "instanceThing");
+    assert_eq!(instance_events[1].member_id, Some(member.id));
+}
+
+/// The readiness response must actually differ by probe result.
+///
+/// Asserts on the pure mapping rather than end to end, because a `PgPool`
+/// cannot be constructed against a dead host - `connect` probes and fails -
+/// so there is no way to hold a live state whose database is down.
+#[test]
+fn ready_response_maps_probe_result_to_status() {
+    use axum::http::StatusCode;
+
+    let (status, body) = orchestrator::router::ready_response(true);
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body.0["status"], "ready");
+
+    let (status, body) = orchestrator::router::ready_response(false);
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(body.0["status"], "not_ready");
+    assert!(
+        body.0.get("error").is_none(),
+        "the unauthenticated readiness body must not carry error detail"
+    );
+}
+
+/// `0` means boot-only, anything positive means keep going.
+#[test]
+fn reconcile_interval_zero_disables_the_loop() {
+    assert!(
+        !orchestrator::reconcile::periodic_enabled(0),
+        "0 must disable the periodic loop"
+    );
+    assert!(
+        orchestrator::reconcile::periodic_enabled(60),
+        "a positive interval must enable it"
+    );
+}
+
+/// `/health` is liveness and must never depend on Postgres. `/ready` is
+/// readiness and must. Both answer 200 against a live database; the
+/// distinction between them is asserted by
+/// `ready_response_maps_probe_result_to_status`, which does not need one.
+#[tokio::test]
+#[ignore = "needs TEST_ORCHESTRATOR_DATABASE_URL"]
+async fn health_and_ready_both_answer_against_a_live_database() {
+    use std::sync::Arc;
+
+    use axum::{
+        body::Body,
+        http::{
+            Request,
+            StatusCode,
+        },
+    };
+    use orchestrator::{
+        router::build_router,
+        state::OrchestratorState,
+    };
+    use tower::ServiceExt;
+
+    let database_url = std::env::var("TEST_ORCHESTRATOR_DATABASE_URL")
+        .expect("TEST_ORCHESTRATOR_DATABASE_URL not set (this test is `#[ignore]` by default)");
+    reset_public_schema(&database_url).await;
+
+    let data_root = tempfile::tempdir().expect("tempdir for data root");
+    let config = test_config(database_url, data_root.path().to_path_buf());
+    let mut state = OrchestratorState::new(config).await.expect("state");
+    state.provisioner = Arc::new(StubProvisioner);
+    let app = build_router(state.clone());
+
+    for path in ["/health", "/ready"] {
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(path)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap_or_else(|_| panic!("send GET {path}"));
+        assert_eq!(resp.status(), StatusCode::OK, "GET {path} with a live DB");
+    }
+}
+
+/// Drift is "the container is not doing what the database says". The
+/// load-bearing case is intended=running, actual=missing.
+#[test]
+fn drift_is_intended_versus_actual() {
+    use orchestrator::routes::admin::fleet::is_drifted;
+
+    // The case that matters: the DB says it should be up, it is gone.
+    assert!(is_drifted("running", "missing"));
+    assert!(is_drifted("running", "stopped"));
+
+    // Agreement in either direction is not drift.
+    assert!(!is_drifted("running", "running"));
+    assert!(!is_drifted("paused", "missing"));
+    assert!(!is_drifted("disabled", "stopped"));
+
+    // Should be down but is up is also drift.
+    assert!(is_drifted("paused", "running"));
+
+    // A probe we could not run is never drift.
+    assert!(!is_drifted("running", "unknown"));
+    assert!(!is_drifted("paused", "unknown"));
+}
+
+/// The admin surface must see across team boundaries - that is the entire
+/// point. Two teams with one member each; the admin queries return both.
+#[tokio::test]
+#[ignore = "needs TEST_ORCHESTRATOR_DATABASE_URL"]
+async fn admin_queries_span_all_teams() {
+    let database_url = std::env::var("TEST_ORCHESTRATOR_DATABASE_URL")
+        .expect("TEST_ORCHESTRATOR_DATABASE_URL not set (this test is `#[ignore]` by default)");
+    reset_public_schema(&database_url).await;
+
+    let storage = orchestrator::storage::Storage::connect(&database_url)
+        .await
+        .expect("connect storage");
+
+    let alice = storage
+        .upsert_member("auth-alice", "alice@example.com", Some("Alice"))
+        .await
+        .expect("alice");
+    let bob = storage
+        .upsert_member("auth-bob", "bob@example.com", Some("Bob"))
+        .await
+        .expect("bob");
+    // A member on no team at all: the LEFT JOIN still emits a row for them,
+    // and they must come back with an empty `teams` rather than being
+    // dropped or inheriting somebody else's.
+    let _carol = storage
+        .upsert_member("auth-carol", "carol@example.com", None)
+        .await
+        .expect("carol");
+
+    let t1 = storage
+        .create_team("One", "one", Some(alice.id))
+        .await
+        .expect("team one");
+    let t2 = storage
+        .create_team("Two", "two", Some(bob.id))
+        .await
+        .expect("team two");
+    storage
+        .add_team_member(t1.id, alice.id, orchestrator::storage::TeamRole::Admin)
+        .await
+        .expect("alice in one");
+    storage
+        .add_team_member(t2.id, bob.id, orchestrator::storage::TeamRole::Developer)
+        .await
+        .expect("bob in two");
+    // Alice is on both teams, so her row must carry two memberships.
+    storage
+        .add_team_member(t2.id, alice.id, orchestrator::storage::TeamRole::Developer)
+        .await
+        .expect("alice in two");
+
+    let teams = storage.list_all_teams().await.expect("all teams");
+    assert_eq!(teams.len(), 2, "must see both teams");
+
+    let members = storage.list_all_members().await.expect("all members");
+    assert_eq!(members.len(), 3, "must see all three members");
+
+    let alice_row = members
+        .iter()
+        .find(|m| m.primary_email == "alice@example.com")
+        .expect("alice present");
+    assert_eq!(alice_row.teams.len(), 2, "alice is on two teams");
+    assert_eq!(alice_row.teams[0].team_slug, "one");
+    assert_eq!(alice_row.teams[0].role, "admin");
+    assert_eq!(alice_row.teams[1].team_slug, "two");
+    assert_eq!(alice_row.teams[1].role, "developer");
+
+    let carol_row = members
+        .iter()
+        .find(|m| m.primary_email == "carol@example.com")
+        .expect("carol present");
+    assert!(
+        carol_row.teams.is_empty(),
+        "a member on no team must have no memberships, got {:?}",
+        carol_row.teams
+    );
+}
+
+/// Turn an `ADMIN_ROUTES` template into a concrete path plus a body.
+///
+/// The lifecycle routes are `POST`s with `{deployment_id}` in the path and,
+/// for `tier`, a required body. The 401/403 assertions do not care, but the
+/// super-admin pass must reach the handler rather than bouncing off a path
+/// parse error, or it proves nothing about the gate.
+#[cfg(test)]
+fn concrete_admin_route(
+    template: &str,
+    deployment_id: i64,
+    member_id: i64,
+    team_id: i64,
+    unique: usize,
+) -> (String, Option<serde_json::Value>) {
+    let path = template
+        .replace("{deployment_id}", &deployment_id.to_string())
+        .replace("{member_id}", &member_id.to_string())
+        .replace("{team_id}", &team_id.to_string());
+    let body = if template.ends_with("/tier") {
+        Some(serde_json::json!({ "tier": "S16" }))
+    } else if template == "/api/admin/teams" {
+        // Create needs a name; the slug must not collide with a team an
+        // earlier iteration already made.
+        Some(serde_json::json!({ "name": format!("Fixture {unique}") }))
+    } else if template.ends_with("/teams/{team_id}") {
+        Some(serde_json::json!({ "name": format!("Renamed {unique}") }))
+    } else if template.ends_with("/access") {
+        Some(serde_json::json!({ "reason": "route table coverage" }))
+    } else if template.ends_with("/super_admin") {
+        // Grant rather than revoke: revoking would trip the
+        // last-super-admin guard against the very account this test
+        // authenticates as.
+        Some(serde_json::json!({ "grant": true }))
+    } else {
+        None
+    };
+    (path, body)
+}
+
+/// Every `/api/admin` route must reject a non-super-admin identity.
+///
+/// Driven off `ADMIN_ROUTES` rather than a hand-maintained list here, so a
+/// route added without a `SuperAdmin` extractor fails this test instead of
+/// shipping open.
+#[tokio::test]
+#[ignore = "needs TEST_ORCHESTRATOR_DATABASE_URL"]
+async fn every_admin_route_rejects_non_super_admins() {
+    use std::sync::Arc;
+
+    use axum::{
+        body::Body,
+        http::{
+            header::AUTHORIZATION,
+            Request,
+            StatusCode,
+        },
+    };
+    use orchestrator::{
+        router::build_router,
+        routes::admin::ADMIN_ROUTES,
+        state::OrchestratorState,
+        storage::{
+            access_tokens::NewAccessToken,
+            AccessTokenKind,
+        },
+    };
+    use tower::ServiceExt;
+
+    let database_url = std::env::var("TEST_ORCHESTRATOR_DATABASE_URL")
+        .expect("TEST_ORCHESTRATOR_DATABASE_URL not set (this test is `#[ignore]` by default)");
+    reset_public_schema(&database_url).await;
+
+    let data_root = tempfile::tempdir().expect("tempdir for data root");
+    let config = test_config(database_url, data_root.path().to_path_buf());
+    let mut state = OrchestratorState::new(config).await.expect("state");
+    state.provisioner = Arc::new(StubProvisioner);
+    let app = build_router(state.clone());
+
+    // An ordinary member with an ordinary PAT.
+    let plain = state
+        .storage
+        .upsert_member("auth-plain", "plain@example.com", Some("Plain"))
+        .await
+        .expect("plain member");
+    let plain_secret = "plain-secret";
+    state
+        .storage
+        .create_access_token(NewAccessToken {
+            public_id: "plain-public",
+            kind: AccessTokenKind::Pat,
+            member_id: Some(plain.id),
+            team_id: None,
+            project_id: None,
+            deployment_id: None,
+            name: "plain-pat",
+            secret_hash: &orchestrator::auth::tokens::sha256_hex(plain_secret),
+            secret_suffix: "cret",
+            expiry: None,
+        })
+        .await
+        .expect("plain pat");
+    let plain_bearer = format!("Bearer pat:plain-public|{plain_secret}");
+
+    assert!(!ADMIN_ROUTES.is_empty(), "ADMIN_ROUTES must not be empty");
+
+    for (method, path) in ADMIN_ROUTES {
+        // Any id will do here: authorization is checked before the handler
+        // ever looks the deployment up.
+        let (concrete, _) = concrete_admin_route(path, 1, 1, 1, 0);
+        // Unauthenticated.
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(*method)
+                    .uri(&concrete)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap_or_else(|_| panic!("send {method} {path}"));
+        assert_eq!(
+            resp.status(),
+            StatusCode::UNAUTHORIZED,
+            "{method} {path} must be 401 without a token"
+        );
+
+        // Authenticated but not a super-admin.
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(*method)
+                    .uri(&concrete)
+                    .header(AUTHORIZATION, &plain_bearer)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap_or_else(|_| panic!("send {method} {path} as plain member"));
+        assert_eq!(
+            resp.status(),
+            StatusCode::FORBIDDEN,
+            "{method} {path} must be 403 for a non-super-admin"
+        );
+    }
+
+    // Granting the bit opens every route.
+    state
+        .storage
+        .set_super_admin(plain.id, true)
+        .await
+        .expect("grant");
+    // A team and project to hang the per-route deployments off.
+    let team = state
+        .storage
+        .create_team("Fixture", "fixture", Some(plain.id))
+        .await
+        .expect("team");
+    state
+        .storage
+        .add_team_member(team.id, plain.id, orchestrator::storage::TeamRole::Admin)
+        .await
+        .expect("membership");
+    let project = state
+        .storage
+        .create_project(team.id, "Fixture", "fixture", false)
+        .await
+        .expect("project");
+
+    for (i, (method, path)) in ADMIN_ROUTES.iter().enumerate() {
+        // A fresh deployment per route: `delete` removes the one it is given,
+        // and every later route would then 404 and fail for the wrong reason.
+        let empty = serde_json::json!({});
+        let name = format!("fixture-deployment-{i}");
+        let d = state
+            .storage
+            .create_deployment(orchestrator::storage::deployments::NewDeployment {
+                project_id: project.id,
+                name: &name,
+                deployment_type: orchestrator::storage::DeploymentType::Prod,
+                deployment_class: orchestrator::storage::DeploymentClass::Standard,
+                region: None,
+                url: &format!("http://{name}.localhost"),
+                site_url: &format!("http://{name}-site.localhost"),
+                backend_pid: None,
+                backend_port: 3210 + i as i64,
+                creator_id: Some(plain.id),
+                preview_identifier: None,
+                instance_secret: "",
+                tier: "S16",
+                knob_overrides: &empty,
+                storage_mode: "volume-sqlite",
+                pg_password: None,
+                minio_root_user: None,
+                minio_root_password: None,
+                backend_instance_secret: None,
+            })
+            .await
+            .expect("fixture deployment");
+
+        // A throwaway member per route, for the same reason as the
+        // deployment: `/members/{id}/delete` removes the one it is given.
+        // Never the authenticated operator — deleting them mid-loop would
+        // fail every later route with a 401.
+        let victim = state
+            .storage
+            .upsert_member(
+                &format!("auth-fixture-{i}"),
+                &format!("fixture{i}@example.com"),
+                Some("Fixture"),
+            )
+            .await
+            .expect("fixture member");
+
+        // A throwaway team per route as well: /teams/{id}/delete removes
+        // the one it is given, and it cascades to that team's projects.
+        let victim_team = state
+            .storage
+            .create_team(&format!("Victim {i}"), &format!("victim-team-{i}"), None)
+            .await
+            .expect("fixture team");
+
+        let (concrete, body) = concrete_admin_route(path, d.id, victim.id, victim_team.id, i);
+        let mut req = Request::builder()
+            .method(*method)
+            .uri(&concrete)
+            .header(AUTHORIZATION, &plain_bearer);
+        let body = match body {
+            Some(v) => {
+                req = req.header("content-type", "application/json");
+                Body::from(serde_json::to_vec(&v).unwrap())
+            },
+            None => Body::empty(),
+        };
+        let resp = app
+            .clone()
+            .oneshot(req.body(body).unwrap())
+            .await
+            .unwrap_or_else(|_| panic!("send {method} {path} as super-admin"));
+        assert_eq!(
+            resp.status(),
+            StatusCode::OK,
+            "{method} {path} must be 200 for a super-admin"
+        );
+    }
+}
+
+/// The route table and the router must not drift apart. `ADMIN_ROUTES` is
+/// what the authorization test iterates, so a route present in one and not
+/// the other is a hole rather than a cosmetic mismatch.
+#[test]
+fn admin_route_table_matches_the_openapi_surface() {
+    use orchestrator::{
+        router::OrchestratorOpenApi,
+        routes::admin::ADMIN_ROUTES,
+    };
+    use utoipa::OpenApi;
+
+    let spec =
+        serde_json::to_value(OrchestratorOpenApi::openapi()).expect("serialize openapi spec");
+    let paths = spec
+        .get("paths")
+        .and_then(|p| p.as_object())
+        .expect("openapi spec has a `paths` object");
+
+    // Every documented /api/admin operation is in the table.
+    let mut undocumented_in_table = Vec::new();
+    for (path, item) in paths {
+        if !path.starts_with("/api/admin/") {
+            continue;
+        }
+        let item = item.as_object().expect("path item must be an object");
+        for method in item.keys() {
+            if !matches!(
+                method.as_str(),
+                "get" | "post" | "put" | "patch" | "delete" | "head" | "options" | "trace"
+            ) {
+                continue;
+            }
+            let wanted = (method.to_uppercase(), path.to_string());
+            if !ADMIN_ROUTES
+                .iter()
+                .any(|(m, p)| *m == wanted.0 && *p == wanted.1)
+            {
+                undocumented_in_table.push(format!("{} {}", wanted.0, wanted.1));
+            }
+        }
+    }
+    assert!(
+        undocumented_in_table.is_empty(),
+        "these /api/admin operations are routed but missing from ADMIN_ROUTES, so the \
+         authorization test does not cover them:\n  {}",
+        undocumented_in_table.join("\n  ")
+    );
+
+    // And every table entry is actually documented.
+    let mut missing_from_spec = Vec::new();
+    for (method, path) in ADMIN_ROUTES {
+        let found = paths
+            .get(*path)
+            .and_then(|item| item.get(method.to_lowercase()))
+            .is_some();
+        if !found {
+            missing_from_spec.push(format!("{method} {path}"));
+        }
+    }
+    assert!(
+        missing_from_spec.is_empty(),
+        "these ADMIN_ROUTES entries are not in the OpenAPI spec:\n  {}",
+        missing_from_spec.join("\n  ")
+    );
+}
+
+/// The fleet response's wire shape must match what `adminApi.ts`'s zod
+/// schema parses.
+///
+/// `FleetEntry` puts `#[serde(flatten)]` on its `AdminDeploymentRow`, so the
+/// deployment's fields have to land as flat camelCase siblings of
+/// `actualState` and `drifted`. If serde nested them under a `deployment`
+/// key instead, every fleet request would fail zod parsing in the browser
+/// and no status-code assertion would notice.
+#[tokio::test]
+#[ignore = "needs TEST_ORCHESTRATOR_DATABASE_URL"]
+async fn fleet_response_wire_shape_is_flat_camel_case() {
+    use std::sync::Arc;
+
+    use axum::{
+        body::Body,
+        http::{
+            header::AUTHORIZATION,
+            Request,
+            StatusCode,
+        },
+    };
+    use http_body_util::BodyExt;
+    use orchestrator::{
+        router::build_router,
+        state::OrchestratorState,
+        storage::{
+            access_tokens::NewAccessToken,
+            AccessTokenKind,
+        },
+    };
+    use tower::ServiceExt;
+
+    let database_url = std::env::var("TEST_ORCHESTRATOR_DATABASE_URL")
+        .expect("TEST_ORCHESTRATOR_DATABASE_URL not set (this test is `#[ignore]` by default)");
+    reset_public_schema(&database_url).await;
+
+    let data_root = tempfile::tempdir().expect("tempdir for data root");
+    let config = test_config(database_url, data_root.path().to_path_buf());
+    let mut state = OrchestratorState::new(config).await.expect("state");
+    state.provisioner = Arc::new(StubProvisioner);
+    let app = build_router(state.clone());
+
+    let op = state
+        .storage
+        .upsert_member("auth-op", "op@example.com", Some("Op"))
+        .await
+        .expect("member");
+    state
+        .storage
+        .set_super_admin(op.id, true)
+        .await
+        .expect("grant");
+    let secret = "fleet-secret";
+    state
+        .storage
+        .create_access_token(NewAccessToken {
+            public_id: "fleet-public",
+            kind: AccessTokenKind::Pat,
+            member_id: Some(op.id),
+            team_id: None,
+            project_id: None,
+            deployment_id: None,
+            name: "fleet-pat",
+            secret_hash: &orchestrator::auth::tokens::sha256_hex(secret),
+            secret_suffix: "cret",
+            expiry: None,
+        })
+        .await
+        .expect("pat");
+
+    // A team, project, and deployment so the fleet has a row to serialize.
+    let team = state
+        .storage
+        .create_team("Ops", "ops", Some(op.id))
+        .await
+        .expect("team");
+    let project = state
+        .storage
+        .create_project(team.id, "Demo", "demo", false)
+        .await
+        .expect("project");
+    let empty_knobs = serde_json::json!({});
+    state
+        .storage
+        .create_deployment(orchestrator::storage::deployments::NewDeployment {
+            project_id: project.id,
+            name: "happy-otter-123",
+            deployment_type: orchestrator::storage::DeploymentType::Prod,
+            deployment_class: orchestrator::storage::DeploymentClass::Standard,
+            region: None,
+            url: "http://happy-otter-123.localhost",
+            site_url: "http://happy-otter-123-site.localhost",
+            backend_pid: None,
+            backend_port: 3210,
+            creator_id: Some(op.id),
+            preview_identifier: None,
+            instance_secret: "",
+            tier: "S16",
+            knob_overrides: &empty_knobs,
+            storage_mode: "volume-sqlite",
+            pg_password: None,
+            minio_root_user: None,
+            minio_root_password: None,
+            backend_instance_secret: None,
+        })
+        .await
+        .expect("deployment");
+
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/api/admin/fleet")
+                .header(AUTHORIZATION, format!("Bearer pat:fleet-public|{secret}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("send GET /api/admin/fleet");
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let body = resp.into_body().collect().await.unwrap().to_bytes();
+    let v: serde_json::Value = serde_json::from_slice(&body).expect("fleet response is JSON");
+
+    assert!(
+        v.get("containerStatesAvailable").is_some(),
+        "top level must be camelCase, got {v}"
+    );
+    let entry = v
+        .get("deployments")
+        .and_then(|d| d.get(0))
+        .unwrap_or_else(|| panic!("expected one fleet entry, got {v}"));
+
+    assert!(
+        entry.get("deployment").is_none(),
+        "the deployment must be flattened, not nested under `deployment`: {entry}"
+    );
+
+    // Exactly the keys `fleetEntrySchema` in adminApi.ts declares.
+    for key in [
+        "id",
+        "name",
+        "deploymentType",
+        "intendedState",
+        "tier",
+        "url",
+        "creationTime",
+        "teamId",
+        "teamSlug",
+        "projectId",
+        "projectSlug",
+        "actualState",
+        "drifted",
+    ] {
+        assert!(
+            entry.get(key).is_some(),
+            "fleet entry is missing `{key}`, which adminApi.ts requires: {entry}"
+        );
+    }
+
+    assert_eq!(entry["name"], "happy-otter-123");
+    assert_eq!(entry["teamSlug"], "ops");
+    assert_eq!(entry["projectSlug"], "demo");
+    // External provisioner owns no containers, so state is unknown and
+    // nothing is reported as drifted.
+    assert_eq!(entry["actualState"], "unknown");
+    assert_eq!(entry["drifted"], false);
+    assert_eq!(v["containerStatesAvailable"], false);
+    assert_eq!(v["driftCount"], 0);
+}
+
+/// Pausing and resuming must be idempotent, and must refuse a deployment
+/// that is still provisioning.
+///
+/// `reconcile::plan` treats `paused` as "not running by intent" and leaves
+/// it alone, so pausing a half-built deployment would strand it there
+/// permanently.
+#[tokio::test]
+#[ignore = "needs TEST_ORCHESTRATOR_DATABASE_URL"]
+async fn deployment_state_transitions_are_guarded() {
+    use orchestrator::storage::DeploymentState;
+
+    let database_url = std::env::var("TEST_ORCHESTRATOR_DATABASE_URL")
+        .expect("TEST_ORCHESTRATOR_DATABASE_URL not set (this test is `#[ignore]` by default)");
+    reset_public_schema(&database_url).await;
+    let storage = orchestrator::storage::Storage::connect(&database_url)
+        .await
+        .expect("connect storage");
+
+    let member = storage
+        .upsert_member("auth-op", "op@example.com", Some("Op"))
+        .await
+        .expect("member");
+    let team = storage
+        .create_team("Ops", "ops", Some(member.id))
+        .await
+        .expect("team");
+    let project = storage
+        .create_project(team.id, "Demo", "demo", false)
+        .await
+        .expect("project");
+    let empty = serde_json::json!({});
+    let d = storage
+        .create_deployment(orchestrator::storage::deployments::NewDeployment {
+            project_id: project.id,
+            name: "state-test",
+            deployment_type: orchestrator::storage::DeploymentType::Prod,
+            deployment_class: orchestrator::storage::DeploymentClass::Standard,
+            region: None,
+            url: "http://state-test.localhost",
+            site_url: "http://state-test-site.localhost",
+            backend_pid: None,
+            backend_port: 3210,
+            creator_id: Some(member.id),
+            preview_identifier: None,
+            instance_secret: "",
+            tier: "S16",
+            knob_overrides: &empty,
+            storage_mode: "volume-sqlite",
+            pg_password: None,
+            minio_root_user: None,
+            minio_root_password: None,
+            backend_instance_secret: None,
+        })
+        .await
+        .expect("deployment");
+
+    // running -> paused, and pausing again is a no-op rather than an error:
+    // an operator double-clicking Pause should not be shown a failure.
+    storage.pause_deployment(d.id).await.expect("pause");
+    storage
+        .pause_deployment(d.id)
+        .await
+        .expect("pause is idempotent");
+    let reloaded = storage
+        .get_deployment(d.id)
+        .await
+        .expect("get")
+        .expect("exists");
+    assert!(matches!(reloaded.state, DeploymentState::Paused));
+
+    storage.resume_deployment(d.id).await.expect("resume");
+    storage
+        .resume_deployment(d.id)
+        .await
+        .expect("resume is idempotent");
+    let reloaded = storage
+        .get_deployment(d.id)
+        .await
+        .expect("get")
+        .expect("exists");
+    assert!(matches!(reloaded.state, DeploymentState::Running));
+
+    // A deployment mid-provision must not be pausable.
+    storage
+        .update_deployment_state(d.id, DeploymentState::Provisioning)
+        .await
+        .expect("set provisioning");
+    let err = storage
+        .pause_deployment(d.id)
+        .await
+        .expect_err("pausing a provisioning deployment must fail");
+    assert!(
+        err.to_string().contains("provisioning"),
+        "the error must say why, got: {err}"
+    );
+
+    // A missing deployment is a clear error, not a silent no-op.
+    let err = storage
+        .pause_deployment(999_999)
+        .await
+        .expect_err("pausing a nonexistent deployment must fail");
+    assert!(
+        err.to_string().contains("not found"),
+        "unexpected error: {err}"
+    );
+}
+
+/// Which containers a pause has to touch, and in what order.
+///
+/// Pure so it is testable without a docker daemon — the shell-out around it
+/// is the only part this machine cannot exercise. Order matters: the backend
+/// stops before its sidecars so it never sees its database vanish
+/// mid-request, and starts after them so it never comes up without one.
+#[test]
+fn pause_and_resume_touch_containers_in_dependency_order() {
+    use orchestrator::provisioner::lifecycle::{
+        containers_for_pause,
+        containers_for_resume,
+    };
+
+    // volume-sqlite: the backend owns its own storage, so it is alone.
+    assert_eq!(
+        containers_for_pause("orch-", "happy-otter", "volume-sqlite"),
+        vec!["orch-happy-otter"]
+    );
+    assert_eq!(
+        containers_for_resume("orch-", "happy-otter", "volume-sqlite"),
+        vec!["orch-happy-otter"]
+    );
+
+    // sidecar: backend first on the way down, last on the way up.
+    let down = containers_for_pause("orch-", "happy-otter", "sidecar");
+    assert_eq!(down.first().map(String::as_str), Some("orch-happy-otter"));
+    assert_eq!(down.len(), 3, "backend + postgres + minio, got {down:?}");
+
+    let up = containers_for_resume("orch-", "happy-otter", "sidecar");
+    assert_eq!(up.last().map(String::as_str), Some("orch-happy-otter"));
+    assert_eq!(
+        up,
+        down.iter().rev().cloned().collect::<Vec<_>>(),
+        "resume must be the exact reverse of pause"
+    );
+}
+
+/// Revoking the last super-admin must be a 409 the console can explain, not
+/// a 500.
+///
+/// The storage guard already refuses; this asserts the route maps that
+/// refusal to something a human can act on. A 500 tells the operator
+/// nothing and reads as a bug in the console.
+#[tokio::test]
+#[ignore = "needs TEST_ORCHESTRATOR_DATABASE_URL"]
+async fn revoking_the_last_super_admin_is_a_client_error() {
+    use std::sync::Arc;
+
+    use axum::{
+        body::Body,
+        http::{
+            header::AUTHORIZATION,
+            Request,
+            StatusCode,
+        },
+    };
+    use http_body_util::BodyExt;
+    use orchestrator::{
+        router::build_router,
+        state::OrchestratorState,
+        storage::{
+            access_tokens::NewAccessToken,
+            AccessTokenKind,
+        },
+    };
+    use tower::ServiceExt;
+
+    let database_url = std::env::var("TEST_ORCHESTRATOR_DATABASE_URL")
+        .expect("TEST_ORCHESTRATOR_DATABASE_URL not set (this test is `#[ignore]` by default)");
+    reset_public_schema(&database_url).await;
+
+    let data_root = tempfile::tempdir().expect("tempdir");
+    let config = test_config(database_url, data_root.path().to_path_buf());
+    let mut state = OrchestratorState::new(config).await.expect("state");
+    state.provisioner = Arc::new(StubProvisioner);
+    let app = build_router(state.clone());
+
+    let op = state
+        .storage
+        .upsert_member("auth-op", "op@example.com", Some("Op"))
+        .await
+        .expect("member");
+    state
+        .storage
+        .set_super_admin(op.id, true)
+        .await
+        .expect("grant");
+
+    let secret = "op-secret";
+    state
+        .storage
+        .create_access_token(NewAccessToken {
+            public_id: "op-public",
+            kind: AccessTokenKind::Pat,
+            member_id: Some(op.id),
+            team_id: None,
+            project_id: None,
+            deployment_id: None,
+            name: "op-pat",
+            secret_hash: &orchestrator::auth::tokens::sha256_hex(secret),
+            secret_suffix: "cret",
+            expiry: None,
+        })
+        .await
+        .expect("pat");
+    let bearer = format!("Bearer pat:op-public|{secret}");
+
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/admin/members/{}/super_admin", op.id))
+                .header(AUTHORIZATION, &bearer)
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"grant":false}"#))
+                .unwrap(),
+        )
+        .await
+        .expect("send revoke");
+    assert_eq!(
+        resp.status(),
+        StatusCode::CONFLICT,
+        "revoking the last super-admin must be 409, not 500"
+    );
+    let body = resp.into_body().collect().await.unwrap().to_bytes();
+    let v: serde_json::Value = serde_json::from_slice(&body).expect("json body");
+    assert!(
+        v["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("last super-admin"),
+        "the error must say why, got {v}"
+    );
+
+    // The bit must survive the refused revoke.
+    let reloaded = state
+        .storage
+        .get_member(op.id)
+        .await
+        .expect("get")
+        .expect("exists");
+    assert!(reloaded.is_super_admin);
+
+    // With a second operator, the revoke succeeds.
+    let other = state
+        .storage
+        .upsert_member("auth-two", "two@example.com", Some("Two"))
+        .await
+        .expect("member two");
+    state
+        .storage
+        .set_super_admin(other.id, true)
+        .await
+        .expect("grant two");
+
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/admin/members/{}/super_admin", other.id))
+                .header(AUTHORIZATION, &bearer)
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"grant":false}"#))
+                .unwrap(),
+        )
+        .await
+        .expect("send second revoke");
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // And it is recorded, because changing who can operate the instance is
+    // exactly the kind of thing an audit log exists for.
+    let events = state
+        .storage
+        .list_instance_audit(10)
+        .await
+        .expect("instance audit");
+    assert!(
+        events.iter().any(|e| e.action == "superAdminRevoked"),
+        "the revoke must be audited, got {:?}",
+        events.iter().map(|e| &e.action).collect::<Vec<_>>()
+    );
+}
+
+/// Break-glass must mint a fresh short-lived key and write the reason to
+/// BOTH audit logs — the instance's and the tenant's own.
+///
+/// The tenant-visible copy is the point of the whole design: an operator
+/// opening somebody's deployment should be visible to that somebody. An
+/// audit trail only the operator can read is not accountability.
+#[tokio::test]
+#[ignore = "needs TEST_ORCHESTRATOR_DATABASE_URL"]
+async fn break_glass_mints_a_fresh_key_and_writes_both_audit_logs() {
+    use std::sync::Arc;
+
+    use axum::{
+        body::Body,
+        http::{
+            header::AUTHORIZATION,
+            Request,
+            StatusCode,
+        },
+    };
+    use http_body_util::BodyExt;
+    use orchestrator::{
+        router::build_router,
+        state::OrchestratorState,
+        storage::{
+            access_tokens::NewAccessToken,
+            AccessTokenKind,
+            AuditQuery,
+        },
+    };
+    use tower::ServiceExt;
+
+    let database_url = std::env::var("TEST_ORCHESTRATOR_DATABASE_URL")
+        .expect("TEST_ORCHESTRATOR_DATABASE_URL not set (this test is `#[ignore]` by default)");
+    reset_public_schema(&database_url).await;
+
+    let data_root = tempfile::tempdir().expect("tempdir");
+    let config = test_config(database_url, data_root.path().to_path_buf());
+    let mut state = OrchestratorState::new(config).await.expect("state");
+    state.provisioner = Arc::new(StubProvisioner);
+    let app = build_router(state.clone());
+
+    // The operator.
+    let op = state
+        .storage
+        .upsert_member("auth-op", "op@example.com", Some("Op"))
+        .await
+        .expect("member");
+    state
+        .storage
+        .set_super_admin(op.id, true)
+        .await
+        .expect("grant");
+    let secret = "op-secret";
+    state
+        .storage
+        .create_access_token(NewAccessToken {
+            public_id: "op-public",
+            kind: AccessTokenKind::Pat,
+            member_id: Some(op.id),
+            team_id: None,
+            project_id: None,
+            deployment_id: None,
+            name: "op-pat",
+            secret_hash: &orchestrator::auth::tokens::sha256_hex(secret),
+            secret_suffix: "cret",
+            expiry: None,
+        })
+        .await
+        .expect("pat");
+    let bearer = format!("Bearer pat:op-public|{secret}");
+
+    // A tenant the operator has nothing to do with.
+    let tenant = state
+        .storage
+        .upsert_member("auth-tenant", "tenant@example.com", Some("Tenant"))
+        .await
+        .expect("tenant");
+    let team = state
+        .storage
+        .create_team("Tenant", "tenant", Some(tenant.id))
+        .await
+        .expect("team");
+    let project = state
+        .storage
+        .create_project(team.id, "App", "app", false)
+        .await
+        .expect("project");
+    let empty = serde_json::json!({});
+    let d = state
+        .storage
+        .create_deployment(orchestrator::storage::deployments::NewDeployment {
+            project_id: project.id,
+            name: "tenant-prod",
+            deployment_type: orchestrator::storage::DeploymentType::Prod,
+            deployment_class: orchestrator::storage::DeploymentClass::Standard,
+            region: None,
+            url: "http://tenant-prod.localhost",
+            site_url: "http://tenant-prod-site.localhost",
+            backend_pid: None,
+            backend_port: 3210,
+            creator_id: Some(tenant.id),
+            preview_identifier: None,
+            // A stored permanent admin key, which is what makes the
+            // "must not hand this back" assertion below meaningful.
+            instance_secret: "tenant-prod|permanent-admin-key",
+            tier: "S16",
+            knob_overrides: &empty,
+            storage_mode: "volume-sqlite",
+            pg_password: None,
+            minio_root_user: None,
+            minio_root_password: None,
+            backend_instance_secret: None,
+        })
+        .await
+        .expect("deployment");
+
+    // A blank reason is refused.
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/admin/deployments/{}/access", d.id))
+                .header(AUTHORIZATION, &bearer)
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"reason":"   "}"#))
+                .unwrap(),
+        )
+        .await
+        .expect("send blank reason");
+    assert_eq!(
+        resp.status(),
+        StatusCode::BAD_REQUEST,
+        "a whitespace-only reason must be refused"
+    );
+
+    // A real one succeeds.
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/admin/deployments/{}/access", d.id))
+                .header(AUTHORIZATION, &bearer)
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"reason":"investigating ticket 4711"}"#))
+                .unwrap(),
+        )
+        .await
+        .expect("send access");
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = resp.into_body().collect().await.unwrap().to_bytes();
+    let v: serde_json::Value = serde_json::from_slice(&body).expect("json");
+
+    let key = v["adminKey"].as_str().expect("adminKey");
+    assert_ne!(
+        key, "tenant-prod|permanent-admin-key",
+        "break-glass must not hand back the deployment's permanent admin key"
+    );
+    assert!(v["tenantNotified"].as_bool().unwrap_or(false));
+
+    // The TTL is real and short.
+    let expires_at = v["expiresAt"].as_i64().expect("expiresAt");
+    let ttl_ms = expires_at - orchestrator::time::now_unix_ms();
+    assert!(
+        ttl_ms > 0 && ttl_ms <= 15 * 60_000,
+        "break-glass TTL out of range: {ttl_ms}ms"
+    );
+
+    // Instance audit records it, with the reason verbatim.
+    let instance = state
+        .storage
+        .list_instance_audit(10)
+        .await
+        .expect("instance audit");
+    let granted = instance
+        .iter()
+        .find(|e| e.action == "deploymentAccessGranted")
+        .expect("instance audit records the access");
+    assert_eq!(granted.metadata["reason"], "investigating ticket 4711");
+    assert_eq!(granted.member_id, Some(op.id));
+
+    // ...and so does the tenant's own team audit log.
+    let team_events = state
+        .storage
+        .query_audit(&AuditQuery {
+            team_id: team.id,
+            ..Default::default()
+        })
+        .await
+        .expect("team audit");
+    let tenant_visible = team_events
+        .iter()
+        .find(|e| e.action == "deploymentAccessGranted")
+        .expect("the tenant must be able to see that an operator opened their deployment");
+    assert_eq!(
+        tenant_visible.metadata["reason"], "investigating ticket 4711",
+        "the tenant sees the reason too, not just that something happened"
+    );
 }
