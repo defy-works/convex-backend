@@ -96,6 +96,17 @@ export const instanceAuditEventSchema = z.object({
 });
 export type InstanceAuditEvent = z.infer<typeof instanceAuditEventSchema>;
 
+export const actionResponseSchema = z.object({
+  deployment: z.string(),
+  state: z.string(),
+  /**
+   * Set when the row changed but the container work did not fully succeed.
+   * The action still took effect — surface this, never swallow it.
+   */
+  containerWarning: z.string().nullable(),
+});
+export type ActionResponse = z.infer<typeof actionResponseSchema>;
+
 async function adminGet<T>(
   baseUrl: string,
   path: string,
@@ -105,6 +116,62 @@ async function adminGet<T>(
   const data = await request<unknown>(baseUrl, path, { token });
   return schema.parse(data);
 }
+
+async function adminPost<T>(
+  baseUrl: string,
+  path: string,
+  token: string,
+  schema: z.ZodType<T>,
+  body?: unknown,
+): Promise<T> {
+  const data = await request<unknown>(baseUrl, path, {
+    token,
+    method: "POST",
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+  });
+  return schema.parse(data);
+}
+
+/** Deployment lifecycle actions. All audited server-side. */
+export const deploymentActions = {
+  pause: (baseUrl: string, token: string, id: number) =>
+    adminPost(
+      baseUrl,
+      `/api/admin/deployments/${id}/pause`,
+      token,
+      actionResponseSchema,
+    ),
+  resume: (baseUrl: string, token: string, id: number) =>
+    adminPost(
+      baseUrl,
+      `/api/admin/deployments/${id}/resume`,
+      token,
+      actionResponseSchema,
+    ),
+  restart: (baseUrl: string, token: string, id: number, force = false) =>
+    adminPost(
+      baseUrl,
+      `/api/admin/deployments/${id}/restart`,
+      token,
+      actionResponseSchema,
+      { force },
+    ),
+  setTier: (baseUrl: string, token: string, id: number, tier: string) =>
+    adminPost(
+      baseUrl,
+      `/api/admin/deployments/${id}/tier`,
+      token,
+      actionResponseSchema,
+      { tier },
+    ),
+  remove: (baseUrl: string, token: string, id: number) =>
+    adminPost(
+      baseUrl,
+      `/api/admin/deployments/${id}/delete`,
+      token,
+      actionResponseSchema,
+    ),
+};
 
 export function getAdminOverview(baseUrl: string, token: string) {
   return adminGet(baseUrl, "/api/admin/overview", token, overviewSchema);
