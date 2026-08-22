@@ -350,6 +350,25 @@ Certificates renew automatically at 60 days, well inside the 90-day Let's
 Encrypt lifetime. Set `ACME_DIRECTORY_URL` to the Let's Encrypt **staging**
 directory while testing so you don't burn production rate limit.
 
+## Authorization model
+
+Every route that names a team, project, or deployment in its path checks that
+the caller belongs to the owning team. Destructive and governance actions —
+deleting a team, removing a member, changing a role, granting project admin —
+additionally require the team `admin` role.
+
+Deploy keys are bound to the deployment they were minted for and are refused
+against any other, so a key committed to CI has the blast radius of its own
+deployment and nothing more. The one exception is
+`/api/deployment/authorize_within_current_project`, which exists to select among
+sibling deployments (dev, preview, prod) and is therefore scoped to the project
+rather than the single deployment.
+
+A cross-tenant test suite (`crates/orchestrator/tests/cross_tenant.rs`) drives
+one tenant's token against a second tenant's resources across the whole route
+table, and a source-level sweep fails the build if a new path-scoped handler is
+added without an authorization guard.
+
 ## Running the orchestrator
 
 The orchestrator stores its state in PostgreSQL. We recommend

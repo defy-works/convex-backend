@@ -65,7 +65,11 @@ impl Storage {
             params.push(Box::new(to));
             sql.push_str(&format!(" AND creation_time <= ${}", params.len()));
         }
-        sql.push_str(" ORDER BY creation_time DESC LIMIT ");
+        // Tie-break on `id`: creation_time is millisecond precision, so two
+        // events written in the same millisecond would otherwise come back
+        // in arbitrary order. `id` is a BIGSERIAL, so it is monotonic and
+        // makes the sort stable.
+        sql.push_str(" ORDER BY creation_time DESC, id DESC LIMIT ");
         sql.push_str(&limit.to_string());
 
         let conn = self.pool().acquire().await?;

@@ -20,6 +20,7 @@ use crate::{
         ApiError,
         ApiResult,
     },
+    routes::helpers::require_team_member,
     state::OrchestratorState,
     storage::AuditQuery,
 };
@@ -50,11 +51,12 @@ pub(crate) struct AuditFilters {
     tag = "dashboard",
 )]
 pub(crate) async fn get_audit_log_events(
-    _auth: AuthIdentity,
+    auth: AuthIdentity,
     State(state): State<OrchestratorState>,
     Path(team_id): Path<i64>,
     Query(filters): Query<AuditFilters>,
 ) -> ApiResult<Json<AuditLogPage>> {
+    require_team_member(&state, &auth, team_id).await?;
     let q = AuditQuery {
         team_id,
         member_id: filters.member_id,
@@ -63,7 +65,11 @@ pub(crate) async fn get_audit_log_events(
         to: filters.to,
         limit: filters.limit,
     };
-    let entries = state.storage.query_audit(&q).await.map_err(ApiError::Internal)?;
+    let entries = state
+        .storage
+        .query_audit(&q)
+        .await
+        .map_err(ApiError::Internal)?;
     Ok(Json(AuditLogPage {
         events: entries
             .into_iter()
