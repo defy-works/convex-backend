@@ -115,6 +115,22 @@ pub(crate) async fn exchange_session(
         .await
         .map_err(ApiError::Internal)?;
 
+    // Stop here for a blocked account, before anything else happens.
+    //
+    // `resolve()` already refuses the tokens this would mint, so nothing
+    // below grants access — but without this a suspended member still mints
+    // a token row on every attempt, still learns their team and role, and,
+    // if their address is in ADMIN_EMAILS, still triggers the super-admin
+    // grant below. Suspension should mean "cannot transact", not "tokens do
+    // not work".
+    if member.suspended || member.deleted {
+        tracing::debug!(
+            member_id = member.id,
+            "internal: refusing session exchange for a suspended or deleted member"
+        );
+        return Err(ApiError::Forbidden);
+    }
+
     // ADMIN_EMAILS seeds the super-admin column on sign-in; from then on the
     // column is the authority, so an operator can be revoked in the console
     // without a redeploy. Seeding is deliberately one-way: dropping an
