@@ -416,6 +416,27 @@ one tenant's token against a second tenant's resources across the whole route
 table, and a source-level sweep fails the build if a new path-scoped handler is
 added without an authorization guard.
 
+### Deployment lifecycle
+
+The Deployments view carries per-row actions:
+
+| Action      | Effect                                                                                                                                                                    |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Pause**   | Stops the container without removing it, and marks the row `paused`. Configuration, volumes, and data are preserved; reconcile leaves paused deployments alone by intent. |
+| **Resume**  | Starts the container again and marks the row `running`.                                                                                                                   |
+| **Restart** | Recreates the container, applying any pending tier or canonical-URL change. Same path the CLI and management API use.                                                     |
+| **Tier**    | Records a new _desired_ tier. It takes effect on the next restart, not immediately.                                                                                       |
+| **Delete**  | Tears the container down and removes the deployment. Not recoverable from here.                                                                                           |
+
+The database row is the source of truth and container work is best-effort: if a
+container operation fails after the row changed, the action still took effect
+and the reconciler converges, so the response carries a warning rather than
+reporting failure. **Delete is the exception** — if teardown fails the
+deployment is kept, because removing the row while a container survives orphans
+it where nothing will list it again.
+
+Every action is recorded in the instance audit log.
+
 ### Health endpoints
 
 | Path                | Auth     | Meaning                                                                       |
