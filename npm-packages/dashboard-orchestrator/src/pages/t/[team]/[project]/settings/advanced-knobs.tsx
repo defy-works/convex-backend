@@ -227,8 +227,7 @@ export default function AdvancedKnobsPage() {
         {capacity && (
           <div className="text-xs text-content-secondary">
             Host: {(capacity.allocatedMemoryMb / 1024).toFixed(1)} /{" "}
-            {(capacity.totalMemoryMb / 1024).toFixed(1)} GB allocated ·{" "}
-            {capacity.deploymentCount} deployments
+            {(capacity.totalMemoryMb / 1024).toFixed(1)} GB allocated
           </div>
         )}
       </div>

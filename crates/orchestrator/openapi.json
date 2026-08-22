@@ -5225,8 +5225,7 @@
           "totalMemoryMb",
           "totalCpus",
           "allocatedMemoryMb",
-          "allocatedCpus",
-          "deploymentCount"
+          "allocatedCpus"
         ],
         "properties": {
           "totalMemoryMb": {
@@ -5247,11 +5246,6 @@
           "allocatedCpus": {
             "type": "number",
             "format": "float"
-          },
-          "deploymentCount": {
-            "type": "integer",
-            "format": "int32",
-            "minimum": 0
           }
         }
       },
