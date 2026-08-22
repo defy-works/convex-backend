@@ -2042,73 +2042,6 @@
         }
       }
     },
-    "/api/dashboard/teams/{team_id}/get_project_roles": {
-      "get": {
-        "tags": ["dashboard"],
-        "operationId": "get_project_roles",
-        "parameters": [
-          {
-            "name": "team_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "integer",
-              "format": "int64"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/ProjectRoleEntry"
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/dashboard/teams/{team_id}/update_project_roles": {
-      "post": {
-        "tags": ["dashboard"],
-        "operationId": "update_project_roles",
-        "parameters": [
-          {
-            "name": "team_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "integer",
-              "format": "int64"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/UpdateProjectRolesArgs"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": ""
-          },
-          "404": {
-            "description": ""
-          }
-        }
-      }
-    },
     "/api/dashboard/teams/{team_id}/apply_referral_code": {
       "post": {
         "tags": ["dashboard_stubs"],
@@ -4235,7 +4168,7 @@
           "deployment",
           "url",
           "adminKey",
-          "expiresAt",
+          "persistent",
           "tenantNotified"
         ],
         "properties": {
@@ -4247,12 +4180,11 @@
           },
           "adminKey": {
             "type": "string",
-            "description": "A freshly minted, short-lived admin key. Shown once."
+            "description": "The deployment's admin key. Shown once by the console, but it does\nnot expire — see the module docs."
           },
-          "expiresAt": {
-            "type": "integer",
-            "format": "int64",
-            "description": "Unix ms. The UI counts down to this so an operator with a dashboard\nopen is not surprised by everything failing at once."
+          "persistent": {
+            "type": "boolean",
+            "description": "True when the key does not expire, so the UI states that plainly\nrather than implying a time limit it cannot enforce."
           },
           "tenantNotified": {
             "type": "boolean",
@@ -5975,20 +5907,6 @@
           }
         }
       },
-      "ProjectRoleEntry": {
-        "type": "object",
-        "required": ["projectId", "memberId"],
-        "properties": {
-          "projectId": {
-            "type": "integer",
-            "format": "int64"
-          },
-          "memberId": {
-            "type": "integer",
-            "format": "int64"
-          }
-        }
-      },
       "ProjectSelectionArgs": {
         "oneOf": [
           {
@@ -6577,24 +6495,6 @@
           },
           "slug": {
             "type": ["string", "null"]
-          }
-        }
-      },
-      "UpdateProjectRolesArgs": {
-        "type": "object",
-        "required": ["projectId", "adminMemberIds"],
-        "properties": {
-          "projectId": {
-            "type": "integer",
-            "format": "int64"
-          },
-          "adminMemberIds": {
-            "type": "array",
-            "items": {
-              "type": "integer",
-              "format": "int64"
-            },
-            "description": "Replaces the full admin set for the project."
           }
         }
       },

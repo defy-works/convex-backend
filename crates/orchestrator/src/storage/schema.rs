@@ -186,19 +186,6 @@ CREATE TABLE IF NOT EXISTS custom_domain_certs (
     renew_after BIGINT NOT NULL
 );
 
--- Per-project admin grants. Layered on top of team_members: a member can
--- only be a project_admin if they're already on the team. A team admin
--- has implicit admin rights on every project regardless of this table —
--- check team_members.role = 'admin' before consulting this.
-CREATE TABLE IF NOT EXISTS project_admins (
-    project_id BIGINT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-    member_id BIGINT NOT NULL REFERENCES members(id) ON DELETE CASCADE,
-    granted_at BIGINT NOT NULL,
-    granted_by BIGINT REFERENCES members(id) ON DELETE SET NULL,
-    PRIMARY KEY (project_id, member_id)
-);
-CREATE INDEX IF NOT EXISTS project_admins_member_idx ON project_admins(member_id);
-
 CREATE TABLE IF NOT EXISTS invitations (
     id BIGSERIAL PRIMARY KEY,
     team_id BIGINT NOT NULL REFERENCES teams(id) ON DELETE CASCADE,

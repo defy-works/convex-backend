@@ -256,8 +256,6 @@ async fn not_found() -> impl IntoResponse {
         crate::routes::dashboard::teams::create_invite,
         crate::routes::dashboard::teams::cancel_invite,
         crate::routes::dashboard::teams::accept_invite,
-        crate::routes::dashboard::teams::get_project_roles,
-        crate::routes::dashboard::teams::update_project_roles,
         crate::routes::dashboard::teams::apply_referral_code,
         crate::routes::dashboard::teams::get_referral_state_stub,
         crate::routes::dashboard::teams::validate_referral_code_stub,

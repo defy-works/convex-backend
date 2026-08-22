@@ -5,10 +5,20 @@
 //! ceremonious:
 //!
 //! - a reason is required, and recorded verbatim;
-//! - the key is minted fresh and short-lived, never the deployment's permanent
-//!   one;
 //! - the event is written to the **tenant's own audit log** as well as the
 //!   instance's.
+//!
+//! It returns the deployment's **real** admin key, which does not expire.
+//! An earlier version minted a fresh short-lived token instead, which read
+//! better but did not work: the backend only accepts the key derived from
+//! its own `INSTANCE_SECRET`, so every "15-minute" grant handed back a
+//! credential the deployment rejected — while reporting success and telling
+//! the tenant their data had been opened. A key that works and is logged
+//! beats a key that expires and does not.
+//!
+//! The consequence is real and worth stating: this grant cannot be revoked
+//! without rotating the deployment's key. The audit trail, not an expiry, is
+//! what bounds it.
 //!
 //! That last point is the one most likely to be dropped as redundant. It is
 //! not: an audit trail only the operator can read is not accountability. A
@@ -28,35 +38,14 @@ use serde::{
 };
 
 use crate::{
-    auth::{
-        super_admin::SuperAdmin,
-        tokens::{
-            encode_pat,
-            mint_token_secret,
-            sha256_hex,
-            suffix_of,
-        },
-    },
+    auth::super_admin::SuperAdmin,
     errors::{
         ApiError,
         ApiResult,
     },
-    ids::random_id,
     routes::admin::audit_admin,
     state::OrchestratorState,
-    storage::{
-        access_tokens::NewAccessToken,
-        AccessTokenKind,
-        DeploymentType,
-    },
 };
-
-/// How long a break-glass key lives.
-///
-/// Short enough that a forgotten key is not a standing grant, long enough
-/// to actually diagnose something. Deliberately shorter than the one-hour
-/// TTL `ephemeral_admin_key` uses for the ordinary team-scoped path.
-const BREAK_GLASS_TTL_MS: i64 = 15 * 60_000;
 
 #[derive(Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "camelCase")]
@@ -70,11 +59,12 @@ pub struct AccessArgs {
 pub struct AccessResponse {
     pub deployment: String,
     pub url: String,
-    /// A freshly minted, short-lived admin key. Shown once.
+    /// The deployment's admin key. Shown once by the console, but it does
+    /// not expire — see the module docs.
     pub admin_key: String,
-    /// Unix ms. The UI counts down to this so an operator with a dashboard
-    /// open is not surprised by everything failing at once.
-    pub expires_at: i64,
+    /// True when the key does not expire, so the UI states that plainly
+    /// rather than implying a time limit it cannot enforce.
+    pub persistent: bool,
     /// Restates, in the response, that this was recorded where the tenant
     /// can see it — so it is visible even to an API caller who never saw
     /// the modal.
@@ -119,43 +109,23 @@ pub(crate) async fn grant_access(
         .map_err(ApiError::Internal)?
         .ok_or_else(|| ApiError::NotFound("project".into()))?;
 
-    let expires_at = crate::time::now_unix_ms() + BREAK_GLASS_TTL_MS;
-
-    // Always mint. `ephemeral_admin_key` returns the deployment's stored
-    // permanent key when it has one, which would make the TTL above a
-    // fiction on every deployment that has ever been provisioned.
-    let secret = mint_token_secret(&deployment.name);
-    let admin_key = encode_pat(&secret);
-    let kind = match deployment.deployment_type {
-        DeploymentType::Prod => AccessTokenKind::DeployProd,
-        DeploymentType::Dev => AccessTokenKind::DeployDev,
-        DeploymentType::Preview => AccessTokenKind::DeployPreview,
-    };
-    state
-        .storage
-        .create_access_token(NewAccessToken {
-            public_id: &random_id(),
-            kind,
-            // No member: this credential is the access itself, not the
-            // operator's identity. The audit rows carry who took it.
-            member_id: None,
-            team_id: None,
-            project_id: Some(deployment.project_id),
-            deployment_id: Some(deployment.id),
-            name: "break-glass",
-            secret_hash: &sha256_hex(&secret.secret),
-            secret_suffix: &suffix_of(&secret.secret),
-            expiry: Some(expires_at),
-        })
+    // The key the running backend actually accepts. `ephemeral_admin_key`
+    // returns the deployment's stored admin key when it has one, and only
+    // mints for the demo path where no backend is running yet.
+    let admin_key = crate::routes::deployment_internal::ephemeral_admin_key(&state, &deployment)
         .await
-        .map_err(ApiError::Internal)?;
+        .ok_or_else(|| {
+            ApiError::BadGateway(format!(
+                "no admin key is available for {}; it may never have been provisioned",
+                deployment.name
+            ))
+        })?;
 
     let metadata = serde_json::json!({
         "deployment": deployment.name,
         "deploymentId": deployment.id,
         "reason": reason,
-        "expiresAt": expires_at,
-        "ttlMinutes": BREAK_GLASS_TTL_MS / 60_000,
+        "persistent": true,
     });
 
     audit_admin(
@@ -199,7 +169,7 @@ pub(crate) async fn grant_access(
         deployment: deployment.name,
         url: deployment.url,
         admin_key,
-        expires_at,
+        persistent: true,
         tenant_notified: true,
     }))
 }

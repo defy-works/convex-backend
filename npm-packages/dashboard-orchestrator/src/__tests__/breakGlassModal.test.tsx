@@ -61,15 +61,16 @@ describe("BreakGlassModal", () => {
     expect(
       screen.getByText(/see this in their own audit log/i),
     ).toBeInTheDocument();
+    expect(screen.getByText(/does not\s+expire/i)).toBeInTheDocument();
     expect(screen.getByText(/acme/)).toBeInTheDocument();
   });
 
-  it("shows the key once, with a countdown, after access is granted", () => {
+  it("shows the key once, and says plainly that it does not expire", () => {
     const grant: BreakGlassGrant = {
       deployment: "tenant-prod",
       url: "http://tenant-prod.localhost",
       adminKey: "prod:tenant-prod|secret-value",
-      expiresAt: Date.now() + 15 * 60_000,
+      persistent: true,
       tenantNotified: true,
     };
     render(
@@ -84,9 +85,10 @@ describe("BreakGlassModal", () => {
     expect(
       screen.getByText("prod:tenant-prod|secret-value"),
     ).toBeInTheDocument();
-    // A countdown, so an operator with a dashboard open is not surprised
-    // when the key lapses mid-session.
-    expect(screen.getByText(/^1[0-5]:\d{2}$/)).toBeInTheDocument();
+    // No countdown, because there is no expiry. Saying so is the
+    // point: the old version implied a time limit the orchestrator
+    // could not enforce, which is worse than admitting there is none.
+    expect(screen.getByText(/does not expire/i)).toBeInTheDocument();
     // The reason field is gone — this state is display-only.
     expect(
       screen.queryByLabelText(/reason for access/i),

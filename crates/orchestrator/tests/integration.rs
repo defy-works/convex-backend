@@ -2368,15 +2368,22 @@ async fn revoking_the_last_super_admin_is_a_client_error() {
     );
 }
 
-/// Break-glass must mint a fresh short-lived key and write the reason to
-/// BOTH audit logs — the instance's and the tenant's own.
+/// Break-glass must return the key the backend actually accepts, and write
+/// the reason to BOTH audit logs — the instance's and the tenant's own.
 ///
-/// The tenant-visible copy is the point of the whole design: an operator
+/// The key assertion is inverted from what it used to be. The original
+/// version asserted the returned key DIFFERED from the deployment's stored
+/// one, to prove the 15-minute TTL was real. That was right as a security
+/// property and wrong as a functional one: the backend only accepts the key
+/// derived from its own INSTANCE_SECRET, so a freshly minted token was
+/// always rejected — and the test locked that in.
+///
+/// The tenant-visible audit copy is the rest of the design: an operator
 /// opening somebody's deployment should be visible to that somebody. An
 /// audit trail only the operator can read is not accountability.
 #[tokio::test]
 #[ignore = "needs TEST_ORCHESTRATOR_DATABASE_URL"]
-async fn break_glass_mints_a_fresh_key_and_writes_both_audit_logs() {
+async fn break_glass_returns_a_working_key_and_writes_both_audit_logs() {
     use std::sync::Arc;
 
     use axum::{
@@ -2523,18 +2530,19 @@ async fn break_glass_mints_a_fresh_key_and_writes_both_audit_logs() {
     let v: serde_json::Value = serde_json::from_slice(&body).expect("json");
 
     let key = v["adminKey"].as_str().expect("adminKey");
-    assert_ne!(
+    assert_eq!(
         key, "tenant-prod|permanent-admin-key",
-        "break-glass must not hand back the deployment's permanent admin key"
+        "break-glass must return the key the backend accepts, not a token it          will reject"
     );
     assert!(v["tenantNotified"].as_bool().unwrap_or(false));
-
-    // The TTL is real and short.
-    let expires_at = v["expiresAt"].as_i64().expect("expiresAt");
-    let ttl_ms = expires_at - orchestrator::time::now_unix_ms();
     assert!(
-        ttl_ms > 0 && ttl_ms <= 15 * 60_000,
-        "break-glass TTL out of range: {ttl_ms}ms"
+        v["persistent"].as_bool().unwrap_or(false),
+        "the response must say plainly that this key does not expire"
+    );
+    assert!(
+        v.get("expiresAt").is_none(),
+        "no expiry field: promising one the orchestrator cannot enforce is          what made the \
+         old version misleading"
     );
 
     // Instance audit records it, with the reason verbatim.
