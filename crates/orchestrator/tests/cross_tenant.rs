@@ -238,6 +238,7 @@ fn test_config(database_url: String, data_root: std::path::PathBuf) -> Orchestra
         traefik_cert_dir: "/dynamic".into(),
         acme_contact_email: None,
         acme_directory_url: None,
+        reconcile_interval_secs: 0,
     }
 }
 
