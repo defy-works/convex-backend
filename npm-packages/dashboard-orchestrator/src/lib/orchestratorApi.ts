@@ -387,7 +387,6 @@ export const hostCapacityResponseSchema = z.object({
   totalCpus: z.number(),
   allocatedMemoryMb: z.number(),
   allocatedCpus: z.number(),
-  deploymentCount: z.number(),
 });
 export type HostCapacity = z.infer<typeof hostCapacityResponseSchema>;
 

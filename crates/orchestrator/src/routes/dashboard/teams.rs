@@ -72,11 +72,6 @@ pub fn router() -> Router<OrchestratorState> {
         )
         .route("/teams/{team_id}/invites/cancel", post(cancel_invite))
         .route("/invites/{code}/accept", post(accept_invite))
-        .route("/teams/{team_id}/get_project_roles", get(get_project_roles))
-        .route(
-            "/teams/{team_id}/update_project_roles",
-            post(update_project_roles),
-        )
         .route(
             "/teams/{team_id}/apply_referral_code",
             post(apply_referral_code),
@@ -538,79 +533,12 @@ pub(crate) struct ProjectRoleEntry {
     member_id: i64,
 }
 
-#[utoipa::path(
-    get,
-    path = "/api/dashboard/teams/{team_id}/get_project_roles",
-    params(("team_id" = i64, Path)),
-    responses((status = 200, body = Vec<ProjectRoleEntry>)),
-    tag = "dashboard",
-)]
-pub(crate) async fn get_project_roles(
-    auth: AuthIdentity,
-    State(state): State<OrchestratorState>,
-    Path(team_id): Path<i64>,
-) -> ApiResult<Json<Vec<ProjectRoleEntry>>> {
-    require_team_member(&state, &auth, team_id).await?;
-    let pairs = state
-        .storage
-        .list_project_admins_for_team(team_id)
-        .await
-        .map_err(ApiError::Internal)?;
-    Ok(Json(
-        pairs
-            .into_iter()
-            .map(|(project_id, member_id)| ProjectRoleEntry {
-                project_id,
-                member_id,
-            })
-            .collect(),
-    ))
-}
-
 #[derive(serde::Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct UpdateProjectRolesArgs {
     project_id: i64,
     /// Replaces the full admin set for the project.
     admin_member_ids: Vec<i64>,
-}
-
-#[utoipa::path(
-    post,
-    path = "/api/dashboard/teams/{team_id}/update_project_roles",
-    params(("team_id" = i64, Path)),
-    request_body = UpdateProjectRolesArgs,
-    responses((status = 200), (status = 404)),
-    tag = "dashboard",
-)]
-pub(crate) async fn update_project_roles(
-    auth: AuthIdentity,
-    State(state): State<OrchestratorState>,
-    Path(team_id): Path<i64>,
-    Json(args): Json<UpdateProjectRolesArgs>,
-) -> ApiResult<StatusCode> {
-    // Membership was never checked here: the handler confirmed the project
-    // belonged to the path's team, but not that the caller did, so anyone
-    // could set project admins on any team. Granting admin rights is a
-    // governance action, so require the admin role rather than membership.
-    require_team_admin(&state, &auth, team_id).await?;
-    // Verify the project actually belongs to this team — without this a
-    // team admin could promote members on another team's project.
-    let project = state
-        .storage
-        .get_project(args.project_id)
-        .await
-        .map_err(ApiError::Internal)?
-        .ok_or_else(|| ApiError::NotFound("project".into()))?;
-    if project.team_id != team_id {
-        return Err(ApiError::NotFound("project".into()));
-    }
-    state
-        .storage
-        .set_project_admins(args.project_id, &args.admin_member_ids, auth.member_id)
-        .await
-        .map_err(ApiError::Internal)?;
-    Ok(StatusCode::OK)
 }
 
 #[utoipa::path(

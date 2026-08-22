@@ -6,7 +6,6 @@ const capacity: HostCapacity = {
   totalCpus: 32,
   allocatedMemoryMb: 64 * 1024,
   allocatedCpus: 32,
-  deploymentCount: 1,
 };
 
 describe("capacity projection", () => {

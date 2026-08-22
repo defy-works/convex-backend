@@ -454,11 +454,16 @@ asks for the team **slug** typed exactly.
 Opening a tenant's deployment from the console is deliberately ceremonious:
 
 - a **reason is required**, and is recorded verbatim;
-- the admin key is **minted fresh with a 15-minute TTL** — never the
-  deployment's permanent key;
 - the event is written to the **tenant's own audit log** as well as the
   instance's, so the team can see that an operator opened their deployment and
   why.
+
+It returns the deployment's **real admin key, which does not expire.** An
+earlier version minted a short-lived token instead, which read better but did
+not work: a backend only accepts the key derived from its own `INSTANCE_SECRET`,
+so every "15-minute" grant handed back a credential the deployment rejected —
+while reporting success. Revoking a break-glass grant therefore means rotating
+the deployment's key; the audit trail, not an expiry, is what bounds it.
 
 That last point is the design, not a nicety. An audit trail only the operator
 can read is not accountability. The modal says so before you confirm.

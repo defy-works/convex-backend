@@ -1,8 +1,14 @@
 //! GET /api/dashboard/host_capacity
 //!
 //! Returns the host's total memory + CPU plus what's currently allocated
-//! by summing the tier of every running deployment. Dashboard uses this
-//! to render allocation context; overprovisioning is allowed.
+//! by summing the tier of every running deployment. The dashboard uses this
+//! to render allocation context for the tier selector; overprovisioning is
+//! allowed.
+//!
+//! Readable by any authenticated member, so it deliberately carries no fleet
+//! inventory. The deployment count and the per-state breakdown live on
+//! `/api/admin/overview`, behind the `SuperAdmin` extractor — a tenant has no
+//! business learning how many deployments other tenants run.
 
 use axum::{
     extract::State,
@@ -26,7 +32,6 @@ pub struct HostCapacityResponse {
     pub total_cpus: u32,
     pub allocated_memory_mb: u64,
     pub allocated_cpus: f32,
-    pub deployment_count: u32,
 }
 
 #[utoipa::path(
@@ -68,6 +73,5 @@ pub(crate) async fn host_capacity(
         total_cpus: host.total_cpus,
         allocated_memory_mb: allocated_memory,
         allocated_cpus,
-        deployment_count: tiers.len() as u32,
     }))
 }

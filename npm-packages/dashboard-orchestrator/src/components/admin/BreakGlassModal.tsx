@@ -5,29 +5,8 @@
 // than discover it afterwards — that is what makes the audit trail a
 // deterrent rather than a trap.
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import type { BreakGlassGrant, FleetEntry } from "../../lib/adminApi";
-
-function Countdown({ expiresAt }: { expiresAt: number }) {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    const t = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(t);
-  }, []);
-
-  const msLeft = expiresAt - now;
-  if (msLeft <= 0) {
-    return <span className="text-util-error">expired</span>;
-  }
-  const total = Math.floor(msLeft / 1000);
-  const mm = Math.floor(total / 60);
-  const ss = String(total % 60).padStart(2, "0");
-  return (
-    <span className={msLeft < 60_000 ? "text-util-error" : undefined}>
-      {mm}:{ss}
-    </span>
-  );
-}
 
 export function BreakGlassModal({
   deployment,
@@ -62,13 +41,13 @@ export function BreakGlassModal({
         {grant ? (
           <>
             <p className="mt-2 text-sm text-content-secondary">
-              A temporary admin key for{" "}
-              <span className="font-mono">{deployment.name}</span>. It is shown
-              once and expires in{" "}
-              <strong>
-                <Countdown expiresAt={grant.expiresAt} />
-              </strong>
-              .
+              The admin key for{" "}
+              <span className="font-mono">{deployment.name}</span>, shown once.
+            </p>
+            <p className="mt-2 rounded border border-util-warning bg-util-warning/10 p-2 text-sm">
+              <strong>This key does not expire.</strong> It is the
+              deployment&apos;s real key, so revoking it means rotating the
+              deployment. Treat it as a credential you now hold.
             </p>
             <div className="mt-4 flex items-center gap-2">
               <code className="flex-1 overflow-x-auto rounded border bg-background-secondary p-2 font-mono text-xs">
@@ -103,9 +82,10 @@ export function BreakGlassModal({
         ) : (
           <>
             <div className="mt-2 rounded border border-util-warning bg-util-warning/10 p-3 text-sm">
-              This grants read and write access to{" "}
+              This hands you the real admin key for{" "}
               <span className="font-mono">{deployment.teamSlug}</span>&apos;s
-              data. <strong>They will see this in their own audit log</strong>,
+              deployment — read and write on their data, and it does not expire.{" "}
+              <strong>They will see this in their own audit log</strong>,
               including the reason you give.
             </div>
 

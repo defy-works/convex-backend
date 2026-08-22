@@ -233,9 +233,9 @@ export const memberActionResponseSchema = z.object({
 export const breakGlassResponseSchema = z.object({
   deployment: z.string(),
   url: z.string(),
-  /** Shown once. Never persisted. */
+  /** Shown once, never persisted client-side. Does not expire. */
   adminKey: z.string(),
-  expiresAt: z.number(),
+  persistent: z.boolean(),
   tenantNotified: z.boolean(),
 });
 export type BreakGlassGrant = z.infer<typeof breakGlassResponseSchema>;

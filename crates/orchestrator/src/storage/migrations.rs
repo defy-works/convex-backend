@@ -134,5 +134,12 @@ pub async fn run(pool: &PgPool) -> anyhow::Result<()> {
             "#,
         )
         .await?;
+    // Remove `project_admins`. It was written and displayed but never
+    // consulted for authorization, so a team admin could designate project
+    // admins and it changed nothing — a control that looks like it works is
+    // worse than no control. Team membership is the boundary.
+    conn.client()
+        .batch_execute("DROP TABLE IF EXISTS project_admins;")
+        .await?;
     Ok(())
 }

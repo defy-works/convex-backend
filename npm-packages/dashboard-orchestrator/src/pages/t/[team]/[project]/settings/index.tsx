@@ -31,7 +31,6 @@ import { useProjectSettings } from "../../../../../hooks/useProjectSettings";
 const SECTION_IDS = {
   projectForm: "project-form",
   projectUsage: "project-usage",
-  projectAdmins: "project-admins",
   backend: "backend",
   envVars: "env-vars",
   deleteProject: "delete-project",
@@ -40,7 +39,6 @@ const SECTION_IDS = {
 const sections: Array<{ id: string; label: string }> = [
   { id: SECTION_IDS.projectForm, label: "Edit Project" },
   { id: SECTION_IDS.projectUsage, label: "Project Usage" },
-  { id: SECTION_IDS.projectAdmins, label: "Project Admins" },
   { id: SECTION_IDS.backend, label: "Backend" },
   { id: SECTION_IDS.envVars, label: "Environment Variables" },
   { id: SECTION_IDS.deleteProject, label: "Delete Project" },
@@ -148,14 +146,6 @@ export default function ProjectSettingsPage() {
                       are no included or on-demand quotas to track.
                     </p>
                   </Sheet>
-                </div>
-                <div id={SECTION_IDS.projectAdmins}>
-                  <ProjectAdminsSection
-                    team={team}
-                    project={project}
-                    token={token}
-                    url={url}
-                  />
                 </div>
                 <div id={SECTION_IDS.backend}>
                   <BackendSection team={team} project={project} />
@@ -639,156 +629,6 @@ type ProjectMember = {
   name: string | null;
   role: string;
 };
-
-type ProjectRoleEntry = { projectId: number; memberId: number };
-
-function ProjectAdminsSection({
-  team,
-  project,
-  token,
-  url,
-}: {
-  team: Team;
-  project: Project;
-  token: string;
-  url: string;
-}) {
-  const { data: members } = useSWR<ProjectMember[]>(
-    ["project-admins-members", team.id, token],
-    () =>
-      fetchJson<ProjectMember[]>(
-        `${url}/api/dashboard/teams/${team.id}/members`,
-        token,
-      ),
-  );
-  const { data: roles, mutate } = useSWR<ProjectRoleEntry[]>(
-    ["project-roles", team.id, token],
-    () =>
-      fetchJson<ProjectRoleEntry[]>(
-        `${url}/api/dashboard/teams/${team.id}/get_project_roles`,
-        token,
-      ),
-  );
-  const [pendingError, setPendingError] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
-
-  // Project admin = explicitly listed OR a team admin (team admins auto-grant
-  // admin on every project). Cloud uses the same rule.
-  const adminMemberIds = useMemo(() => {
-    const fromRoles = (roles ?? [])
-      .filter((r) => r.projectId === project.id)
-      .map((r) => r.memberId);
-    const teamAdminIds = (members ?? [])
-      .filter((m) => m.role === "admin")
-      .map((m) => m.id);
-    return new Set<number>([...fromRoles, ...teamAdminIds]);
-  }, [roles, members, project.id]);
-
-  const explicitAdminIds = useMemo(
-    () =>
-      new Set(
-        (roles ?? [])
-          .filter((r) => r.projectId === project.id)
-          .map((r) => r.memberId),
-      ),
-    [roles, project.id],
-  );
-
-  const toggleAdmin = async (memberId: number) => {
-    setPendingError(null);
-    const next = new Set(explicitAdminIds);
-    if (next.has(memberId)) next.delete(memberId);
-    else next.add(memberId);
-    setSaving(true);
-    try {
-      const res = await fetch(
-        `${url}/api/dashboard/teams/${team.id}/update_project_roles`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${token}`,
-          },
-          body: JSON.stringify({
-            projectId: project.id,
-            adminMemberIds: Array.from(next),
-          }),
-        },
-      );
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      await mutate();
-    } catch (err) {
-      setPendingError((err as Error).message);
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  return (
-    <Sheet id={SECTION_IDS.projectAdmins}>
-      <h3 className="mb-1 text-base font-semibold">Project Admins</h3>
-      <p className="mb-4 max-w-prose text-sm text-content-secondary">
-        Project admins can edit{" "}
-        <span className="font-semibold">{project.name}</span> and its
-        deployments. Team admins always have admin access on every project.
-      </p>
-      {pendingError && (
-        <div className="mb-2 text-xs text-content-error" role="alert">
-          {pendingError}
-        </div>
-      )}
-      <ul className="divide-y divide-border-transparent">
-        {(members ?? []).map((m) => {
-          const isTeamAdmin = m.role === "admin";
-          const isExplicitProjectAdmin = explicitAdminIds.has(m.id);
-          const isAdmin = adminMemberIds.has(m.id);
-          return (
-            <li
-              key={m.id}
-              className="flex items-center justify-between gap-3 py-3"
-            >
-              <div className="min-w-0">
-                <div className="truncate text-sm font-medium text-content-primary">
-                  {m.name ?? m.email}
-                </div>
-                <div className="truncate text-xs text-content-secondary">
-                  {m.email}
-                  {isTeamAdmin && (
-                    <span className="ml-2 rounded-sm bg-background-tertiary px-1.5 py-0.5 text-[10px] text-content-secondary uppercase">
-                      Team admin
-                    </span>
-                  )}
-                </div>
-              </div>
-              <label className="flex items-center gap-2 text-sm">
-                <input
-                  type="checkbox"
-                  checked={isAdmin}
-                  disabled={isTeamAdmin || saving}
-                  onChange={() => toggleAdmin(m.id)}
-                />
-                <span
-                  className={
-                    isExplicitProjectAdmin || isTeamAdmin
-                      ? "text-content-primary"
-                      : "text-content-secondary"
-                  }
-                >
-                  Project admin
-                </span>
-              </label>
-            </li>
-          );
-        })}
-        {(members ?? []).length === 0 && (
-          <li className="py-3 text-sm text-content-secondary">
-            No team members yet.
-          </li>
-        )}
-      </ul>
-    </Sheet>
-  );
-}
 
 function BackendSection({ team, project }: { team: Team; project: Project }) {
   const token = useAccessToken();

@@ -56,7 +56,8 @@ impl Storage {
         let row = conn
             .client()
             .query_opt(
-                "SELECT id, team_id, name, slug, is_demo, creation_time, deleted, tier, knob_overrides
+                "SELECT id, team_id, name, slug, is_demo, creation_time, deleted, tier, \
+                 knob_overrides
                  FROM projects WHERE id = $1",
                 &[&id],
             )
@@ -73,7 +74,8 @@ impl Storage {
         let row = conn
             .client()
             .query_opt(
-                "SELECT id, team_id, name, slug, is_demo, creation_time, deleted, tier, knob_overrides
+                "SELECT id, team_id, name, slug, is_demo, creation_time, deleted, tier, \
+                 knob_overrides
                  FROM projects WHERE team_id = $1 AND slug = $2 AND deleted = FALSE",
                 &[&team_id, &slug],
             )
@@ -81,15 +83,13 @@ impl Storage {
         Ok(row.map(map_project))
     }
 
-    pub async fn list_projects(
-        &self,
-        team_id: i64,
-    ) -> anyhow::Result<Vec<ProjectRecord>> {
+    pub async fn list_projects(&self, team_id: i64) -> anyhow::Result<Vec<ProjectRecord>> {
         let conn = self.pool().acquire().await?;
         let rows = conn
             .client()
             .query(
-                "SELECT id, team_id, name, slug, is_demo, creation_time, deleted, tier, knob_overrides
+                "SELECT id, team_id, name, slug, is_demo, creation_time, deleted, tier, \
+                 knob_overrides
                  FROM projects WHERE team_id = $1 AND deleted = FALSE
                  ORDER BY creation_time ASC",
                 &[&team_id],
@@ -119,18 +119,12 @@ impl Storage {
         let conn = self.pool().acquire().await?;
         if let Some(name) = name {
             conn.client()
-                .execute(
-                    "UPDATE projects SET name = $1 WHERE id = $2",
-                    &[&name, &id],
-                )
+                .execute("UPDATE projects SET name = $1 WHERE id = $2", &[&name, &id])
                 .await?;
         }
         if let Some(slug) = slug {
             conn.client()
-                .execute(
-                    "UPDATE projects SET slug = $1 WHERE id = $2",
-                    &[&slug, &id],
-                )
+                .execute("UPDATE projects SET slug = $1 WHERE id = $2", &[&slug, &id])
                 .await?;
         }
         Ok(())
@@ -141,82 +135,12 @@ impl Storage {
         // soft-deleted rows keep blocking new projects with the same slug
         // and there's no restore UI to justify keeping the row around. The
         // schema's `ON DELETE CASCADE` chain cleans up access_tokens,
-        // project_admins, default_env_vars; deployments are torn down
+        // default_env_vars; deployments are torn down
         // separately in `cascade_delete_project` before this runs.
         let conn = self.pool().acquire().await?;
         conn.client()
             .execute("DELETE FROM projects WHERE id = $1", &[&id])
             .await?;
-        Ok(())
-    }
-
-    /// Project-level admin grants. Returns `(project_id, member_id)` pairs;
-    /// the caller joins against the team membership to render names/emails.
-    pub async fn list_project_admins_for_team(
-        &self,
-        team_id: i64,
-    ) -> anyhow::Result<Vec<(i64, i64)>> {
-        let conn = self.pool().acquire().await?;
-        let rows = conn
-            .client()
-            .query(
-                "SELECT pa.project_id, pa.member_id
-                 FROM project_admins pa
-                 JOIN projects p ON p.id = pa.project_id
-                 WHERE p.team_id = $1 AND p.deleted = FALSE",
-                &[&team_id],
-            )
-            .await?;
-        Ok(rows
-            .into_iter()
-            .map(|r| (r.get::<_, i64>(0), r.get::<_, i64>(1)))
-            .collect())
-    }
-
-    pub async fn list_project_admins(
-        &self,
-        project_id: i64,
-    ) -> anyhow::Result<Vec<i64>> {
-        let conn = self.pool().acquire().await?;
-        let rows = conn
-            .client()
-            .query(
-                "SELECT member_id FROM project_admins WHERE project_id = $1",
-                &[&project_id],
-            )
-            .await?;
-        Ok(rows.into_iter().map(|r| r.get::<_, i64>(0)).collect())
-    }
-
-    /// Replace the full admin set for a project. Inserts missing pairs and
-    /// deletes the ones that aren't in `member_ids`. `granted_by` is who
-    /// performed the change (audit-log purposes).
-    pub async fn set_project_admins(
-        &self,
-        project_id: i64,
-        member_ids: &[i64],
-        granted_by: Option<i64>,
-    ) -> anyhow::Result<()> {
-        let now = now_unix_ms();
-        let conn = self.pool().acquire().await?;
-        // Wipe-and-replace keeps the code simple at the cost of an extra
-        // round trip; admin sets are tiny (single-digit) so this is fine.
-        conn.client()
-            .execute(
-                "DELETE FROM project_admins WHERE project_id = $1",
-                &[&project_id],
-            )
-            .await?;
-        for member_id in member_ids {
-            conn.client()
-                .execute(
-                    "INSERT INTO project_admins (project_id, member_id, granted_at, granted_by)
-                     VALUES ($1, $2, $3, $4)
-                     ON CONFLICT (project_id, member_id) DO NOTHING",
-                    &[&project_id, member_id, &now, &granted_by],
-                )
-                .await?;
-        }
         Ok(())
     }
 
