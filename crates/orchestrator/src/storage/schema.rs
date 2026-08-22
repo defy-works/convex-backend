@@ -131,8 +131,11 @@ CREATE TABLE IF NOT EXISTS audit_log_events (
     scope TEXT NOT NULL DEFAULT 'team' CHECK (scope IN ('team','instance'))
 );
 CREATE INDEX IF NOT EXISTS audit_team_time_idx ON audit_log_events(team_id, creation_time);
-CREATE INDEX IF NOT EXISTS audit_instance_time_idx
-    ON audit_log_events(creation_time) WHERE scope = 'instance';
+-- NOTE: the partial index on `scope` lives in `migrations.rs`, not here.
+-- SCHEMA_SQL runs first and `CREATE TABLE IF NOT EXISTS` is a no-op against
+-- an existing database, so an index referencing a column that migrations
+-- add would fail on every upgrade — before the migration that adds it ever
+-- runs. Only index columns that have existed since the table was created.
 
 CREATE TABLE IF NOT EXISTS opt_ins (
     member_id BIGINT NOT NULL REFERENCES members(id) ON DELETE CASCADE,
