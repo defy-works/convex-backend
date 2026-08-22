@@ -115,7 +115,14 @@ async function fetchWithRetry(
   throw lastError;
 }
 
-async function request<T>(
+/**
+ * Shared request path for every orchestrator call: retry, bearer auth, and
+ * `OrchestratorApiError` on failure.
+ *
+ * Exported so `adminApi.ts` can keep the `/api/admin` surface in its own
+ * file without duplicating the retry and error handling.
+ */
+export async function request<T>(
   baseUrl: string,
   path: string,
   init: RequestInit & { auth?: boolean; token?: string | null } = {},

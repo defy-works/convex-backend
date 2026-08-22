@@ -146,7 +146,10 @@ services:
       - CONVEX_ORCHESTRATOR_ACME_DIRECTORY_URL=${ACME_DIRECTORY_URL:-}
       - RUST_LOG=${RUST_LOG:-orchestrator=info,tower_http=warn}
     healthcheck:
-      test: curl -fsS http://localhost:8050/health || exit 1
+      # Readiness, not liveness: the container is only "healthy" once it can
+      # reach Postgres. `/health` returns 200 as long as the process is up,
+      # which would mark a database-less orchestrator healthy.
+      test: curl -fsS http://localhost:8050/ready || exit 1
       interval: 5s
       start_period: 30s
       retries: 10

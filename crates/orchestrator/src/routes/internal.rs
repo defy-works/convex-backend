@@ -66,6 +66,11 @@ pub struct ExchangeSessionResponse {
     pub member_id: u64,
     pub team_slug: String,
     pub role: String,
+    /// Instance-wide operator. The dashboard uses this only to decide
+    /// whether to render the admin nav; the server-side gate is the
+    /// `SuperAdmin` extractor, so a client that lies about it gains
+    /// nothing.
+    pub is_super_admin: bool,
 }
 
 #[utoipa::path(
@@ -109,6 +114,30 @@ pub(crate) async fn exchange_session(
         .upsert_member(&args.auth_user_id, &email, args.name.as_deref())
         .await
         .map_err(ApiError::Internal)?;
+
+    // ADMIN_EMAILS seeds the super-admin column on sign-in; from then on the
+    // column is the authority, so an operator can be revoked in the console
+    // without a redeploy. Seeding is deliberately one-way: dropping an
+    // address from ADMIN_EMAILS must not silently strip a live operator,
+    // because that would make a config edit a security action nobody
+    // reviewed as one.
+    if is_admin_email && !member.is_super_admin {
+        state
+            .storage
+            .set_super_admin(member.id, true)
+            .await
+            .map_err(ApiError::Internal)?;
+        state
+            .storage
+            .append_instance_audit(
+                Some(member.id),
+                "superAdminSeeded",
+                &serde_json::json!({ "email": email, "source": "ADMIN_EMAILS" }),
+            )
+            .await
+            .ok();
+    }
+    let is_super_admin = member.is_super_admin || is_admin_email;
 
     let existing_teams = state
         .storage
@@ -227,6 +256,7 @@ pub(crate) async fn exchange_session(
         member_id: member.id as u64,
         team_slug,
         role: role.to_string(),
+        is_super_admin,
     }))
 }
 
@@ -248,10 +278,7 @@ pub(crate) async fn health(
     Ok(StatusCode::OK)
 }
 
-fn require_service_key(
-    state: &OrchestratorState,
-    headers: &HeaderMap,
-) -> Result<(), ApiError> {
+fn require_service_key(state: &OrchestratorState, headers: &HeaderMap) -> Result<(), ApiError> {
     let configured = state.config.service_key.as_deref().ok_or_else(|| {
         ApiError::NotImplemented(
             "internal endpoints disabled: set CONVEX_ORCHESTRATOR_SERVICE_KEY".into(),

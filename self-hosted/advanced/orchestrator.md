@@ -61,6 +61,9 @@ own infrastructure and behave the same way.
 - Custom domains, end to end: managed entirely in the dashboard, routed via
   Traefik's file provider, with certificates the orchestrator issues itself over
   HTTP-01 and renews automatically. See [Custom domains](#custom-domains).
+- An instance admin console for operators: fleet health, every team, every
+  member, and an instance-scoped audit log. See
+  [Instance admin](#instance-admin).
 
 **Stubbed** (returns sensible empty / defaults so the dashboard renders without
 errors, but the cloud-only feature is not implemented):
@@ -257,6 +260,7 @@ instead.
 | `BETTER_AUTH_REQUIRE_EMAIL_VERIFICATION` / `BETTER_AUTH_SMTP_URL` / `BETTER_AUTH_SMTP_FROM`                          | `0` / unset / `no-reply@orchestrator`                                              | Optional SMTP for password reset / verification links.                                                                                                                     |
 | `ORCHESTRATOR_IMAGE` / `DASHBOARD_ORCHESTRATOR_IMAGE` / `DASHBOARD_IMAGE`                                            | `ghcr.io/defy-works/convex-{orchestrator,dashboard-orchestrator,dashboard}:latest` | Pin to a specific image tag.                                                                                                                                               |
 | `RUST_LOG`                                                                                                           | `orchestrator=info,tower_http=warn`                                                | Orchestrator log filter.                                                                                                                                                   |
+| `CONVEX_ORCHESTRATOR_RECONCILE_INTERVAL_SECS`                                                                        | `60`                                                                               | Seconds between reconcile passes over tenant containers. `0` restores boot-only behaviour. Docker provisioner mode only.                                                   |
 | `TRAEFIK_DYNAMIC_DIR`                                                                                                | `/convex/traefik-dynamic`                                                          | Directory the orchestrator renders custom-domain routers into, watched by Traefik's file provider. Unset to disable custom domains.                                        |
 | `CUSTOM_DOMAIN_CERT_RESOLVER`                                                                                        | `lehttp`                                                                           | ACME resolver for custom-domain certs. Must be HTTP-01 based — see Custom domains below.                                                                                   |
 
@@ -368,6 +372,120 @@ A cross-tenant test suite (`crates/orchestrator/tests/cross_tenant.rs`) drives
 one tenant's token against a second tenant's resources across the whole route
 table, and a source-level sweep fails the build if a new path-scoped handler is
 added without an authorization guard.
+
+## Instance admin
+
+Operators — members carrying the instance-wide super-admin flag — get an
+`/admin` section in the platform UI that covers the whole instance rather than
+one team: fleet health, every team, every member, and an instance-scoped audit
+log.
+
+The first operator is seeded from `ADMIN_EMAILS` at sign-in. After that the flag
+lives in the database, so operators are granted and revoked in the console
+without a redeploy. Seeding is one-way on purpose: removing an address from
+`ADMIN_EMAILS` does **not** revoke an existing operator, because a config edit
+should not silently become a security action.
+
+If every operator account is locked out, sign in with `BOOTSTRAP_TOKEN`. It is
+treated as an operator regardless of the database, so recovery never requires
+`psql`.
+
+Two things the flag deliberately does not do:
+
+- It never rides a deploy key. Only session and personal-access tokens can carry
+  it, so a prod key checked into CI is not an instance-wide credential.
+- It is not a data-access grant. Phase 1 is read-only metadata; reaching into a
+  tenant's deployment is a separate, audited action.
+
+### Authorization model
+
+Every route that names a team, project, or deployment in its path checks that
+the caller belongs to the owning team. Destructive and governance actions —
+deleting a team, removing a member, changing a role, granting project admin —
+additionally require the team `admin` role.
+
+Deploy keys are bound to the deployment they were minted for and are refused
+against any other, so a key committed to CI has the blast radius of its own
+deployment and nothing more. The one exception is
+`/api/deployment/authorize_within_current_project`, which exists to select among
+sibling deployments (dev, preview, prod) and is therefore scoped to the project
+rather than the single deployment.
+
+A cross-tenant test suite (`crates/orchestrator/tests/cross_tenant.rs`) drives
+one tenant's token against a second tenant's resources across the whole route
+table, and a source-level sweep fails the build if a new path-scoped handler is
+added without an authorization guard.
+
+### Deployment lifecycle
+
+The Deployments view carries per-row actions:
+
+| Action      | Effect                                                                                                                                                                    |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Pause**   | Stops the container without removing it, and marks the row `paused`. Configuration, volumes, and data are preserved; reconcile leaves paused deployments alone by intent. |
+| **Resume**  | Starts the container again and marks the row `running`.                                                                                                                   |
+| **Restart** | Recreates the container, applying any pending tier or canonical-URL change. Same path the CLI and management API use.                                                     |
+| **Tier**    | Records a new _desired_ tier. It takes effect on the next restart, not immediately.                                                                                       |
+| **Delete**  | Tears the container down and removes the deployment. Not recoverable from here.                                                                                           |
+
+The database row is the source of truth and container work is best-effort: if a
+container operation fails after the row changed, the action still took effect
+and the reconciler converges, so the response carries a warning rather than
+reporting failure. **Delete is the exception** — if teardown fails the
+deployment is kept, because removing the row while a container survives orphans
+it where nothing will list it again.
+
+Every action is recorded in the instance audit log.
+
+### Governance
+
+Members and teams are managed from the console. Suspending a member blocks
+authentication while preserving their teams, projects, and audit history;
+deleting is the permanent case. Deleting a member who is an operator clears that
+flag first, so the console cannot delete its way to an instance nobody can
+administer — the same guard that refuses to revoke the last operator.
+
+Deleting a team cascades to its projects and tears down every deployment
+underneath. The confirmation states the deployment count before you commit, and
+asks for the team **slug** typed exactly.
+
+### Break-glass access
+
+Opening a tenant's deployment from the console is deliberately ceremonious:
+
+- a **reason is required**, and is recorded verbatim;
+- the admin key is **minted fresh with a 15-minute TTL** — never the
+  deployment's permanent key;
+- the event is written to the **tenant's own audit log** as well as the
+  instance's, so the team can see that an operator opened their deployment and
+  why.
+
+That last point is the design, not a nicety. An audit trail only the operator
+can read is not accountability. The modal says so before you confirm.
+
+Break-glass events are highlighted in the instance audit log.
+
+### Health endpoints
+
+| Path                | Auth     | Meaning                                                                       |
+| ------------------- | -------- | ----------------------------------------------------------------------------- |
+| `/health`           | none     | Liveness. 200 whenever the process is up. Never checks dependencies.          |
+| `/ready`            | none     | Readiness. 200 only when Postgres is reachable. Status only, no error detail. |
+| `/api/admin/health` | operator | Subsystem detail: Postgres latency, docker socket, reconcile interval.        |
+
+Point container healthchecks and load-balancer target groups at **`/ready`**,
+not `/health`. A liveness probe that fails on a database blip gets the process
+killed, which does not fix a database problem and, behind a load balancer,
+cycles every target at once. `/ready` withholds error detail because it is
+unauthenticated; `/api/admin/health` is where the reason lives.
+
+### Reconcile interval
+
+The orchestrator reconciles tenant containers against the database on boot and
+every `CONVEX_ORCHESTRATOR_RECONCILE_INTERVAL_SECS` seconds thereafter (default
+`60`; `0` restores the previous boot-only behaviour). Docker provisioner mode
+only — the other modes do not own containers. Drift between what the database
+intends and what docker is running shows in the console's Deployments view.
 
 ## Running the orchestrator
 

@@ -2,15 +2,18 @@
 
 pub mod access_tokens;
 mod acme;
+mod admin;
 mod audit_log;
 mod custom_domains;
 pub mod deployments;
 mod env_vars;
 mod invitations;
 mod members;
-mod migrations;
+// `pub` so the integration suite can run migrations against a throwaway
+// database without going through `Storage::connect`.
+pub mod migrations;
 mod opt_ins;
-mod pool;
+pub mod pool;
 mod projects;
 mod schema;
 mod teams;
@@ -22,13 +25,20 @@ pub use self::{
         AccessToken,
         AccessTokenKind,
     },
-    audit_log::{
-        AuditEntry,
-        AuditQuery,
-    },
     acme::{
         AcmeAccountRecord,
         StoredCertificate,
+    },
+    admin::{
+        AdminDeploymentRow,
+        AdminMemberRow,
+        AdminTeamCounts,
+        MemberTeamRef,
+    },
+    audit_log::{
+        AuditEntry,
+        AuditQuery,
+        InstanceAuditEntry,
     },
     custom_domains::{
         CustomDomainRecord,

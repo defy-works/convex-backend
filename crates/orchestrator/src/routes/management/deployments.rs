@@ -796,6 +796,24 @@ pub(crate) async fn restart_deployment(
         .await
         .map_err(ApiError::Internal)?
         .ok_or_else(|| ApiError::NotFound("deployment".into()))?;
+    let updated = respawn_deployment(&state, &deployment, args.force.unwrap_or(false)).await?;
+    Ok(Json(crate::routes::helpers::deployment_to_platform(
+        &updated,
+    )))
+}
+
+/// Respawn a deployment's backend container.
+///
+/// Extracted from `restart_deployment` so the admin console can restart a
+/// deployment without duplicating capacity checks, effective-tier
+/// resolution, layered knob overrides, sidecar credential reuse, or
+/// canonical-URL application. Two copies of this would drift, and the ways
+/// they would drift are all silent.
+pub(crate) async fn respawn_deployment(
+    state: &OrchestratorState,
+    deployment: &crate::storage::DeploymentRecord,
+    force: bool,
+) -> ApiResult<crate::storage::DeploymentRecord> {
     let project = state
         .storage
         .get_project(deployment.project_id)
@@ -811,7 +829,6 @@ pub(crate) async fn restart_deployment(
 
     // Capacity check: exclude this deployment's own current tier from the sum
     // so a same-tier restart doesn't self-reject.
-    let force = args.force.unwrap_or(false);
     ensure_host_capacity_for_restart(&state, deployment.id, &effective_tier, force).await?;
 
     // Compose effective overrides: project layer then deployment layer.
@@ -850,7 +867,7 @@ pub(crate) async fn restart_deployment(
     let result = state
         .provisioner
         .respawn(crate::provisioner::ProvisionRequest {
-            deployment_name: deployment_name.clone(),
+            deployment_name: deployment.name.clone(),
             deployment_type: deployment.deployment_type,
             project_id: deployment.project_id,
             tier: effective_tier.clone(),
@@ -908,7 +925,7 @@ pub(crate) async fn restart_deployment(
     // trade than an unrecoverable dashboard.
     if deployment.instance_secret != result.instance_secret {
         tracing::info!(
-            deployment = %deployment_name,
+            deployment = %deployment.name,
             had_backend_instance_secret = deployment.backend_instance_secret.is_some(),
             "restart: refreshing the stored admin key to match the running container"
         );
@@ -942,13 +959,11 @@ pub(crate) async fn restart_deployment(
     // Re-read and return the fresh row.
     let updated = state
         .storage
-        .get_deployment_by_name(&deployment_name)
+        .get_deployment_by_name(&deployment.name)
         .await
         .map_err(ApiError::Internal)?
         .ok_or_else(|| ApiError::NotFound("deployment".into()))?;
-    Ok(Json(crate::routes::helpers::deployment_to_platform(
-        &updated,
-    )))
+    Ok(updated)
 }
 
 #[cfg(test)]

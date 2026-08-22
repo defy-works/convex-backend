@@ -25,6 +25,11 @@ pub enum ApiError {
     BadRequest(String),
     #[error("not implemented: {0}")]
     NotImplemented(String),
+    /// A downstream the orchestrator depends on failed — in practice the
+    /// docker daemon. Distinct from `Internal` so the caller can tell
+    /// "your request was fine, the machine underneath was not".
+    #[error("upstream failure: {0}")]
+    BadGateway(String),
     #[error(transparent)]
     Internal(#[from] anyhow::Error),
 }
@@ -39,6 +44,7 @@ impl ApiError {
             Self::HostCapacityExceeded { .. } => "host_capacity_exceeded",
             Self::BadRequest(_) => "BadRequest",
             Self::NotImplemented(_) => "NotImplemented",
+            Self::BadGateway(_) => "BadGateway",
             Self::Internal(_) => "InternalServerError",
         }
     }
@@ -52,6 +58,7 @@ impl ApiError {
             Self::HostCapacityExceeded { .. } => StatusCode::CONFLICT,
             Self::BadRequest(_) => StatusCode::BAD_REQUEST,
             Self::NotImplemented(_) => StatusCode::NOT_IMPLEMENTED,
+            Self::BadGateway(_) => StatusCode::BAD_GATEWAY,
             Self::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }

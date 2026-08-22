@@ -14,7 +14,14 @@ CREATE TABLE IF NOT EXISTS members (
     primary_email TEXT NOT NULL,
     name TEXT,
     creation_time BIGINT NOT NULL,
-    deleted BOOLEAN NOT NULL DEFAULT FALSE
+    deleted BOOLEAN NOT NULL DEFAULT FALSE,
+    -- Instance-wide operator. Seeded from ADMIN_EMAILS at first sign-in;
+    -- after that this column is the authority, so revoking an operator
+    -- does not require a redeploy.
+    is_super_admin BOOLEAN NOT NULL DEFAULT FALSE,
+    -- Reversible block: the member cannot authenticate, but their teams,
+    -- projects, and audit history stay intact. Distinct from `deleted`.
+    suspended BOOLEAN NOT NULL DEFAULT FALSE
 );
 CREATE INDEX IF NOT EXISTS members_auth_user_idx ON members(auth_user_id);
 CREATE INDEX IF NOT EXISTS members_email_idx ON members(primary_email);
@@ -115,13 +122,17 @@ CREATE TABLE IF NOT EXISTS default_env_vars (
 
 CREATE TABLE IF NOT EXISTS audit_log_events (
     id BIGSERIAL PRIMARY KEY,
-    team_id BIGINT NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+    -- NULL for instance-scoped events, which belong to no single team.
+    team_id BIGINT REFERENCES teams(id) ON DELETE CASCADE,
     member_id BIGINT REFERENCES members(id) ON DELETE SET NULL,
     action TEXT NOT NULL,
     metadata JSONB NOT NULL,
-    creation_time BIGINT NOT NULL
+    creation_time BIGINT NOT NULL,
+    scope TEXT NOT NULL DEFAULT 'team' CHECK (scope IN ('team','instance'))
 );
 CREATE INDEX IF NOT EXISTS audit_team_time_idx ON audit_log_events(team_id, creation_time);
+CREATE INDEX IF NOT EXISTS audit_instance_time_idx
+    ON audit_log_events(creation_time) WHERE scope = 'instance';
 
 CREATE TABLE IF NOT EXISTS opt_ins (
     member_id BIGINT NOT NULL REFERENCES members(id) ON DELETE CASCADE,

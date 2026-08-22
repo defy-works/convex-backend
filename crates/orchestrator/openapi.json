@@ -3588,10 +3588,678 @@
           }
         ]
       }
+    },
+    "/api/admin/health": {
+      "get": {
+        "tags": ["admin"],
+        "operationId": "admin_health",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminHealthResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "not a super-admin"
+          }
+        }
+      }
+    },
+    "/api/admin/overview": {
+      "get": {
+        "tags": ["admin"],
+        "operationId": "overview",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OverviewResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "not a super-admin"
+          }
+        }
+      }
+    },
+    "/api/admin/fleet": {
+      "get": {
+        "tags": ["admin"],
+        "operationId": "fleet",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FleetResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "not a super-admin"
+          }
+        }
+      }
+    },
+    "/api/admin/members": {
+      "get": {
+        "tags": ["admin"],
+        "operationId": "list_members",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminMembersResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "not a super-admin"
+          }
+        }
+      }
+    },
+    "/api/admin/audit": {
+      "get": {
+        "tags": ["admin"],
+        "operationId": "instance_audit",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": ["integer", "null"],
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminAuditResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "not a super-admin"
+          }
+        }
+      }
+    },
+    "/api/admin/deployments/{deployment_id}/pause": {
+      "post": {
+        "tags": ["admin"],
+        "operationId": "pause",
+        "parameters": [
+          {
+            "name": "deployment_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActionResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "not a super-admin"
+          },
+          "409": {
+            "description": "deployment is still provisioning"
+          }
+        }
+      }
+    },
+    "/api/admin/deployments/{deployment_id}/resume": {
+      "post": {
+        "tags": ["admin"],
+        "operationId": "resume",
+        "parameters": [
+          {
+            "name": "deployment_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActionResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "not a super-admin"
+          },
+          "409": {
+            "description": "deployment is still provisioning"
+          }
+        }
+      }
+    },
+    "/api/admin/deployments/{deployment_id}/restart": {
+      "post": {
+        "tags": ["admin"],
+        "operationId": "restart",
+        "parameters": [
+          {
+            "name": "deployment_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RestartArgs"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActionResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "not a super-admin"
+          }
+        }
+      }
+    },
+    "/api/admin/deployments/{deployment_id}/tier": {
+      "post": {
+        "tags": ["admin"],
+        "operationId": "set_tier",
+        "parameters": [
+          {
+            "name": "deployment_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TierArgs"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActionResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "unknown tier"
+          },
+          "403": {
+            "description": "not a super-admin"
+          }
+        }
+      }
+    },
+    "/api/admin/deployments/{deployment_id}/delete": {
+      "post": {
+        "tags": ["admin"],
+        "operationId": "delete",
+        "parameters": [
+          {
+            "name": "deployment_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActionResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "not a super-admin"
+          },
+          "502": {
+            "description": "teardown failed; the deployment was not removed"
+          }
+        }
+      }
+    },
+    "/api/admin/members/{member_id}/suspend": {
+      "post": {
+        "tags": ["admin"],
+        "operationId": "suspend",
+        "parameters": [
+          {
+            "name": "member_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemberActionResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "not a super-admin"
+          }
+        }
+      }
+    },
+    "/api/admin/members/{member_id}/unsuspend": {
+      "post": {
+        "tags": ["admin"],
+        "operationId": "unsuspend",
+        "parameters": [
+          {
+            "name": "member_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemberActionResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "not a super-admin"
+          }
+        }
+      }
+    },
+    "/api/admin/members/{member_id}/super_admin": {
+      "post": {
+        "tags": ["admin"],
+        "operationId": "set_super_admin",
+        "parameters": [
+          {
+            "name": "member_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SuperAdminArgs"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemberActionResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "not a super-admin"
+          },
+          "409": {
+            "description": "would revoke the last super-admin"
+          }
+        }
+      }
+    },
+    "/api/admin/members/{member_id}/delete": {
+      "post": {
+        "tags": ["admin"],
+        "operationId": "delete",
+        "parameters": [
+          {
+            "name": "member_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemberActionResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "not a super-admin"
+          },
+          "409": {
+            "description": "would remove the last super-admin"
+          }
+        }
+      }
+    },
+    "/api/admin/deployments/{deployment_id}/access": {
+      "post": {
+        "tags": ["admin"],
+        "operationId": "grant_access",
+        "parameters": [
+          {
+            "name": "deployment_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AccessArgs"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccessResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "a reason is required"
+          },
+          "403": {
+            "description": "not a super-admin"
+          }
+        }
+      }
+    },
+    "/api/admin/teams": {
+      "get": {
+        "tags": ["admin"],
+        "operationId": "list_teams",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminTeamsResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "not a super-admin"
+          }
+        }
+      },
+      "post": {
+        "tags": ["admin"],
+        "operationId": "create_team",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateTeamArgs"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TeamActionResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "invalid name or slug already taken"
+          },
+          "403": {
+            "description": "not a super-admin"
+          }
+        }
+      }
+    },
+    "/api/admin/teams/{team_id}": {
+      "post": {
+        "tags": ["admin"],
+        "operationId": "rename_team",
+        "parameters": [
+          {
+            "name": "team_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RenameTeamArgs"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TeamActionResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "not a super-admin"
+          }
+        }
+      }
+    },
+    "/api/admin/teams/{team_id}/delete": {
+      "post": {
+        "tags": ["admin"],
+        "operationId": "delete_team",
+        "parameters": [
+          {
+            "name": "team_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TeamActionResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "not a super-admin"
+          },
+          "502": {
+            "description": "a deployment could not be torn down"
+          }
+        }
+      }
     }
   },
   "components": {
     "schemas": {
+      "AccessArgs": {
+        "type": "object",
+        "required": ["reason"],
+        "properties": {
+          "reason": {
+            "type": "string",
+            "description": "Why this access is being taken. Recorded verbatim in both audit logs."
+          }
+        }
+      },
+      "AccessResponse": {
+        "type": "object",
+        "required": [
+          "deployment",
+          "url",
+          "adminKey",
+          "expiresAt",
+          "tenantNotified"
+        ],
+        "properties": {
+          "deployment": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          },
+          "adminKey": {
+            "type": "string",
+            "description": "A freshly minted, short-lived admin key. Shown once."
+          },
+          "expiresAt": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Unix ms. The UI counts down to this so an operator with a dashboard\nopen is not surprised by everything failing at once."
+          },
+          "tenantNotified": {
+            "type": "boolean",
+            "description": "Restates, in the response, that this was recorded where the tenant\ncan see it — so it is visible even to an API caller who never saw\nthe modal."
+          }
+        }
+      },
       "AccessToken": {
         "type": "string"
       },
@@ -3614,6 +4282,224 @@
           },
           "keySuffix": {
             "type": "string"
+          }
+        }
+      },
+      "ActionResponse": {
+        "type": "object",
+        "required": ["deployment", "state"],
+        "properties": {
+          "deployment": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string",
+            "description": "The row's state after the action."
+          },
+          "containerWarning": {
+            "type": ["string", "null"],
+            "description": "Set when the database changed but the container work did not fully\nsucceed. The action still took effect; the reconciler will converge."
+          }
+        }
+      },
+      "AdminAuditResponse": {
+        "type": "object",
+        "required": ["events"],
+        "properties": {
+          "events": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/InstanceAuditEvent"
+            }
+          }
+        }
+      },
+      "AdminDeploymentRow": {
+        "type": "object",
+        "description": "A deployment as the admin console sees it, with its owning team and\nproject resolved.\n\n`intended_state` is what the database says should be running. What is\n*actually* running is a docker question, filled in by the fleet route —\nthis query cannot know it.",
+        "required": [
+          "id",
+          "name",
+          "deploymentType",
+          "intendedState",
+          "tier",
+          "url",
+          "creationTime",
+          "teamId",
+          "teamSlug",
+          "projectId",
+          "projectSlug"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "name": {
+            "type": "string"
+          },
+          "deploymentType": {
+            "type": "string"
+          },
+          "intendedState": {
+            "type": "string"
+          },
+          "tier": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          },
+          "creationTime": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "teamId": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "teamSlug": {
+            "type": "string"
+          },
+          "projectId": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "projectSlug": {
+            "type": "string"
+          }
+        }
+      },
+      "AdminHealthResponse": {
+        "type": "object",
+        "required": [
+          "version",
+          "database",
+          "provisioner",
+          "reconcileIntervalSecs"
+        ],
+        "properties": {
+          "version": {
+            "type": "string"
+          },
+          "database": {
+            "$ref": "#/components/schemas/DatabaseHealth"
+          },
+          "provisioner": {
+            "$ref": "#/components/schemas/ProvisionerHealth"
+          },
+          "reconcileIntervalSecs": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "AdminMemberRow": {
+        "type": "object",
+        "description": "A member as the admin console sees them: identity, flags, and every team\nthey belong to.",
+        "required": [
+          "id",
+          "primaryEmail",
+          "creationTime",
+          "isSuperAdmin",
+          "suspended",
+          "teams"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "primaryEmail": {
+            "type": "string"
+          },
+          "name": {
+            "type": ["string", "null"]
+          },
+          "creationTime": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "isSuperAdmin": {
+            "type": "boolean"
+          },
+          "suspended": {
+            "type": "boolean"
+          },
+          "teams": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MemberTeamRef"
+            }
+          }
+        }
+      },
+      "AdminMembersResponse": {
+        "type": "object",
+        "required": ["members"],
+        "properties": {
+          "members": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminMemberRow"
+            }
+          }
+        }
+      },
+      "AdminTeamRow": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "slug",
+          "creationTime",
+          "memberCount",
+          "projectCount",
+          "deploymentCount"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "name": {
+            "type": "string"
+          },
+          "slug": {
+            "type": "string"
+          },
+          "creationTime": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "memberCount": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "projectCount": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "deploymentCount": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Shown in the delete confirmation, so the blast radius is visible\nbefore the operator commits to it.",
+            "minimum": 0
+          }
+        }
+      },
+      "AdminTeamsResponse": {
+        "type": "object",
+        "required": ["teams"],
+        "properties": {
+          "teams": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminTeamRow"
+            }
           }
         }
       },
@@ -3882,7 +4768,8 @@
             "type": "string"
           },
           "slug": {
-            "type": ["string", "null"]
+            "type": ["string", "null"],
+            "description": "Derived from the name when omitted."
           }
         }
       },
@@ -3937,6 +4824,23 @@
         "properties": {
           "domain": {
             "type": "string"
+          }
+        }
+      },
+      "DatabaseHealth": {
+        "type": "object",
+        "required": ["reachable"],
+        "properties": {
+          "reachable": {
+            "type": "boolean"
+          },
+          "pingMs": {
+            "type": ["integer", "null"],
+            "format": "int64",
+            "minimum": 0
+          },
+          "error": {
+            "type": ["string", "null"]
           }
         }
       },
@@ -4206,7 +5110,13 @@
       },
       "ExchangeSessionResponse": {
         "type": "object",
-        "required": ["accessToken", "memberId", "teamSlug", "role"],
+        "required": [
+          "accessToken",
+          "memberId",
+          "teamSlug",
+          "role",
+          "isSuperAdmin"
+        ],
         "properties": {
           "accessToken": {
             "type": "string"
@@ -4221,6 +5131,52 @@
           },
           "role": {
             "type": "string"
+          },
+          "isSuperAdmin": {
+            "type": "boolean",
+            "description": "Instance-wide operator. The dashboard uses this only to decide\nwhether to render the admin nav; the server-side gate is the\n`SuperAdmin` extractor, so a client that lies about it gains\nnothing."
+          }
+        }
+      },
+      "FleetEntry": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/AdminDeploymentRow"
+          },
+          {
+            "type": "object",
+            "required": ["actualState", "drifted"],
+            "properties": {
+              "actualState": {
+                "type": "string",
+                "description": "`running` / `stopped` / `missing`, or `unknown` when there was\nnothing to inspect or the inspection failed."
+              },
+              "drifted": {
+                "type": "boolean",
+                "description": "True when the container is not doing what the database says it\nshould. Always false when `actual_state` is `unknown` — we do not\nreport drift we could not observe."
+              }
+            }
+          }
+        ]
+      },
+      "FleetResponse": {
+        "type": "object",
+        "required": ["deployments", "driftCount", "containerStatesAvailable"],
+        "properties": {
+          "deployments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FleetEntry"
+            }
+          },
+          "driftCount": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "containerStatesAvailable": {
+            "type": "boolean",
+            "description": "False when the provisioner does not manage containers, so the UI can\nsay \"not applicable\" rather than rendering a column of `unknown`."
           }
         }
       },
@@ -4296,6 +5252,34 @@
             "type": "integer",
             "format": "int32",
             "minimum": 0
+          }
+        }
+      },
+      "InstanceAuditEvent": {
+        "type": "object",
+        "description": "One instance-scoped event on the wire.\n\nNamed distinctly from `storage::AuditEntry`, which is the team-scoped\nrow type and carries a `team_id` this surface has no use for.",
+        "required": ["id", "action", "metadata", "creationTime"],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "memberId": {
+            "type": ["integer", "null"],
+            "format": "int64",
+            "description": "`None` for actions taken through the break-glass bootstrap\ncredential, which has no human behind it."
+          },
+          "memberEmail": {
+            "type": ["string", "null"],
+            "description": "Resolved server-side. `None` when there is no member, or the member\nhas since been deleted."
+          },
+          "action": {
+            "type": "string"
+          },
+          "metadata": {},
+          "creationTime": {
+            "type": "integer",
+            "format": "int64"
           }
         }
       },
@@ -4439,6 +5423,25 @@
           }
         }
       },
+      "MemberActionResponse": {
+        "type": "object",
+        "required": ["memberId", "email", "isSuperAdmin", "suspended"],
+        "properties": {
+          "memberId": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "email": {
+            "type": "string"
+          },
+          "isSuperAdmin": {
+            "type": "boolean"
+          },
+          "suspended": {
+            "type": "boolean"
+          }
+        }
+      },
       "MemberDataResponse": {
         "type": "object",
         "required": ["member", "teams"],
@@ -4471,12 +5474,93 @@
           }
         }
       },
+      "MemberTeamRef": {
+        "type": "object",
+        "description": "One team membership, flattened for the admin member table.",
+        "required": ["teamId", "teamSlug", "teamName", "role"],
+        "properties": {
+          "teamId": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "teamSlug": {
+            "type": "string"
+          },
+          "teamName": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          }
+        }
+      },
       "OptIn": {
         "type": "object",
         "required": ["name"],
         "properties": {
           "name": {
             "type": "string"
+          }
+        }
+      },
+      "OverviewResponse": {
+        "type": "object",
+        "required": [
+          "totalMemoryMb",
+          "totalCpus",
+          "allocatedMemoryMb",
+          "allocatedCpus",
+          "deploymentCount",
+          "deploymentsByState",
+          "teamCount",
+          "memberCount"
+        ],
+        "properties": {
+          "totalMemoryMb": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "totalCpus": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "allocatedMemoryMb": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "allocatedCpus": {
+            "type": "number",
+            "format": "float"
+          },
+          "deploymentCount": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "deploymentsByState": {
+            "type": "object",
+            "description": "Deployment counts keyed by the intended state recorded in the\ndatabase: `running`, `paused`, `disabled`, `provisioning`.",
+            "additionalProperties": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "teamCount": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "memberCount": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
           }
         }
       },
@@ -4994,6 +6078,22 @@
           }
         }
       },
+      "ProvisionerHealth": {
+        "type": "object",
+        "required": ["mode"],
+        "properties": {
+          "mode": {
+            "type": "string"
+          },
+          "dockerReachable": {
+            "type": ["boolean", "null"],
+            "description": "`None` when the mode does not own containers, so there is no socket\nto check. Reporting `false` there would read as a fault when nothing\nis wrong."
+          },
+          "error": {
+            "type": ["string", "null"]
+          }
+        }
+      },
       "RegisterDeploymentArgs": {
         "type": "object",
         "description": "Body of `POST /api/dashboard/deployments/register` — used by operators in\n`--provisioner external` mode to tell the orchestrator about a backend\nthey pre-started. The orchestrator stores the URL + an admin-key hash so\nthe dashboard and CLI can look it up later.",
@@ -5045,6 +6145,24 @@
             "type": "integer",
             "format": "int64",
             "minimum": 0
+          }
+        }
+      },
+      "RenameTeamArgs": {
+        "type": "object",
+        "required": ["name"],
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "RestartArgs": {
+        "type": "object",
+        "properties": {
+          "force": {
+            "type": ["boolean", "null"],
+            "description": "Bypass the host capacity check, as the management route does."
           }
         }
       },
@@ -5250,6 +6368,34 @@
           }
         }
       },
+      "SuperAdminArgs": {
+        "type": "object",
+        "required": ["grant"],
+        "properties": {
+          "grant": {
+            "type": "boolean"
+          }
+        }
+      },
+      "TeamActionResponse": {
+        "type": "object",
+        "required": ["teamId", "slug", "deploymentsRemoved"],
+        "properties": {
+          "teamId": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "slug": {
+            "type": "string"
+          },
+          "deploymentsRemoved": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How many deployments the action tore down. Zero for anything but a\ndelete.",
+            "minimum": 0
+          }
+        }
+      },
       "TeamAndProjectForDeploymentResponse": {
         "type": "object",
         "required": ["team", "project", "teamId", "projectId", "isDefault"],
@@ -5350,6 +6496,15 @@
             "type": "string"
           },
           "slug": {
+            "type": "string"
+          }
+        }
+      },
+      "TierArgs": {
+        "type": "object",
+        "required": ["tier"],
+        "properties": {
+          "tier": {
             "type": "string"
           }
         }
@@ -5525,6 +6680,10 @@
     {
       "name": "dashboard",
       "description": "/api/dashboard: private dashboard API"
+    },
+    {
+      "name": "admin",
+      "description": "/api/admin: instance-scoped operator API (super-admin only)"
     },
     {
       "name": "dashboard_stubs",

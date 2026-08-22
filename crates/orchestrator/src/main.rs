@@ -19,13 +19,17 @@ use tracing_subscriber::{
 )]
 struct Args {
     /// Address for the provisioning API (mirrors prod BigBrain port 8050).
-    #[arg(long, env = "CONVEX_ORCHESTRATOR_PROVISION_ADDR", default_value = "0.0.0.0:8050")]
+    #[arg(
+        long,
+        env = "CONVEX_ORCHESTRATOR_PROVISION_ADDR",
+        default_value = "0.0.0.0:8050"
+    )]
     provision_addr: String,
 
-    /// Postgres connection URL. PlanetScale Postgres requires `sslmode=require`.
-    /// Format: `postgres://user:pass@host:5432/dbname?sslmode=require`.
-    /// Required to start the server; not required when only `--print-openapi`
-    /// is set.
+    /// Postgres connection URL. PlanetScale Postgres requires
+    /// `sslmode=require`. Format: `postgres://user:pass@host:5432/dbname?
+    /// sslmode=require`. Required to start the server; not required when
+    /// only `--print-openapi` is set.
     #[arg(long, env = "CONVEX_ORCHESTRATOR_DATABASE_URL")]
     database_url: Option<String>,
 
@@ -56,7 +60,11 @@ struct Args {
     print_openapi: bool,
 
     /// Provisioner mode: `external`, `process`, or `docker`.
-    #[arg(long, env = "CONVEX_ORCHESTRATOR_PROVISIONER", default_value = "external")]
+    #[arg(
+        long,
+        env = "CONVEX_ORCHESTRATOR_PROVISIONER",
+        default_value = "external"
+    )]
     provisioner: String,
 
     /// Image tag the docker provisioner uses for spawned backends.
@@ -126,6 +134,16 @@ struct Args {
         default_value = "http"
     )]
     router_public_scheme: String,
+
+    /// Seconds between reconcile passes over tenant containers. `0` runs a
+    /// single pass at boot and never again, which was the behaviour before
+    /// this knob existed. Docker provisioner mode only.
+    #[arg(
+        long,
+        env = "CONVEX_ORCHESTRATOR_RECONCILE_INTERVAL_SECS",
+        default_value_t = 60
+    )]
+    reconcile_interval_secs: u64,
 
     /// When true, spawned backend containers get direct Traefik routers for
     /// their API and site hosts. The in-orchestrator proxy remains a
@@ -277,6 +295,7 @@ async fn main() -> anyhow::Result<()> {
         traefik_cert_dir: args.traefik_cert_dir,
         acme_contact_email: args.acme_contact_email,
         acme_directory_url: args.acme_directory_url,
+        reconcile_interval_secs: args.reconcile_interval_secs,
     };
 
     tracing::info!(?config.data_root, "starting convex-orchestrator");

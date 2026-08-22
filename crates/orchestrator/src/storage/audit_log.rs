@@ -11,6 +11,24 @@ pub struct AuditEntry {
     pub creation_time: i64,
 }
 
+/// An instance-scoped audit event: an operator action that belongs to no
+/// single team.
+///
+/// Separate from `AuditEntry` rather than making that type's `team_id`
+/// nullable. Team-scoped rows can never have a NULL `team_id` — the query
+/// filters on it — so widening the shared type would push an `Option` into
+/// the dashboard's audit route for a case it can never see.
+#[derive(Debug, Clone)]
+pub struct InstanceAuditEntry {
+    pub id: i64,
+    /// `None` for actions taken through the break-glass bootstrap
+    /// credential, which has no human behind it.
+    pub member_id: Option<i64>,
+    pub action: String,
+    pub metadata: serde_json::Value,
+    pub creation_time: i64,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct AuditQuery {
     pub team_id: i64,
@@ -33,7 +51,8 @@ impl Storage {
         let conn = self.pool().acquire().await?;
         conn.client()
             .execute(
-                "INSERT INTO audit_log_events (team_id, member_id, action, metadata, creation_time)
+                "INSERT INTO audit_log_events (team_id, member_id, action, metadata, \
+                 creation_time)
                  VALUES ($1, $2, $3, $4, $5)",
                 &[&team_id, &member_id, &action, metadata, &now],
             )
@@ -41,11 +60,68 @@ impl Storage {
         Ok(())
     }
 
+    /// Append an instance-scoped audit event.
+    ///
+    /// `team_id` is NULL and `scope` is `'instance'`, so the per-team query
+    /// below never returns these.
+    pub async fn append_instance_audit(
+        &self,
+        member_id: Option<i64>,
+        action: &str,
+        metadata: &serde_json::Value,
+    ) -> anyhow::Result<()> {
+        let now = now_unix_ms();
+        let conn = self.pool().acquire().await?;
+        conn.client()
+            .execute(
+                "INSERT INTO audit_log_events (team_id, member_id, action, metadata, \
+                 creation_time, scope)
+                 VALUES (NULL, $1, $2, $3, $4, 'instance')",
+                &[&member_id, &action, metadata, &now],
+            )
+            .await?;
+        Ok(())
+    }
+
+    /// Most recent instance-scoped events, newest first.
+    pub async fn list_instance_audit(&self, limit: i64) -> anyhow::Result<Vec<InstanceAuditEntry>> {
+        let limit = limit.clamp(1, 1000);
+        let conn = self.pool().acquire().await?;
+        let rows = conn
+            .client()
+            .query(
+                // Tie-break on `id`: creation_time is millisecond precision,
+                // so two events written in the same millisecond would
+                // otherwise come back in arbitrary order. `id` is a
+                // BIGSERIAL, so it is monotonic and makes the sort stable.
+                "SELECT id, member_id, action, metadata, creation_time
+                   FROM audit_log_events
+                  WHERE scope = 'instance'
+                  ORDER BY creation_time DESC, id DESC
+                  LIMIT $1",
+                &[&limit],
+            )
+            .await?;
+        Ok(rows
+            .into_iter()
+            .map(|r| InstanceAuditEntry {
+                id: r.get(0),
+                member_id: r.get(1),
+                action: r.get(2),
+                metadata: r.get(3),
+                creation_time: r.get(4),
+            })
+            .collect())
+    }
+
     pub async fn query_audit(&self, q: &AuditQuery) -> anyhow::Result<Vec<AuditEntry>> {
         let limit = q.limit.unwrap_or(100).min(1000);
+        // The `scope` filter is redundant against `team_id = $1` today
+        // (instance rows have a NULL team_id) but is stated explicitly so
+        // this query stays correct if the default ever changes.
         let mut sql = String::from(
-            "SELECT id, team_id, member_id, action, metadata, creation_time \
-             FROM audit_log_events WHERE team_id = $1",
+            "SELECT id, team_id, member_id, action, metadata, creation_time FROM audit_log_events \
+             WHERE team_id = $1 AND scope = 'team'",
         );
         let mut params: Vec<Box<dyn tokio_postgres::types::ToSql + Sync + Send>> =
             vec![Box::new(q.team_id)];
@@ -65,10 +141,7 @@ impl Storage {
             params.push(Box::new(to));
             sql.push_str(&format!(" AND creation_time <= ${}", params.len()));
         }
-        // Tie-break on `id`: creation_time is millisecond precision, so two
-        // events written in the same millisecond would otherwise come back
-        // in arbitrary order. `id` is a BIGSERIAL, so it is monotonic and
-        // makes the sort stable.
+        // Same millisecond-collision tie-break as `list_instance_audit`.
         sql.push_str(" ORDER BY creation_time DESC, id DESC LIMIT ");
         sql.push_str(&limit.to_string());
 
