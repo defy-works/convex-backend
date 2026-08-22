@@ -1599,10 +1599,21 @@ async fn admin_queries_span_all_teams() {
 /// super-admin pass must reach the handler rather than bouncing off a path
 /// parse error, or it proves nothing about the gate.
 #[cfg(test)]
-fn concrete_admin_route(template: &str, deployment_id: i64) -> (String, Option<serde_json::Value>) {
-    let path = template.replace("{deployment_id}", &deployment_id.to_string());
+fn concrete_admin_route(
+    template: &str,
+    deployment_id: i64,
+    member_id: i64,
+) -> (String, Option<serde_json::Value>) {
+    let path = template
+        .replace("{deployment_id}", &deployment_id.to_string())
+        .replace("{member_id}", &member_id.to_string());
     let body = if template.ends_with("/tier") {
         Some(serde_json::json!({ "tier": "S16" }))
+    } else if template.ends_with("/super_admin") {
+        // Grant rather than revoke: revoking would trip the
+        // last-super-admin guard against the very account this test
+        // authenticates as.
+        Some(serde_json::json!({ "grant": true }))
     } else {
         None
     };
@@ -1678,7 +1689,7 @@ async fn every_admin_route_rejects_non_super_admins() {
     for (method, path) in ADMIN_ROUTES {
         // Any id will do here: authorization is checked before the handler
         // ever looks the deployment up.
-        let (concrete, _) = concrete_admin_route(path, 1);
+        let (concrete, _) = concrete_admin_route(path, 1, 1);
         // Unauthenticated.
         let resp = app
             .clone()
@@ -1771,7 +1782,21 @@ async fn every_admin_route_rejects_non_super_admins() {
             .await
             .expect("fixture deployment");
 
-        let (concrete, body) = concrete_admin_route(path, d.id);
+        // A throwaway member per route, for the same reason as the
+        // deployment: `/members/{id}/delete` removes the one it is given.
+        // Never the authenticated operator — deleting them mid-loop would
+        // fail every later route with a 401.
+        let victim = state
+            .storage
+            .upsert_member(
+                &format!("auth-fixture-{i}"),
+                &format!("fixture{i}@example.com"),
+                Some("Fixture"),
+            )
+            .await
+            .expect("fixture member");
+
+        let (concrete, body) = concrete_admin_route(path, d.id, victim.id);
         let mut req = Request::builder()
             .method(*method)
             .uri(&concrete)
@@ -2174,5 +2199,152 @@ fn pause_and_resume_touch_containers_in_dependency_order() {
         up,
         down.iter().rev().cloned().collect::<Vec<_>>(),
         "resume must be the exact reverse of pause"
+    );
+}
+
+/// Revoking the last super-admin must be a 409 the console can explain, not
+/// a 500.
+///
+/// The storage guard already refuses; this asserts the route maps that
+/// refusal to something a human can act on. A 500 tells the operator
+/// nothing and reads as a bug in the console.
+#[tokio::test]
+#[ignore = "needs TEST_ORCHESTRATOR_DATABASE_URL"]
+async fn revoking_the_last_super_admin_is_a_client_error() {
+    use std::sync::Arc;
+
+    use axum::{
+        body::Body,
+        http::{
+            header::AUTHORIZATION,
+            Request,
+            StatusCode,
+        },
+    };
+    use http_body_util::BodyExt;
+    use orchestrator::{
+        router::build_router,
+        state::OrchestratorState,
+        storage::{
+            access_tokens::NewAccessToken,
+            AccessTokenKind,
+        },
+    };
+    use tower::ServiceExt;
+
+    let database_url = std::env::var("TEST_ORCHESTRATOR_DATABASE_URL")
+        .expect("TEST_ORCHESTRATOR_DATABASE_URL not set (this test is `#[ignore]` by default)");
+    reset_public_schema(&database_url).await;
+
+    let data_root = tempfile::tempdir().expect("tempdir");
+    let config = test_config(database_url, data_root.path().to_path_buf());
+    let mut state = OrchestratorState::new(config).await.expect("state");
+    state.provisioner = Arc::new(StubProvisioner);
+    let app = build_router(state.clone());
+
+    let op = state
+        .storage
+        .upsert_member("auth-op", "op@example.com", Some("Op"))
+        .await
+        .expect("member");
+    state
+        .storage
+        .set_super_admin(op.id, true)
+        .await
+        .expect("grant");
+
+    let secret = "op-secret";
+    state
+        .storage
+        .create_access_token(NewAccessToken {
+            public_id: "op-public",
+            kind: AccessTokenKind::Pat,
+            member_id: Some(op.id),
+            team_id: None,
+            project_id: None,
+            deployment_id: None,
+            name: "op-pat",
+            secret_hash: &orchestrator::auth::tokens::sha256_hex(secret),
+            secret_suffix: "cret",
+            expiry: None,
+        })
+        .await
+        .expect("pat");
+    let bearer = format!("Bearer pat:op-public|{secret}");
+
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/admin/members/{}/super_admin", op.id))
+                .header(AUTHORIZATION, &bearer)
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"grant":false}"#))
+                .unwrap(),
+        )
+        .await
+        .expect("send revoke");
+    assert_eq!(
+        resp.status(),
+        StatusCode::CONFLICT,
+        "revoking the last super-admin must be 409, not 500"
+    );
+    let body = resp.into_body().collect().await.unwrap().to_bytes();
+    let v: serde_json::Value = serde_json::from_slice(&body).expect("json body");
+    assert!(
+        v["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("last super-admin"),
+        "the error must say why, got {v}"
+    );
+
+    // The bit must survive the refused revoke.
+    let reloaded = state
+        .storage
+        .get_member(op.id)
+        .await
+        .expect("get")
+        .expect("exists");
+    assert!(reloaded.is_super_admin);
+
+    // With a second operator, the revoke succeeds.
+    let other = state
+        .storage
+        .upsert_member("auth-two", "two@example.com", Some("Two"))
+        .await
+        .expect("member two");
+    state
+        .storage
+        .set_super_admin(other.id, true)
+        .await
+        .expect("grant two");
+
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/admin/members/{}/super_admin", other.id))
+                .header(AUTHORIZATION, &bearer)
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"grant":false}"#))
+                .unwrap(),
+        )
+        .await
+        .expect("send second revoke");
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // And it is recorded, because changing who can operate the instance is
+    // exactly the kind of thing an audit log exists for.
+    let events = state
+        .storage
+        .list_instance_audit(10)
+        .await
+        .expect("instance audit");
+    assert!(
+        events.iter().any(|e| e.action == "superAdminRevoked"),
+        "the revoke must be audited, got {:?}",
+        events.iter().map(|e| &e.action).collect::<Vec<_>>()
     );
 }

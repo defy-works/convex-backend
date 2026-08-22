@@ -124,6 +124,19 @@ impl Storage {
     /// a read-then-write, so two concurrent revokes cannot both observe a
     /// count of 2 and both succeed.
     pub async fn set_super_admin(&self, member_id: i64, value: bool) -> anyhow::Result<()> {
+        // Revoking from someone who is not an operator is a no-op, not a
+        // last-operator violation. Without this the guard below fires for
+        // any revoke while exactly one operator exists — even when the
+        // target is a different, non-operator member — and reports a reason
+        // that is simply untrue.
+        if !value {
+            let current = self.get_member(member_id).await?;
+            match current {
+                Some(m) if !m.is_super_admin => return Ok(()),
+                Some(_) => {},
+                None => anyhow::bail!("member {member_id} not found"),
+            }
+        }
         let conn = self.pool().acquire().await?;
         let affected = if value {
             conn.client()

@@ -8,6 +8,7 @@ pub(crate) mod audit;
 pub(crate) mod deployment_actions;
 pub mod fleet;
 pub(crate) mod health;
+pub(crate) mod member_actions;
 pub(crate) mod members;
 pub(crate) mod overview;
 
@@ -71,6 +72,10 @@ pub const ADMIN_ROUTES: &[(&str, &str)] = &[
     ("POST", "/api/admin/deployments/{deployment_id}/restart"),
     ("POST", "/api/admin/deployments/{deployment_id}/tier"),
     ("POST", "/api/admin/deployments/{deployment_id}/delete"),
+    ("POST", "/api/admin/members/{member_id}/suspend"),
+    ("POST", "/api/admin/members/{member_id}/unsuspend"),
+    ("POST", "/api/admin/members/{member_id}/super_admin"),
+    ("POST", "/api/admin/members/{member_id}/delete"),
 ];
 
 pub fn router() -> Router<OrchestratorState> {
@@ -100,4 +105,17 @@ pub fn router() -> Router<OrchestratorState> {
             "/deployments/{deployment_id}/delete",
             post(deployment_actions::delete),
         )
+        .route(
+            "/members/{member_id}/suspend",
+            post(member_actions::suspend),
+        )
+        .route(
+            "/members/{member_id}/unsuspend",
+            post(member_actions::unsuspend),
+        )
+        .route(
+            "/members/{member_id}/super_admin",
+            post(member_actions::set_super_admin),
+        )
+        .route("/members/{member_id}/delete", post(member_actions::delete))
 }

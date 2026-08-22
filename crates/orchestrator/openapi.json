@@ -3896,6 +3896,150 @@
           }
         }
       }
+    },
+    "/api/admin/members/{member_id}/suspend": {
+      "post": {
+        "tags": ["admin"],
+        "operationId": "suspend",
+        "parameters": [
+          {
+            "name": "member_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemberActionResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "not a super-admin"
+          }
+        }
+      }
+    },
+    "/api/admin/members/{member_id}/unsuspend": {
+      "post": {
+        "tags": ["admin"],
+        "operationId": "unsuspend",
+        "parameters": [
+          {
+            "name": "member_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemberActionResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "not a super-admin"
+          }
+        }
+      }
+    },
+    "/api/admin/members/{member_id}/super_admin": {
+      "post": {
+        "tags": ["admin"],
+        "operationId": "set_super_admin",
+        "parameters": [
+          {
+            "name": "member_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SuperAdminArgs"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemberActionResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "not a super-admin"
+          },
+          "409": {
+            "description": "would revoke the last super-admin"
+          }
+        }
+      }
+    },
+    "/api/admin/members/{member_id}/delete": {
+      "post": {
+        "tags": ["admin"],
+        "operationId": "delete",
+        "parameters": [
+          {
+            "name": "member_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemberActionResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "not a super-admin"
+          },
+          "409": {
+            "description": "would remove the last super-admin"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -5002,6 +5146,25 @@
           }
         }
       },
+      "MemberActionResponse": {
+        "type": "object",
+        "required": ["memberId", "email", "isSuperAdmin", "suspended"],
+        "properties": {
+          "memberId": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "email": {
+            "type": "string"
+          },
+          "isSuperAdmin": {
+            "type": "boolean"
+          },
+          "suspended": {
+            "type": "boolean"
+          }
+        }
+      },
       "MemberDataResponse": {
         "type": "object",
         "required": ["member", "teams"],
@@ -5916,6 +6079,15 @@
           },
           "teamName": {
             "type": ["string", "null"]
+          }
+        }
+      },
+      "SuperAdminArgs": {
+        "type": "object",
+        "required": ["grant"],
+        "properties": {
+          "grant": {
+            "type": "boolean"
           }
         }
       },
