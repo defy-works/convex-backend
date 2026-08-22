@@ -90,6 +90,8 @@ export type AdminHealth = z.infer<typeof adminHealthSchema>;
 export const instanceAuditEventSchema = z.object({
   id: z.number(),
   memberId: z.number().nullable(),
+  /** Resolved server-side; null for break-glass or a deleted member. */
+  memberEmail: z.string().nullable(),
   action: z.string(),
   metadata: z.unknown(),
   creationTime: z.number(),
@@ -200,5 +202,122 @@ export function getAdminAudit(baseUrl: string, token: string, limit = 100) {
     `/api/admin/audit?limit=${limit}`,
     token,
     z.object({ events: z.array(instanceAuditEventSchema) }),
+  );
+}
+
+export const adminTeamSchema = z.object({
+  id: z.number(),
+  name: z.string(),
+  slug: z.string(),
+  creationTime: z.number(),
+  memberCount: z.number(),
+  projectCount: z.number(),
+  /** Drives the delete confirmation's blast-radius warning. */
+  deploymentCount: z.number(),
+});
+export type AdminTeam = z.infer<typeof adminTeamSchema>;
+
+export const teamActionResponseSchema = z.object({
+  teamId: z.number(),
+  slug: z.string(),
+  deploymentsRemoved: z.number(),
+});
+
+export const memberActionResponseSchema = z.object({
+  memberId: z.number(),
+  email: z.string(),
+  isSuperAdmin: z.boolean(),
+  suspended: z.boolean(),
+});
+
+export const breakGlassResponseSchema = z.object({
+  deployment: z.string(),
+  url: z.string(),
+  /** Shown once. Never persisted. */
+  adminKey: z.string(),
+  expiresAt: z.number(),
+  tenantNotified: z.boolean(),
+});
+export type BreakGlassGrant = z.infer<typeof breakGlassResponseSchema>;
+
+export function getAdminTeams(baseUrl: string, token: string) {
+  return adminGet(
+    baseUrl,
+    "/api/admin/teams",
+    token,
+    z.object({ teams: z.array(adminTeamSchema) }),
+  );
+}
+
+export const teamActions = {
+  create: (baseUrl: string, token: string, name: string) =>
+    adminPost(baseUrl, "/api/admin/teams", token, teamActionResponseSchema, {
+      name,
+    }),
+  rename: (baseUrl: string, token: string, id: number, name: string) =>
+    adminPost(
+      baseUrl,
+      `/api/admin/teams/${id}`,
+      token,
+      teamActionResponseSchema,
+      { name },
+    ),
+  remove: (baseUrl: string, token: string, id: number) =>
+    adminPost(
+      baseUrl,
+      `/api/admin/teams/${id}/delete`,
+      token,
+      teamActionResponseSchema,
+    ),
+};
+
+export const memberActions = {
+  suspend: (baseUrl: string, token: string, id: number) =>
+    adminPost(
+      baseUrl,
+      `/api/admin/members/${id}/suspend`,
+      token,
+      memberActionResponseSchema,
+    ),
+  unsuspend: (baseUrl: string, token: string, id: number) =>
+    adminPost(
+      baseUrl,
+      `/api/admin/members/${id}/unsuspend`,
+      token,
+      memberActionResponseSchema,
+    ),
+  setSuperAdmin: (baseUrl: string, token: string, id: number, grant: boolean) =>
+    adminPost(
+      baseUrl,
+      `/api/admin/members/${id}/super_admin`,
+      token,
+      memberActionResponseSchema,
+      { grant },
+    ),
+  remove: (baseUrl: string, token: string, id: number) =>
+    adminPost(
+      baseUrl,
+      `/api/admin/members/${id}/delete`,
+      token,
+      memberActionResponseSchema,
+    ),
+};
+
+/**
+ * Break-glass access. The reason is recorded in the tenant's own audit log,
+ * so callers must have told the operator that before calling this.
+ */
+export function grantBreakGlassAccess(
+  baseUrl: string,
+  token: string,
+  deploymentId: number,
+  reason: string,
+) {
+  return adminPost(
+    baseUrl,
+    `/api/admin/deployments/${deploymentId}/access`,
+    token,
+    breakGlassResponseSchema,
+    { reason },
   );
 }

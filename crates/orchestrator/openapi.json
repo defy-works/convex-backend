@@ -5269,6 +5269,10 @@
             "format": "int64",
             "description": "`None` for actions taken through the break-glass bootstrap\ncredential, which has no human behind it."
           },
+          "memberEmail": {
+            "type": ["string", "null"],
+            "description": "Resolved server-side. `None` when there is no member, or the member\nhas since been deleted."
+          },
           "action": {
             "type": "string"
           },

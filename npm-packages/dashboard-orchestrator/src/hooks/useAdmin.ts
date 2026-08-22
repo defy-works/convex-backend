@@ -7,6 +7,7 @@
 import useSWR from "swr";
 import {
   getAdminAudit,
+  getAdminTeams,
   getAdminFleet,
   getAdminHealth,
   getAdminMembers,
@@ -61,5 +62,13 @@ export function useAdminAudit(limit = 100) {
   const url = orchestratorUrl();
   return useSWR(token ? ["admin/audit", token, limit] : null, () =>
     getAdminAudit(url, token!, limit),
+  );
+}
+
+export function useAdminTeams() {
+  const token = useAccessToken();
+  const url = orchestratorUrl();
+  return useSWR(token ? ["admin/teams", token] : null, () =>
+    getAdminTeams(url, token!),
   );
 }

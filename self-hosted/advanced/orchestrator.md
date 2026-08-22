@@ -437,6 +437,34 @@ it where nothing will list it again.
 
 Every action is recorded in the instance audit log.
 
+### Governance
+
+Members and teams are managed from the console. Suspending a member blocks
+authentication while preserving their teams, projects, and audit history;
+deleting is the permanent case. Deleting a member who is an operator clears that
+flag first, so the console cannot delete its way to an instance nobody can
+administer — the same guard that refuses to revoke the last operator.
+
+Deleting a team cascades to its projects and tears down every deployment
+underneath. The confirmation states the deployment count before you commit, and
+asks for the team **slug** typed exactly.
+
+### Break-glass access
+
+Opening a tenant's deployment from the console is deliberately ceremonious:
+
+- a **reason is required**, and is recorded verbatim;
+- the admin key is **minted fresh with a 15-minute TTL** — never the
+  deployment's permanent key;
+- the event is written to the **tenant's own audit log** as well as the
+  instance's, so the team can see that an operator opened their deployment and
+  why.
+
+That last point is the design, not a nicety. An audit trail only the operator
+can read is not accountability. The modal says so before you confirm.
+
+Break-glass events are highlighted in the instance audit log.
+
 ### Health endpoints
 
 | Path                | Auth     | Meaning                                                                       |

@@ -2,10 +2,16 @@
 // what docker is actually doing, plus the lifecycle actions.
 
 import { useMemo, useState } from "react";
+import { BreakGlassModal } from "../../components/admin/BreakGlassModal";
 import { ConfirmByName } from "../../components/admin/ConfirmByName";
 import { AdminLayout } from "../../components/admin/AdminLayout";
 import { useAdminFleet } from "../../hooks/useAdmin";
-import { deploymentActions, type FleetEntry } from "../../lib/adminApi";
+import {
+  deploymentActions,
+  grantBreakGlassAccess,
+  type BreakGlassGrant,
+  type FleetEntry,
+} from "../../lib/adminApi";
 import { orchestratorUrl } from "../../lib/config";
 import { useAccessToken } from "../../lib/useOrchestratorToken";
 
@@ -20,6 +26,9 @@ export default function AdminDeploymentsPage() {
   const [busyId, setBusyId] = useState<number | null>(null);
   const [notice, setNotice] = useState<Notice | null>(null);
   const [pendingDelete, setPendingDelete] = useState<FleetEntry | null>(null);
+  const [breakGlassFor, setBreakGlassFor] = useState<FleetEntry | null>(null);
+  const [grant, setGrant] = useState<BreakGlassGrant | null>(null);
+  const [grantError, setGrantError] = useState<string | null>(null);
 
   const rows = useMemo(() => {
     if (!data) return [];
@@ -176,6 +185,18 @@ export default function AdminDeploymentsPage() {
                       <button
                         type="button"
                         disabled={busy || !token}
+                        onClick={() => {
+                          setGrant(null);
+                          setGrantError(null);
+                          setBreakGlassFor(d);
+                        }}
+                        className="rounded border border-util-warning px-2 py-1 text-xs disabled:opacity-40"
+                      >
+                        Open…
+                      </button>
+                      <button
+                        type="button"
+                        disabled={busy || !token}
                         onClick={() => setPendingDelete(d)}
                         className="rounded border border-util-error px-2 py-1 text-xs disabled:opacity-40"
                       >
@@ -224,6 +245,40 @@ export default function AdminDeploymentsPage() {
               . Its data is not recoverable from here.
             </>
           }
+        />
+      ) : null}
+
+      {breakGlassFor ? (
+        <BreakGlassModal
+          deployment={breakGlassFor}
+          grant={grant}
+          busy={busyId === breakGlassFor.id}
+          error={grantError}
+          onClose={() => {
+            setBreakGlassFor(null);
+            // Drop the key as soon as the modal closes: it is shown once and
+            // has no business living in component state afterwards.
+            setGrant(null);
+          }}
+          onConfirm={async (reason) => {
+            if (!token) return;
+            setBusyId(breakGlassFor.id);
+            setGrantError(null);
+            try {
+              setGrant(
+                await grantBreakGlassAccess(
+                  url,
+                  token,
+                  breakGlassFor.id,
+                  reason,
+                ),
+              );
+            } catch (e) {
+              setGrantError(String(e));
+            } finally {
+              setBusyId(null);
+            }
+          }}
         />
       ) : null}
     </AdminLayout>

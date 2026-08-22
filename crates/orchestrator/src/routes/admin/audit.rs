@@ -46,6 +46,9 @@ pub struct InstanceAuditEvent {
     /// `None` for actions taken through the break-glass bootstrap
     /// credential, which has no human behind it.
     pub member_id: Option<i64>,
+    /// Resolved server-side. `None` when there is no member, or the member
+    /// has since been deleted.
+    pub member_email: Option<String>,
     pub action: String,
     pub metadata: serde_json::Value,
     pub creation_time: i64,
@@ -75,7 +78,7 @@ pub(crate) async fn instance_audit(
     let limit = q.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
     let records = state
         .storage
-        .list_instance_audit(limit)
+        .list_instance_audit_with_actors(limit)
         .await
         .map_err(ApiError::Internal)?;
     let events = records
@@ -83,6 +86,7 @@ pub(crate) async fn instance_audit(
         .map(|r| InstanceAuditEvent {
             id: r.id,
             member_id: r.member_id,
+            member_email: r.member_email,
             action: r.action,
             metadata: r.metadata,
             creation_time: r.creation_time,

@@ -16,6 +16,8 @@ const TABS = [
   { href: "/admin", label: "Overview" },
   { href: "/admin/deployments", label: "Deployments" },
   { href: "/admin/members", label: "Members" },
+  { href: "/admin/teams", label: "Teams" },
+  { href: "/admin/audit", label: "Audit" },
 ];
 
 export function AdminLayout({

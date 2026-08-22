@@ -224,3 +224,55 @@ impl Storage {
             .collect())
     }
 }
+
+/// An instance audit event with the actor's email resolved.
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct AdminAuditRow {
+    pub id: i64,
+    pub member_id: Option<i64>,
+    /// `None` for break-glass (no member) or a member since deleted.
+    pub member_email: Option<String>,
+    pub action: String,
+    pub metadata: serde_json::Value,
+    pub creation_time: i64,
+}
+
+impl Storage {
+    /// Instance audit events, newest first, with actor emails joined.
+    ///
+    /// Joined here rather than looked up per row by the client: an audit
+    /// page is exactly the place where N+1 requests show up as a visibly
+    /// slow table.
+    pub async fn list_instance_audit_with_actors(
+        &self,
+        limit: i64,
+    ) -> anyhow::Result<Vec<AdminAuditRow>> {
+        let limit = limit.clamp(1, 1000);
+        let conn = self.pool().acquire().await?;
+        let rows = conn
+            .client()
+            .query(
+                "SELECT a.id, a.member_id, m.primary_email, a.action, a.metadata,
+                        a.creation_time
+                   FROM audit_log_events a
+                   LEFT JOIN members m ON m.id = a.member_id
+                  WHERE a.scope = 'instance'
+                  ORDER BY a.creation_time DESC, a.id DESC
+                  LIMIT $1",
+                &[&limit],
+            )
+            .await?;
+        Ok(rows
+            .into_iter()
+            .map(|r| AdminAuditRow {
+                id: r.get(0),
+                member_id: r.get(1),
+                member_email: r.get(2),
+                action: r.get(3),
+                metadata: r.get(4),
+                creation_time: r.get(5),
+            })
+            .collect())
+    }
+}
