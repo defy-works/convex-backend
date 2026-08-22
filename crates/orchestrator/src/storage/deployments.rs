@@ -208,10 +208,7 @@ impl Storage {
         Ok(row.try_get::<_, Option<i64>>(0).ok().flatten())
     }
 
-    pub async fn list_deployments(
-        &self,
-        project_id: i64,
-    ) -> anyhow::Result<Vec<DeploymentRecord>> {
+    pub async fn list_deployments(&self, project_id: i64) -> anyhow::Result<Vec<DeploymentRecord>> {
         let conn = self.pool().acquire().await?;
         let rows = conn
             .client()
@@ -266,6 +263,46 @@ impl Storage {
         Ok(row.map(map_deployment))
     }
 
+    /// Mark a deployment paused. Idempotent.
+    ///
+    /// Refuses while `provisioning`: `reconcile::plan` reads `paused` as
+    /// "not running by intent" and leaves the container alone, so pausing a
+    /// half-built deployment would strand it there permanently.
+    pub async fn pause_deployment(&self, deployment_id: i64) -> anyhow::Result<()> {
+        self.transition_state(deployment_id, DeploymentState::Paused)
+            .await
+    }
+
+    /// Mark a deployment running. Idempotent.
+    pub async fn resume_deployment(&self, deployment_id: i64) -> anyhow::Result<()> {
+        self.transition_state(deployment_id, DeploymentState::Running)
+            .await
+    }
+
+    /// Shared guard for operator-driven state changes.
+    ///
+    /// Deliberately narrower than `update_deployment_state`, which stays
+    /// unguarded because provisioning itself has to be able to write
+    /// `Provisioning` and then `Running`.
+    async fn transition_state(
+        &self,
+        deployment_id: i64,
+        target: DeploymentState,
+    ) -> anyhow::Result<()> {
+        let current = self
+            .get_deployment(deployment_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("deployment {deployment_id} not found"))?;
+        if matches!(current.state, DeploymentState::Provisioning) {
+            anyhow::bail!(
+                "deployment {} is still provisioning; wait for it to finish before changing its \
+                 state",
+                current.name
+            );
+        }
+        self.update_deployment_state(deployment_id, target).await
+    }
+
     pub async fn update_deployment_state(
         &self,
         id: i64,
@@ -296,11 +333,7 @@ impl Storage {
         Ok(())
     }
 
-    pub async fn transfer_deployment(
-        &self,
-        id: i64,
-        new_project_id: i64,
-    ) -> anyhow::Result<()> {
+    pub async fn transfer_deployment(&self, id: i64, new_project_id: i64) -> anyhow::Result<()> {
         let conn = self.pool().acquire().await?;
         conn.client()
             .execute(
@@ -352,7 +385,8 @@ impl Storage {
     ///
     /// `desired_tier`:
     ///   - `None`        → leave the column unchanged
-    ///   - `Some(None)`  → set the column to SQL NULL (fall back to project tier)
+    ///   - `Some(None)`  → set the column to SQL NULL (fall back to project
+    ///     tier)
     ///   - `Some(Some("S32"))` → set the column to "S32"
     ///
     /// `desired_overrides`:
@@ -467,11 +501,38 @@ impl Storage {
     }
 }
 
-const SELECT_DEPLOYMENT_BY_ID: &str = "SELECT id, project_id, name, deployment_type, deployment_class, region, url, site_url, backend_pid, backend_port, creator_id, creation_time, state, preview_identifier, instance_secret, tier, knob_overrides, desired_tier, desired_overrides, storage_mode, pg_password, minio_root_user, minio_root_password, backend_instance_secret, desired_url, desired_site_url FROM deployments WHERE id = $1";
-const SELECT_DEPLOYMENT_BY_NAME: &str = "SELECT id, project_id, name, deployment_type, deployment_class, region, url, site_url, backend_pid, backend_port, creator_id, creation_time, state, preview_identifier, instance_secret, tier, knob_overrides, desired_tier, desired_overrides, storage_mode, pg_password, minio_root_user, minio_root_password, backend_instance_secret, desired_url, desired_site_url FROM deployments WHERE name = $1";
-const SELECT_DEPLOYMENTS_BY_PROJECT: &str = "SELECT id, project_id, name, deployment_type, deployment_class, region, url, site_url, backend_pid, backend_port, creator_id, creation_time, state, preview_identifier, instance_secret, tier, knob_overrides, desired_tier, desired_overrides, storage_mode, pg_password, minio_root_user, minio_root_password, backend_instance_secret, desired_url, desired_site_url FROM deployments WHERE project_id = $1 ORDER BY creation_time ASC";
-const SELECT_ALL_DEPLOYMENTS: &str = "SELECT id, project_id, name, deployment_type, deployment_class, region, url, site_url, backend_pid, backend_port, creator_id, creation_time, state, preview_identifier, instance_secret, tier, knob_overrides, desired_tier, desired_overrides, storage_mode, pg_password, minio_root_user, minio_root_password, backend_instance_secret, desired_url, desired_site_url FROM deployments ORDER BY creation_time ASC";
-const SELECT_DEPLOYMENTS_BY_TEAM: &str = "SELECT d.id, d.project_id, d.name, d.deployment_type, d.deployment_class, d.region, d.url, d.site_url, d.backend_pid, d.backend_port, d.creator_id, d.creation_time, d.state, d.preview_identifier, d.instance_secret, d.tier, d.knob_overrides, d.desired_tier, d.desired_overrides, d.storage_mode, d.pg_password, d.minio_root_user, d.minio_root_password, d.backend_instance_secret, d.desired_url, d.desired_site_url FROM deployments d INNER JOIN projects p ON p.id = d.project_id WHERE p.team_id = $1 ORDER BY d.creation_time ASC";
+const SELECT_DEPLOYMENT_BY_ID: &str =
+    "SELECT id, project_id, name, deployment_type, deployment_class, region, url, site_url, \
+     backend_pid, backend_port, creator_id, creation_time, state, preview_identifier, \
+     instance_secret, tier, knob_overrides, desired_tier, desired_overrides, storage_mode, \
+     pg_password, minio_root_user, minio_root_password, backend_instance_secret, desired_url, \
+     desired_site_url FROM deployments WHERE id = $1";
+const SELECT_DEPLOYMENT_BY_NAME: &str =
+    "SELECT id, project_id, name, deployment_type, deployment_class, region, url, site_url, \
+     backend_pid, backend_port, creator_id, creation_time, state, preview_identifier, \
+     instance_secret, tier, knob_overrides, desired_tier, desired_overrides, storage_mode, \
+     pg_password, minio_root_user, minio_root_password, backend_instance_secret, desired_url, \
+     desired_site_url FROM deployments WHERE name = $1";
+const SELECT_DEPLOYMENTS_BY_PROJECT: &str =
+    "SELECT id, project_id, name, deployment_type, deployment_class, region, url, site_url, \
+     backend_pid, backend_port, creator_id, creation_time, state, preview_identifier, \
+     instance_secret, tier, knob_overrides, desired_tier, desired_overrides, storage_mode, \
+     pg_password, minio_root_user, minio_root_password, backend_instance_secret, desired_url, \
+     desired_site_url FROM deployments WHERE project_id = $1 ORDER BY creation_time ASC";
+const SELECT_ALL_DEPLOYMENTS: &str =
+    "SELECT id, project_id, name, deployment_type, deployment_class, region, url, site_url, \
+     backend_pid, backend_port, creator_id, creation_time, state, preview_identifier, \
+     instance_secret, tier, knob_overrides, desired_tier, desired_overrides, storage_mode, \
+     pg_password, minio_root_user, minio_root_password, backend_instance_secret, desired_url, \
+     desired_site_url FROM deployments ORDER BY creation_time ASC";
+const SELECT_DEPLOYMENTS_BY_TEAM: &str =
+    "SELECT d.id, d.project_id, d.name, d.deployment_type, d.deployment_class, d.region, d.url, \
+     d.site_url, d.backend_pid, d.backend_port, d.creator_id, d.creation_time, d.state, \
+     d.preview_identifier, d.instance_secret, d.tier, d.knob_overrides, d.desired_tier, \
+     d.desired_overrides, d.storage_mode, d.pg_password, d.minio_root_user, \
+     d.minio_root_password, d.backend_instance_secret, d.desired_url, d.desired_site_url FROM \
+     deployments d INNER JOIN projects p ON p.id = d.project_id WHERE p.team_id = $1 ORDER BY \
+     d.creation_time ASC";
 
 fn map_deployment(row: Row) -> DeploymentRecord {
     DeploymentRecord {

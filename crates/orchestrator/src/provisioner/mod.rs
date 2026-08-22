@@ -6,6 +6,7 @@ mod docker;
 pub mod env;
 mod external;
 mod process;
+pub mod lifecycle;
 pub mod sidecar;
 pub mod tiers;
 

@@ -331,7 +331,7 @@ async fn ensure_sidecars_ready(
 /// container's existing configuration — image, env, volumes, network,
 /// resource limits — so a reconcile can never silently re-provision a
 /// deployment under different settings than it was created with.
-async fn start_container(name: &str) -> anyhow::Result<()> {
+pub async fn start_container(name: &str) -> anyhow::Result<()> {
     let output = Command::new("docker")
         .args(["start", name])
         .output()

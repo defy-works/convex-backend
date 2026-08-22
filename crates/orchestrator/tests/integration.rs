@@ -1960,3 +1960,147 @@ async fn fleet_response_wire_shape_is_flat_camel_case() {
     assert_eq!(v["containerStatesAvailable"], false);
     assert_eq!(v["driftCount"], 0);
 }
+
+/// Pausing and resuming must be idempotent, and must refuse a deployment
+/// that is still provisioning.
+///
+/// `reconcile::plan` treats `paused` as "not running by intent" and leaves
+/// it alone, so pausing a half-built deployment would strand it there
+/// permanently.
+#[tokio::test]
+#[ignore = "needs TEST_ORCHESTRATOR_DATABASE_URL"]
+async fn deployment_state_transitions_are_guarded() {
+    use orchestrator::storage::DeploymentState;
+
+    let database_url = std::env::var("TEST_ORCHESTRATOR_DATABASE_URL")
+        .expect("TEST_ORCHESTRATOR_DATABASE_URL not set (this test is `#[ignore]` by default)");
+    reset_public_schema(&database_url).await;
+    let storage = orchestrator::storage::Storage::connect(&database_url)
+        .await
+        .expect("connect storage");
+
+    let member = storage
+        .upsert_member("auth-op", "op@example.com", Some("Op"))
+        .await
+        .expect("member");
+    let team = storage
+        .create_team("Ops", "ops", Some(member.id))
+        .await
+        .expect("team");
+    let project = storage
+        .create_project(team.id, "Demo", "demo", false)
+        .await
+        .expect("project");
+    let empty = serde_json::json!({});
+    let d = storage
+        .create_deployment(orchestrator::storage::deployments::NewDeployment {
+            project_id: project.id,
+            name: "state-test",
+            deployment_type: orchestrator::storage::DeploymentType::Prod,
+            deployment_class: orchestrator::storage::DeploymentClass::Standard,
+            region: None,
+            url: "http://state-test.localhost",
+            site_url: "http://state-test-site.localhost",
+            backend_pid: None,
+            backend_port: 3210,
+            creator_id: Some(member.id),
+            preview_identifier: None,
+            instance_secret: "",
+            tier: "S16",
+            knob_overrides: &empty,
+            storage_mode: "volume-sqlite",
+            pg_password: None,
+            minio_root_user: None,
+            minio_root_password: None,
+            backend_instance_secret: None,
+        })
+        .await
+        .expect("deployment");
+
+    // running -> paused, and pausing again is a no-op rather than an error:
+    // an operator double-clicking Pause should not be shown a failure.
+    storage.pause_deployment(d.id).await.expect("pause");
+    storage
+        .pause_deployment(d.id)
+        .await
+        .expect("pause is idempotent");
+    let reloaded = storage
+        .get_deployment(d.id)
+        .await
+        .expect("get")
+        .expect("exists");
+    assert!(matches!(reloaded.state, DeploymentState::Paused));
+
+    storage.resume_deployment(d.id).await.expect("resume");
+    storage
+        .resume_deployment(d.id)
+        .await
+        .expect("resume is idempotent");
+    let reloaded = storage
+        .get_deployment(d.id)
+        .await
+        .expect("get")
+        .expect("exists");
+    assert!(matches!(reloaded.state, DeploymentState::Running));
+
+    // A deployment mid-provision must not be pausable.
+    storage
+        .update_deployment_state(d.id, DeploymentState::Provisioning)
+        .await
+        .expect("set provisioning");
+    let err = storage
+        .pause_deployment(d.id)
+        .await
+        .expect_err("pausing a provisioning deployment must fail");
+    assert!(
+        err.to_string().contains("provisioning"),
+        "the error must say why, got: {err}"
+    );
+
+    // A missing deployment is a clear error, not a silent no-op.
+    let err = storage
+        .pause_deployment(999_999)
+        .await
+        .expect_err("pausing a nonexistent deployment must fail");
+    assert!(
+        err.to_string().contains("not found"),
+        "unexpected error: {err}"
+    );
+}
+
+/// Which containers a pause has to touch, and in what order.
+///
+/// Pure so it is testable without a docker daemon — the shell-out around it
+/// is the only part this machine cannot exercise. Order matters: the backend
+/// stops before its sidecars so it never sees its database vanish
+/// mid-request, and starts after them so it never comes up without one.
+#[test]
+fn pause_and_resume_touch_containers_in_dependency_order() {
+    use orchestrator::provisioner::lifecycle::{
+        containers_for_pause,
+        containers_for_resume,
+    };
+
+    // volume-sqlite: the backend owns its own storage, so it is alone.
+    assert_eq!(
+        containers_for_pause("orch-", "happy-otter", "volume-sqlite"),
+        vec!["orch-happy-otter"]
+    );
+    assert_eq!(
+        containers_for_resume("orch-", "happy-otter", "volume-sqlite"),
+        vec!["orch-happy-otter"]
+    );
+
+    // sidecar: backend first on the way down, last on the way up.
+    let down = containers_for_pause("orch-", "happy-otter", "sidecar");
+    assert_eq!(down.first().map(String::as_str), Some("orch-happy-otter"));
+    assert_eq!(down.len(), 3, "backend + postgres + minio, got {down:?}");
+
+    let up = containers_for_resume("orch-", "happy-otter", "sidecar");
+    assert_eq!(up.last().map(String::as_str), Some("orch-happy-otter"));
+    assert_eq!(
+        up,
+        down.iter().rev().cloned().collect::<Vec<_>>(),
+        "resume must be the exact reverse of pause"
+    );
+}
