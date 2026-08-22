@@ -171,3 +171,56 @@ impl Storage {
             .collect())
     }
 }
+
+/// A team as the admin console lists it, with the counts the delete
+/// confirmation needs.
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct AdminTeamCounts {
+    pub id: i64,
+    pub name: String,
+    pub slug: String,
+    pub creation_time: i64,
+    pub member_count: i64,
+    pub project_count: i64,
+    pub deployment_count: i64,
+}
+
+impl Storage {
+    /// Every team with its member, project, and deployment counts.
+    ///
+    /// Correlated subqueries rather than joins: a join across three
+    /// one-to-many relations multiplies rows, and getting three independent
+    /// counts out of that needs `count(DISTINCT ...)` on each, which is both
+    /// slower and easier to get subtly wrong.
+    pub async fn list_all_teams_with_counts(&self) -> anyhow::Result<Vec<AdminTeamCounts>> {
+        let conn = self.pool().acquire().await?;
+        let rows = conn
+            .client()
+            .query(
+                "SELECT t.id, t.name, t.slug, t.creation_time,
+                        (SELECT count(*) FROM team_members tm WHERE tm.team_id = t.id),
+                        (SELECT count(*) FROM projects p
+                          WHERE p.team_id = t.id AND p.deleted = FALSE),
+                        (SELECT count(*) FROM deployments d
+                           JOIN projects p2 ON p2.id = d.project_id
+                          WHERE p2.team_id = t.id AND p2.deleted = FALSE)
+                   FROM teams t
+                  ORDER BY t.creation_time ASC, t.id ASC",
+                &[],
+            )
+            .await?;
+        Ok(rows
+            .into_iter()
+            .map(|r| AdminTeamCounts {
+                id: r.get(0),
+                name: r.get(1),
+                slug: r.get(2),
+                creation_time: r.get(3),
+                member_count: r.get(4),
+                project_count: r.get(5),
+                deployment_count: r.get(6),
+            })
+            .collect())
+    }
+}

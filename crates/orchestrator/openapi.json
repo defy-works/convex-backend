@@ -4085,6 +4085,136 @@
           }
         }
       }
+    },
+    "/api/admin/teams": {
+      "get": {
+        "tags": ["admin"],
+        "operationId": "list_teams",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminTeamsResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "not a super-admin"
+          }
+        }
+      },
+      "post": {
+        "tags": ["admin"],
+        "operationId": "create_team",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateTeamArgs"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TeamActionResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "invalid name or slug already taken"
+          },
+          "403": {
+            "description": "not a super-admin"
+          }
+        }
+      }
+    },
+    "/api/admin/teams/{team_id}": {
+      "post": {
+        "tags": ["admin"],
+        "operationId": "rename_team",
+        "parameters": [
+          {
+            "name": "team_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RenameTeamArgs"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TeamActionResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "not a super-admin"
+          }
+        }
+      }
+    },
+    "/api/admin/teams/{team_id}/delete": {
+      "post": {
+        "tags": ["admin"],
+        "operationId": "delete_team",
+        "parameters": [
+          {
+            "name": "team_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TeamActionResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "not a super-admin"
+          },
+          "502": {
+            "description": "a deployment could not be torn down"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -4313,6 +4443,62 @@
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/AdminMemberRow"
+            }
+          }
+        }
+      },
+      "AdminTeamRow": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "slug",
+          "creationTime",
+          "memberCount",
+          "projectCount",
+          "deploymentCount"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "name": {
+            "type": "string"
+          },
+          "slug": {
+            "type": "string"
+          },
+          "creationTime": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "memberCount": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "projectCount": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "deploymentCount": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Shown in the delete confirmation, so the blast radius is visible\nbefore the operator commits to it.",
+            "minimum": 0
+          }
+        }
+      },
+      "AdminTeamsResponse": {
+        "type": "object",
+        "required": ["teams"],
+        "properties": {
+          "teams": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminTeamRow"
             }
           }
         }
@@ -4582,7 +4768,8 @@
             "type": "string"
           },
           "slug": {
-            "type": ["string", "null"]
+            "type": ["string", "null"],
+            "description": "Derived from the name when omitted."
           }
         }
       },
@@ -5957,6 +6144,15 @@
           }
         }
       },
+      "RenameTeamArgs": {
+        "type": "object",
+        "required": ["name"],
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        }
+      },
       "RestartArgs": {
         "type": "object",
         "properties": {
@@ -6174,6 +6370,25 @@
         "properties": {
           "grant": {
             "type": "boolean"
+          }
+        }
+      },
+      "TeamActionResponse": {
+        "type": "object",
+        "required": ["teamId", "slug", "deploymentsRemoved"],
+        "properties": {
+          "teamId": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "slug": {
+            "type": "string"
+          },
+          "deploymentsRemoved": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How many deployments the action tore down. Zero for anything but a\ndelete.",
+            "minimum": 0
           }
         }
       },

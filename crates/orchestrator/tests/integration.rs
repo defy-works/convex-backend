@@ -1603,12 +1603,21 @@ fn concrete_admin_route(
     template: &str,
     deployment_id: i64,
     member_id: i64,
+    team_id: i64,
+    unique: usize,
 ) -> (String, Option<serde_json::Value>) {
     let path = template
         .replace("{deployment_id}", &deployment_id.to_string())
-        .replace("{member_id}", &member_id.to_string());
+        .replace("{member_id}", &member_id.to_string())
+        .replace("{team_id}", &team_id.to_string());
     let body = if template.ends_with("/tier") {
         Some(serde_json::json!({ "tier": "S16" }))
+    } else if template == "/api/admin/teams" {
+        // Create needs a name; the slug must not collide with a team an
+        // earlier iteration already made.
+        Some(serde_json::json!({ "name": format!("Fixture {unique}") }))
+    } else if template.ends_with("/teams/{team_id}") {
+        Some(serde_json::json!({ "name": format!("Renamed {unique}") }))
     } else if template.ends_with("/access") {
         Some(serde_json::json!({ "reason": "route table coverage" }))
     } else if template.ends_with("/super_admin") {
@@ -1691,7 +1700,7 @@ async fn every_admin_route_rejects_non_super_admins() {
     for (method, path) in ADMIN_ROUTES {
         // Any id will do here: authorization is checked before the handler
         // ever looks the deployment up.
-        let (concrete, _) = concrete_admin_route(path, 1, 1);
+        let (concrete, _) = concrete_admin_route(path, 1, 1, 1, 0);
         // Unauthenticated.
         let resp = app
             .clone()
@@ -1798,7 +1807,15 @@ async fn every_admin_route_rejects_non_super_admins() {
             .await
             .expect("fixture member");
 
-        let (concrete, body) = concrete_admin_route(path, d.id, victim.id);
+        // A throwaway team per route as well: /teams/{id}/delete removes
+        // the one it is given, and it cascades to that team's projects.
+        let victim_team = state
+            .storage
+            .create_team(&format!("Victim {i}"), &format!("victim-team-{i}"), None)
+            .await
+            .expect("fixture team");
+
+        let (concrete, body) = concrete_admin_route(path, d.id, victim.id, victim_team.id, i);
         let mut req = Request::builder()
             .method(*method)
             .uri(&concrete)

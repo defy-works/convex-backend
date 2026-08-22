@@ -12,6 +12,7 @@ pub(crate) mod health;
 pub(crate) mod member_actions;
 pub(crate) mod members;
 pub(crate) mod overview;
+pub(crate) mod team_actions;
 
 use axum::{
     routing::{
@@ -78,6 +79,10 @@ pub const ADMIN_ROUTES: &[(&str, &str)] = &[
     ("POST", "/api/admin/members/{member_id}/super_admin"),
     ("POST", "/api/admin/members/{member_id}/delete"),
     ("POST", "/api/admin/deployments/{deployment_id}/access"),
+    ("GET", "/api/admin/teams"),
+    ("POST", "/api/admin/teams"),
+    ("POST", "/api/admin/teams/{team_id}"),
+    ("POST", "/api/admin/teams/{team_id}/delete"),
 ];
 
 pub fn router() -> Router<OrchestratorState> {
@@ -124,4 +129,10 @@ pub fn router() -> Router<OrchestratorState> {
             "/deployments/{deployment_id}/access",
             post(break_glass::grant_access),
         )
+        .route(
+            "/teams",
+            get(team_actions::list_teams).post(team_actions::create_team),
+        )
+        .route("/teams/{team_id}", post(team_actions::rename_team))
+        .route("/teams/{team_id}/delete", post(team_actions::delete_team))
 }
