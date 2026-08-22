@@ -3704,6 +3704,198 @@
           }
         }
       }
+    },
+    "/api/admin/deployments/{deployment_id}/pause": {
+      "post": {
+        "tags": ["admin"],
+        "operationId": "pause",
+        "parameters": [
+          {
+            "name": "deployment_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActionResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "not a super-admin"
+          },
+          "409": {
+            "description": "deployment is still provisioning"
+          }
+        }
+      }
+    },
+    "/api/admin/deployments/{deployment_id}/resume": {
+      "post": {
+        "tags": ["admin"],
+        "operationId": "resume",
+        "parameters": [
+          {
+            "name": "deployment_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActionResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "not a super-admin"
+          },
+          "409": {
+            "description": "deployment is still provisioning"
+          }
+        }
+      }
+    },
+    "/api/admin/deployments/{deployment_id}/restart": {
+      "post": {
+        "tags": ["admin"],
+        "operationId": "restart",
+        "parameters": [
+          {
+            "name": "deployment_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RestartArgs"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActionResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "not a super-admin"
+          }
+        }
+      }
+    },
+    "/api/admin/deployments/{deployment_id}/tier": {
+      "post": {
+        "tags": ["admin"],
+        "operationId": "set_tier",
+        "parameters": [
+          {
+            "name": "deployment_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TierArgs"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActionResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "unknown tier"
+          },
+          "403": {
+            "description": "not a super-admin"
+          }
+        }
+      }
+    },
+    "/api/admin/deployments/{deployment_id}/delete": {
+      "post": {
+        "tags": ["admin"],
+        "operationId": "delete",
+        "parameters": [
+          {
+            "name": "deployment_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActionResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "not a super-admin"
+          },
+          "502": {
+            "description": "teardown failed; the deployment was not removed"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -3730,6 +3922,23 @@
           },
           "keySuffix": {
             "type": "string"
+          }
+        }
+      },
+      "ActionResponse": {
+        "type": "object",
+        "required": ["deployment", "state"],
+        "properties": {
+          "deployment": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string",
+            "description": "The row's state after the action."
+          },
+          "containerWarning": {
+            "type": ["string", "null"],
+            "description": "Set when the database changed but the container work did not fully\nsucceed. The action still took effect; the reconciler will converge."
           }
         }
       },
@@ -5499,6 +5708,15 @@
           }
         }
       },
+      "RestartArgs": {
+        "type": "object",
+        "properties": {
+          "force": {
+            "type": ["boolean", "null"],
+            "description": "Bypass the host capacity check, as the management route does."
+          }
+        }
+      },
       "RestartDeploymentArgs": {
         "type": "object",
         "properties": {
@@ -5801,6 +6019,15 @@
             "type": "string"
           },
           "slug": {
+            "type": "string"
+          }
+        }
+      },
+      "TierArgs": {
+        "type": "object",
+        "required": ["tier"],
+        "properties": {
+          "tier": {
             "type": "string"
           }
         }

@@ -1592,6 +1592,23 @@ async fn admin_queries_span_all_teams() {
     );
 }
 
+/// Turn an `ADMIN_ROUTES` template into a concrete path plus a body.
+///
+/// The lifecycle routes are `POST`s with `{deployment_id}` in the path and,
+/// for `tier`, a required body. The 401/403 assertions do not care, but the
+/// super-admin pass must reach the handler rather than bouncing off a path
+/// parse error, or it proves nothing about the gate.
+#[cfg(test)]
+fn concrete_admin_route(template: &str, deployment_id: i64) -> (String, Option<serde_json::Value>) {
+    let path = template.replace("{deployment_id}", &deployment_id.to_string());
+    let body = if template.ends_with("/tier") {
+        Some(serde_json::json!({ "tier": "S16" }))
+    } else {
+        None
+    };
+    (path, body)
+}
+
 /// Every `/api/admin` route must reject a non-super-admin identity.
 ///
 /// Driven off `ADMIN_ROUTES` rather than a hand-maintained list here, so a
@@ -1659,13 +1676,16 @@ async fn every_admin_route_rejects_non_super_admins() {
     assert!(!ADMIN_ROUTES.is_empty(), "ADMIN_ROUTES must not be empty");
 
     for (method, path) in ADMIN_ROUTES {
+        // Any id will do here: authorization is checked before the handler
+        // ever looks the deployment up.
+        let (concrete, _) = concrete_admin_route(path, 1);
         // Unauthenticated.
         let resp = app
             .clone()
             .oneshot(
                 Request::builder()
                     .method(*method)
-                    .uri(*path)
+                    .uri(&concrete)
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -1683,7 +1703,7 @@ async fn every_admin_route_rejects_non_super_admins() {
             .oneshot(
                 Request::builder()
                     .method(*method)
-                    .uri(*path)
+                    .uri(&concrete)
                     .header(AUTHORIZATION, &plain_bearer)
                     .body(Body::empty())
                     .unwrap(),
@@ -1703,17 +1723,69 @@ async fn every_admin_route_rejects_non_super_admins() {
         .set_super_admin(plain.id, true)
         .await
         .expect("grant");
-    for (method, path) in ADMIN_ROUTES {
+    // A team and project to hang the per-route deployments off.
+    let team = state
+        .storage
+        .create_team("Fixture", "fixture", Some(plain.id))
+        .await
+        .expect("team");
+    state
+        .storage
+        .add_team_member(team.id, plain.id, orchestrator::storage::TeamRole::Admin)
+        .await
+        .expect("membership");
+    let project = state
+        .storage
+        .create_project(team.id, "Fixture", "fixture", false)
+        .await
+        .expect("project");
+
+    for (i, (method, path)) in ADMIN_ROUTES.iter().enumerate() {
+        // A fresh deployment per route: `delete` removes the one it is given,
+        // and every later route would then 404 and fail for the wrong reason.
+        let empty = serde_json::json!({});
+        let name = format!("fixture-deployment-{i}");
+        let d = state
+            .storage
+            .create_deployment(orchestrator::storage::deployments::NewDeployment {
+                project_id: project.id,
+                name: &name,
+                deployment_type: orchestrator::storage::DeploymentType::Prod,
+                deployment_class: orchestrator::storage::DeploymentClass::Standard,
+                region: None,
+                url: &format!("http://{name}.localhost"),
+                site_url: &format!("http://{name}-site.localhost"),
+                backend_pid: None,
+                backend_port: 3210 + i as i64,
+                creator_id: Some(plain.id),
+                preview_identifier: None,
+                instance_secret: "",
+                tier: "S16",
+                knob_overrides: &empty,
+                storage_mode: "volume-sqlite",
+                pg_password: None,
+                minio_root_user: None,
+                minio_root_password: None,
+                backend_instance_secret: None,
+            })
+            .await
+            .expect("fixture deployment");
+
+        let (concrete, body) = concrete_admin_route(path, d.id);
+        let mut req = Request::builder()
+            .method(*method)
+            .uri(&concrete)
+            .header(AUTHORIZATION, &plain_bearer);
+        let body = match body {
+            Some(v) => {
+                req = req.header("content-type", "application/json");
+                Body::from(serde_json::to_vec(&v).unwrap())
+            },
+            None => Body::empty(),
+        };
         let resp = app
             .clone()
-            .oneshot(
-                Request::builder()
-                    .method(*method)
-                    .uri(*path)
-                    .header(AUTHORIZATION, &plain_bearer)
-                    .body(Body::empty())
-                    .unwrap(),
-            )
+            .oneshot(req.body(body).unwrap())
             .await
             .unwrap_or_else(|_| panic!("send {method} {path} as super-admin"));
         assert_eq!(

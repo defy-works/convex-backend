@@ -318,6 +318,11 @@ async fn not_found() -> impl IntoResponse {
         crate::routes::admin::fleet::fleet,
         crate::routes::admin::members::list_members,
         crate::routes::admin::audit::instance_audit,
+        crate::routes::admin::deployment_actions::pause,
+        crate::routes::admin::deployment_actions::resume,
+        crate::routes::admin::deployment_actions::restart,
+        crate::routes::admin::deployment_actions::set_tier,
+        crate::routes::admin::deployment_actions::delete,
     ),
     tags(
         (name = "tokens", description = "/v1: personal access tokens"),

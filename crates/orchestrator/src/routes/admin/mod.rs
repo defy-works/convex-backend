@@ -5,17 +5,55 @@
 //! questions about the instance as a whole, which no other surface can.
 
 pub(crate) mod audit;
+pub(crate) mod deployment_actions;
 pub mod fleet;
 pub(crate) mod health;
 pub(crate) mod members;
 pub(crate) mod overview;
 
 use axum::{
-    routing::get,
+    routing::{
+        get,
+        post,
+    },
     Router,
 };
 
-use crate::state::OrchestratorState;
+use crate::{
+    auth::super_admin::Actor,
+    state::OrchestratorState,
+};
+
+/// Record an admin action on the instance audit log.
+///
+/// `actor.member_id()` is `None` for break-glass, so the metadata carries
+/// the actor label too — a row with no member should still say why it has
+/// no member.
+///
+/// Never fails the action it is recording. An admin action that succeeded
+/// but reported failure because its audit write failed would be worse than
+/// one that is unlogged, so the failure is logged loudly instead.
+pub(crate) async fn audit_admin(
+    state: &OrchestratorState,
+    actor: &Actor,
+    action: &str,
+    mut metadata: serde_json::Value,
+) {
+    if let Some(obj) = metadata.as_object_mut() {
+        obj.insert("actor".into(), serde_json::json!(actor.label()));
+    }
+    if let Err(e) = state
+        .storage
+        .append_instance_audit(actor.member_id(), action, &metadata)
+        .await
+    {
+        tracing::error!(
+            action,
+            error = %e,
+            "admin: failed to write instance audit event"
+        );
+    }
+}
 
 /// Every path this module serves, as `(method, absolute path)`.
 ///
@@ -28,6 +66,11 @@ pub const ADMIN_ROUTES: &[(&str, &str)] = &[
     ("GET", "/api/admin/fleet"),
     ("GET", "/api/admin/members"),
     ("GET", "/api/admin/audit"),
+    ("POST", "/api/admin/deployments/{deployment_id}/pause"),
+    ("POST", "/api/admin/deployments/{deployment_id}/resume"),
+    ("POST", "/api/admin/deployments/{deployment_id}/restart"),
+    ("POST", "/api/admin/deployments/{deployment_id}/tier"),
+    ("POST", "/api/admin/deployments/{deployment_id}/delete"),
 ];
 
 pub fn router() -> Router<OrchestratorState> {
@@ -37,4 +80,24 @@ pub fn router() -> Router<OrchestratorState> {
         .route("/fleet", get(fleet::fleet))
         .route("/members", get(members::list_members))
         .route("/audit", get(audit::instance_audit))
+        .route(
+            "/deployments/{deployment_id}/pause",
+            post(deployment_actions::pause),
+        )
+        .route(
+            "/deployments/{deployment_id}/resume",
+            post(deployment_actions::resume),
+        )
+        .route(
+            "/deployments/{deployment_id}/restart",
+            post(deployment_actions::restart),
+        )
+        .route(
+            "/deployments/{deployment_id}/tier",
+            post(deployment_actions::set_tier),
+        )
+        .route(
+            "/deployments/{deployment_id}/delete",
+            post(deployment_actions::delete),
+        )
 }
