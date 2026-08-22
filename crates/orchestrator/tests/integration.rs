@@ -2694,3 +2694,137 @@ async fn adding_scope_by_hand_unblocks_a_crash_looping_instance() {
         .await
         .expect("startup must now succeed even on the shipped image");
 }
+
+/// A suspended member must not be able to transact with the orchestrator at
+/// all, not merely hold tokens that fail later.
+///
+/// Before this, a suspended account with a live BetterAuth login still
+/// minted a token row on every attempt, still learned its team and role,
+/// and — if its address was in ADMIN_EMAILS — still triggered the
+/// super-admin grant.
+#[tokio::test]
+#[ignore = "needs TEST_ORCHESTRATOR_DATABASE_URL"]
+async fn a_suspended_member_cannot_exchange_a_session() {
+    use std::sync::Arc;
+
+    use axum::{
+        body::Body,
+        http::{
+            Request,
+            StatusCode,
+        },
+    };
+    use orchestrator::{
+        config::RegistrationMode,
+        router::build_router,
+        state::OrchestratorState,
+    };
+    use tower::ServiceExt;
+
+    let database_url = std::env::var("TEST_ORCHESTRATOR_DATABASE_URL")
+        .expect("TEST_ORCHESTRATOR_DATABASE_URL not set (this test is `#[ignore]` by default)");
+    reset_public_schema(&database_url).await;
+
+    let data_root = tempfile::tempdir().expect("tempdir");
+    let mut config = test_config(database_url, data_root.path().to_path_buf());
+    config.service_key = Some("test-service-key".into());
+    // The address is in ADMIN_EMAILS, so a successful exchange would grant
+    // operator rights. It must not get that far.
+    config.admin_emails = vec!["blocked@example.com".into()];
+    config.registration_mode = RegistrationMode::Open;
+
+    let mut state = OrchestratorState::new(config).await.expect("state");
+    state.provisioner = Arc::new(StubProvisioner);
+    let app = build_router(state.clone());
+
+    let body = serde_json::json!({
+        "authUserId": "auth-blocked",
+        "email": "blocked@example.com",
+        "name": "Blocked",
+    });
+
+    let send = |app: axum::Router, body: serde_json::Value| async move {
+        app.oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/internal/exchange_session")
+                .header("content-type", "application/json")
+                .header("x-service-key", "test-service-key")
+                .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .expect("send exchange_session")
+    };
+
+    // First sign-in creates the member and succeeds.
+    let resp = send(app.clone(), body.clone()).await;
+    assert_eq!(resp.status(), StatusCode::OK, "first sign-in should work");
+
+    let member = state
+        .storage
+        .get_member_by_auth_user_id("auth-blocked")
+        .await
+        .expect("lookup")
+        .expect("member exists");
+    let tokens_before = state
+        .storage
+        .list_access_tokens_by_member(member.id)
+        .await
+        .map(|t| t.len())
+        .unwrap_or(0);
+
+    // A second operator, so revoking the first does not trip the
+    // last-super-admin guard.
+    let other = state
+        .storage
+        .upsert_member("auth-other-op", "other@example.com", Some("Other"))
+        .await
+        .expect("other member");
+    state
+        .storage
+        .set_super_admin(other.id, true)
+        .await
+        .expect("grant other");
+
+    // Now suspend them and strip the operator bit, so a re-grant is visible.
+    state
+        .storage
+        .set_member_suspended(member.id, true)
+        .await
+        .expect("suspend");
+    state
+        .storage
+        .set_super_admin(member.id, false)
+        .await
+        .expect("revoke");
+
+    let resp = send(app.clone(), body.clone()).await;
+    assert_eq!(
+        resp.status(),
+        StatusCode::FORBIDDEN,
+        "a suspended member must be refused outright"
+    );
+
+    // No new token rows, and no operator re-grant.
+    let tokens_after = state
+        .storage
+        .list_access_tokens_by_member(member.id)
+        .await
+        .map(|t| t.len())
+        .unwrap_or(0);
+    assert_eq!(
+        tokens_after, tokens_before,
+        "a refused exchange must not mint a token row"
+    );
+    let reloaded = state
+        .storage
+        .get_member(member.id)
+        .await
+        .expect("get")
+        .expect("exists");
+    assert!(
+        !reloaded.is_super_admin,
+        "a suspended member must not be re-granted operator by ADMIN_EMAILS"
+    );
+}

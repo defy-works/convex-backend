@@ -294,6 +294,21 @@ const CROSS_TENANT_ROUTES: &[(&str, &str, Option<&str>)] = &[
     ),
     ("GET", "/api/dashboard/teams/{team}/get_project_roles", None),
     ("GET", "/api/dashboard/teams/{team}/projects", None),
+    // --- body-scoped: the resource is named in the request body, not the
+    //     path. This class was invisible to the sweep until it learned to
+    //     look at `Json(` as well as `Path(`.
+    (
+        "POST",
+        "/api/dashboard/delete_projects",
+        Some(r#"[{project}]"#),
+    ),
+    (
+        "POST",
+        "/api/deployment/provision_and_authorize",
+        Some(
+            r#"{"teamSlug":"{team_slug}","projectSlug":"{project_slug}","deploymentType":"prod"}"#,
+        ),
+    ),
     // --- dashboard: projects ---
     ("GET", "/api/dashboard/projects/{project}", None),
     (
@@ -387,7 +402,17 @@ async fn one_tenant_cannot_touch_another() {
             .replace("{deployment_name}", &victim.deployment_name)
             .replace("{deployment}", &victim.deployment_id.to_string())
             .replace("{member}", &victim.member_id.to_string());
-        let body = body.map(|b| serde_json::from_str(b).expect("table body is valid JSON"));
+        // Bodies carry resource identifiers too, so they need the same
+        // substitution the path does.
+        let body = body.map(|b| {
+            let filled = b
+                .replace("{team_slug}", &victim.team_slug)
+                .replace("{project_slug}", &victim.project_slug)
+                .replace("{project}", &victim.project_id.to_string())
+                .replace("{deployment}", &victim.deployment_id.to_string());
+            serde_json::from_str::<serde_json::Value>(&filled)
+                .unwrap_or_else(|e| panic!("table body is valid JSON: {filled} ({e})"))
+        });
 
         let status = send(&app, method, &path, &attacker.bearer, body).await;
         match status {
@@ -546,6 +571,19 @@ fn every_path_scoped_handler_references_a_guard() {
         // project transfer is actually implemented, and whoever implements
         // it will have to guard both the source and destination team.
         ("projects.rs", "transfer_project"),
+        // Self-scoped: these act on the caller's own member row, taken from
+        // the identity, never on a resource id supplied by the request.
+        ("profile.rs", "create_profile_email"),
+        ("profile.rs", "delete_profile_email"),
+        ("profile.rs", "update_primary_email"),
+        ("profile.rs", "resend_verification"),
+        ("profile.rs", "update_profile_name"),
+        ("profile.rs", "accept_opt_ins"),
+        ("deployment_internal.rs", "accept_opt_ins"),
+        ("mgmt_tokens.rs", "create_personal_access_token"),
+        // Create a NEW team; there is no existing resource to own yet.
+        ("teams.rs", "create_team"),
+        ("mgmt_teams.rs", "create_team"),
     ];
 
     /// The route files that hold tenant state.
@@ -597,6 +635,10 @@ fn every_path_scoped_handler_references_a_guard() {
             include_str!("../src/routes/management/teams.rs"),
         ),
         (
+            "mgmt_tokens.rs",
+            include_str!("../src/routes/management/tokens.rs"),
+        ),
+        (
             "deployment_internal.rs",
             include_str!("../src/routes/deployment_internal.rs"),
         ),
@@ -639,7 +681,17 @@ fn every_path_scoped_handler_references_a_guard() {
             let (sig, body) = part.split_at(sig_end);
             let takes_identity = sig.contains("AuthIdentity") || sig.contains("SuperAdmin");
             // `SuperAdmin` is itself the guard.
-            if !takes_identity || sig.contains("SuperAdmin") || !sig.contains("Path(") {
+            if !takes_identity || sig.contains("SuperAdmin") {
+                continue;
+            }
+            // A handler is resource-scoped if it names a resource in the
+            // path OR takes one in the body. The body case is not
+            // hypothetical: `delete_projects` took a Vec<i64> of project ids
+            // that way and let any signed-in user destroy every project on
+            // the instance, and `provision_and_authorize` took team and
+            // project slugs the same way and handed back an admin key. Both
+            // were invisible while this only inspected `Path(`.
+            if !sig.contains("Path(") && !sig.contains("Json(") {
                 continue;
             }
             if !GUARDS.iter().any(|g| body.contains(g)) {
